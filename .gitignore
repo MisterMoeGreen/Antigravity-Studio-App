@@ -1,0 +1,15 @@
+*.iml
+.gradle
+local.properties
+.idea/
+.DS_Store
+build/
+app/build/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Staged native binaries (generated dynamically via scripts/prepare_binaries.sh)
+# Note: libagy.so is 201MB which exceeds GitHub's 100MB file limit.
+app/src/main/jniLibs/
+app/src/main/assets/usr-data.tar.zst

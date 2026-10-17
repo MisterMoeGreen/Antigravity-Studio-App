@@ -142,7 +142,7 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
     ```
 
 ### Phase 2: C Virtualization Shim & Binary Staging Pipeline
-- [ ] **AC-2.1: Hardened `app/src/main/cpp/agy_shim.c` Implementation**
+- [x] **AC-2.1: Hardened `app/src/main/cpp/agy_shim.c` Implementation**
   - Implement path translation (`/bin/sh`, `/usr/bin/env`, `/etc/resolv.conf`, `/etc/tls/cert.pem`, `/tmp`), user-space shebang (`#!`) resolution for both `execve` and `posix_spawn`/`posix_spawnp`, 64-bit LFS aliases (`openat64`, `stat64`), and `is_glibc_target()` matching both `/agy` and bare `"agy"`.
   - **Verification Gate**:
     ```bash
@@ -150,20 +150,20 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
     grep -q 'openat64' app/src/main/cpp/agy_shim.c && \
     grep -q 'strcmp(path, "agy")' app/src/main/cpp/agy_shim.c
     ```
-- [ ] **AC-2.2: Compile & Strip `libagy_shim.so` (Bionic ABI)**
+- [x] **AC-2.2: Compile & Strip `libagy_shim.so` (Bionic ABI)**
   - Compile `agy_shim.c` with Bionic `clang -shared -fPIC -O2` and strip symbols. Verify it links against Bionic (`libc.so`, `libdl.so`) and not Glibc.
   - **Verification Gate**:
     ```bash
     test -f app/src/main/jniLibs/arm64-v8a/libagy_shim.so && \
     ! (llvm-readelf -d app/src/main/jniLibs/arm64-v8a/libagy_shim.so 2>/dev/null || readelf -d app/src/main/jniLibs/arm64-v8a/libagy_shim.so) | grep -q 'libc.so.6'
     ```
-- [ ] **AC-2.3: Stage & Patch `libagy.so` (16KB Page Alignment + `DT_RPATH`)**
+- [x] **AC-2.3: Stage & Patch `libagy.so` (16KB Page Alignment + `DT_RPATH`)**
   - Copy `agy.va39` to `libagy.so`, run `patchelf --page-size 16384 --set-interpreter /data/data/ai.agy.app/files/usr/glibc/lib/ld-linux-aarch64.so.1 --force-rpath --set-rpath /data/data/ai.agy.app/files/usr/glibc/lib`, and run 21-byte path replacement.
   - **Verification Gate**:
     ```bash
     (llvm-readelf -l -d app/src/main/jniLibs/arm64-v8a/libagy.so 2>/dev/null || readelf -l -d app/src/main/jniLibs/arm64-v8a/libagy.so) | grep -E 'ai\.agy\.app/files/usr/glibc/lib/ld-linux-aarch64\.so\.1|RPATH'
     ```
-- [ ] **AC-2.4: Stage & Byte-Patch Glibc Runtime (`libglibc_*.so`)**
+- [x] **AC-2.4: Stage & Byte-Patch Glibc Runtime (`libglibc_*.so`)**
   - Stage all 10 Glibc libraries (`ld`, `c`, `dl`, `pthread`, `resolv`, `rt`, `m`, `gcc_s`, `nss_files`, `nss_dns`) into `jniLibs/arm64-v8a/`, apply `patch_elf_bytes`, and record mappings in `.symlinks.manifest`.
   - **Verification Gate**:
     ```bash
@@ -171,7 +171,7 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
     test -f app/src/main/jniLibs/arm64-v8a/libglibc_resolv.so && \
     ! grep -aq "/data/data/com.termux" app/src/main/jniLibs/arm64-v8a/libglibc_*.so
     ```
-- [ ] **AC-2.5: Stage Developer Toolchain Binaries (`bash`, `busybox`, `git`, `rg`, `curl`, `python3.12`)**
+- [x] **AC-2.5: Stage Developer Toolchain Binaries (`bash`, `busybox`, `git`, `rg`, `curl`, `python3.12`)**
   - Stage and byte-patch `libbash.so`, `libbusybox.so`, `libgit.so`, `libgit_remote_https.so`, `librg.so`, `libcurl_bin.so`, and `libpython3_bin.so`.
   - **Verification Gate**:
     ```bash
@@ -179,13 +179,13 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
       test -f "app/src/main/jniLibs/arm64-v8a/$f" || exit 1
     done
     ```
-- [ ] **AC-2.6: Relocate Python C-Extensions (`lib-dynload/*.so` -> `libpyext_*.so`)**
+- [x] **AC-2.6: Relocate Python C-Extensions (`lib-dynload/*.so` -> `libpyext_*.so`)**
   - Move all `.so` files from staged `lib/python3.12/` to `jniLibs/arm64-v8a/libpyext_*.so`, byte-patch, and append to `.symlinks.manifest`. Verify zero `.so` files remain inside the staged asset directory.
   - **Verification Gate**:
     ```bash
     ls app/src/main/jniLibs/arm64-v8a/libpyext_*.so >/dev/null 2>&1
     ```
-- [ ] **AC-2.7: Recursive `DT_NEEDED` Bionic Dependency Resolution**
+- [x] **AC-2.7: Recursive `DT_NEEDED` Bionic Dependency Resolution**
   - Crawl all Bionic ELF binaries and `libpyext_*.so` modules using `llvm-readelf`/`readelf`, staging every transitive dependency (`libssl`, `libcrypto`, `libreadline`, `libncursesw`, `libpcre2-8`, `libsqlite3`, etc.) into `jniLibs/arm64-v8a/` and `.symlinks.manifest`.
   - **Verification Gate**:
     ```bash
@@ -210,7 +210,7 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
     print("All transitive DT_NEEDED dependencies verified.")
     EOF
     ```
-- [ ] **AC-2.8: Package `usr-data.tar.zst` & Zero-Residual `com.termux` Audit**
+- [x] **AC-2.8: Package `usr-data.tar.zst` & Zero-Residual `com.termux` Audit**
   - Compress non-ELF runtime assets (`lib/python3.12`, `etc/tls/cert.pem`, `share/git-core/templates`, `share/agy-ui/*`, `.symlinks.manifest`) into `app/src/main/assets/usr-data.tar.zst` and verify zero `/data/data/com.termux` references remain in `jniLibs/`.
   - **Verification Gate**:
     ```bash
