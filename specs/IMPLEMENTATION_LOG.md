@@ -874,8 +874,22 @@
   - Complete legal and open-source attribution in compliance with Creative Commons Attribution 4.0 International (CC BY 4.0).
   - Production release APK rebuilt and staged at `/sdcard/Download/AntigravityStudio.apk`.
 
+### Milestone P7.12 — Robot Iconography, Decoupled Default Workspace, and Session Directory Replacement Persistence
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-17T19:00:00Z
+- **Files Created / Modified**:
+  - `~/.agy-ui/index.html` (registered Font Awesome Free `robot` SVG icon, replaced model box/cube icons across toolbar pills, starter chips, and assistant response badges; relabeled sidebar picker to "DEFAULT WORKSPACE"; decoupled default workspace from active session; added mode support to folder picker; updated confirm handlers and modal titles)
+  - `~/.agy-ui/server.py` (added binary protobuf parsing and patching for `trajectory_metadata_blob` and `raw_summary`; updated `update_conversation_workspace` to replace session workspace across SQLite database blobs, `conversation_summaries.db`, `conversation_metadata.json`, `last_conversations.json`, and `app_settings.json`; added `set_default_workspace` WebSocket handler with persistence; updated `new_session` and `/clear` to start in `self.default_workspace`)
+  - `~/.agy-ui/sw.js` (bumped Service Worker cache to `antigravity-studio-v13`)
+  - `/sdcard/Download/AntigravityStudio.apk` (recompiled release binary)
+- **Deliverables**:
+  - Replaced model box icon with user-requested Font Awesome `fa-robot` vector icon across top bar, starter chips, and assistant messages.
+  - Sidebar directory picker decoupled from active sessions: labeled "DEFAULT WORKSPACE", sets default folder for future/new sessions without mutating the active session.
+  - In-session directory picker cleanly replaces session working directory instead of adding extra active directories; persists across application restarts in protobuf metadata and app settings.
+  - Freshly assembled release APK deployed to `/sdcard/Download/AntigravityStudio.apk`.
+
 ---
 
 ## Final Project Summary
-All phases (Phase 0 through Phase 7.11) have been implemented, tested, and verified.
+All phases (Phase 0 through Phase 7.12) have been implemented, tested, and verified.
 Both repositories (`~/.agy-ui` and `AgyStudio`) have clean, anonymized commit histories with author `MisterMoeGreen <48449987+MisterMoeGreen@users.noreply.github.com>`.
