@@ -4,7 +4,7 @@
 
 The standalone Android application (`ai.agy.app`) hosts the Google Antigravity agent CLI (`agy.va39`) and Antigravity Studio web frontend without requiring Termux, Termux:API, or root access. 
 
-The application runs on standard AOSP/Android devices targeting **`targetSdkVersion 35`** (Android 10 through Android 16 / API 29–36).
+The application runs on standard AOSP/Android devices targeting **`targetSdkVersion 35`** (Android 10 through Android 17+ / API 29–35+).
 
 ```mermaid
 flowchart TB

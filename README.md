@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>The first fully standalone, autonomous AI coding agent & IDE for Android.</strong><br>
-  Zero Termux required &bull; Zero root required &bull; Self-contained toolchain &bull; Android 10 and above (API 28–35+)
+  Zero Termux required &bull; Zero root required &bull; Self-contained toolchain &bull; Android 10 to 17+ (API 28–35+)
 </p>
 
 <p align="center">

@@ -2,7 +2,7 @@
 
 > **Project**: Antigravity Studio Standalone Android Application  
 > **Package ID**: `ai.agy.app` (Exact 10-character alignment)  
-> **Target SDK**: `35` (Android 15 / 16) | **Min SDK**: `28` (Android 9 Pie)  
+> **Target SDK**: `35` (Android 15 / 16 / 17+) | **Min SDK**: `28` (Android 9 Pie)  
 > **Target Architecture**: `arm64-v8a`  
 > **Source Repository**: `git@github.com:MisterMoeGreen/Antigravity-Studio-App.git`  
 > **Review Status**: Architecturally audited and hardened by **Gemini 4 Argon**
