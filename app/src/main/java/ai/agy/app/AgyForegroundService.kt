@@ -124,7 +124,7 @@ class AgyForegroundService : Service() {
         env["GIT_SSL_CAINFO"] = "$usr/etc/tls/cert.pem"
         env["GIT_EXEC_PATH"] = "$usr/libexec/git-core"
         val pInfo = packageManager.getPackageInfo(packageName, 0)
-        val vName = pInfo.versionName ?: "1.4.1"
+        val vName = pInfo.versionName ?: "1.0.1"
         val vCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) pInfo.longVersionCode else @Suppress("DEPRECATION") pInfo.versionCode.toLong()
         env["AGY_APP_VERSION"] = vName
         env["AGY_APP_VERSION_CODE"] = vCode.toString()
