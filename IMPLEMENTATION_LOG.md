@@ -3,12 +3,12 @@
 ## 1. Quick-Resume State Header
 > **Autonomous Agent Handoff Protocol**: Any agent picking up this task MUST read this header first. Do not proceed until `LAST_COMPLETED_CRITERION` verification is confirmed and start immediately on `NEXT_PENDING_CRITERION`.
 
-- **Current Phase**: Phase 0 (Pre-Flight & Environment Readiness)
-- **Last Completed Criterion**: None
-- **Next Pending Criterion**: `AC-0.1`
-- **Build Status**: NOT_STARTED
+- **Current Phase**: Phase 1 (Project Scaffolding & Build Configuration)
+- **Last Completed Criterion**: `AC-0.1` (Host Toolchain & Source Binary Audit)
+- **Next Pending Criterion**: `AC-1.1` (Directory Hierarchy Creation)
+- **Build Status**: PRE_FLIGHT_PASSED
 - **Active Blockers / Deviations**: None
-- **Last Updated**: 2026-10-17T07:14:00Z
+- **Last Updated**: 2026-10-17T07:18:30Z
 
 ---
 
@@ -16,7 +16,7 @@
 <!-- Agent updates [ ] to [x] ONLY after the specific Verification Gate command exits 0 -->
 
 ### Phase 0: Pre-Flight Environment Gate
-- [ ] AC-0.1: Host Toolchain & Source Binary Audit
+- [x] AC-0.1: Host Toolchain & Source Binary Audit
 
 ### Phase 1: Project Scaffolding & Build Configuration
 - [ ] AC-1.1: Directory Hierarchy Creation
@@ -64,19 +64,37 @@
 
 ## 3. Step Execution Ledger (Append-Only)
 
-```
-[Format for each completed AC entry]
-### AC-X.Y — <Title>
+### AC-0.1 — Host Toolchain & Source Binary Audit
 - **Status**: PASSED
-- **Timestamp**: YYYY-MM-DDTHH:MM:SSZ
-- **Files Created / Modified**:
-  - `path/to/file`
+- **Timestamp**: 2026-10-17T07:18:30Z
+- **Files Audited**:
+  - `/data/data/com.termux/files/usr/bin/agy.va39` (201 MB AArch64 glibc ELF)
+  - `/data/data/com.termux/files/home/.agy-ui/server.py` (98 KB Python async orchestrator)
+- **Toolchain Versions Verified**:
+  - `clang`: version 21.1.8
+  - `patchelf`: version 0.19.2
+  - `python3`: version 3.14.6
+  - `zstd`: version 1.5.7
+  - `tar`: GNU tar version 1.35
+  - `java`: OpenJDK version 17.0.20
+  - `readelf`: LLVM readelf
 - **Verification Gate Command**:
-  `<command>`
+  ```bash
+  command -v clang >/dev/null && \
+  command -v patchelf >/dev/null && \
+  command -v python3 >/dev/null && \
+  command -v zstd >/dev/null && \
+  command -v tar >/dev/null && \
+  command -v java >/dev/null && \
+  (command -v readelf >/dev/null || command -v llvm-readelf >/dev/null) && \
+  test -f /data/data/com.termux/files/usr/bin/agy.va39 && \
+  test -f "$HOME/.agy-ui/server.py"
+  ```
 - **Verification Output**:
-  `<stdout/exit 0 summary>`
+  ```text
+  AC-0.1 VERIFICATION GATE: PASSED (exit code 0)
+  ```
 - **Corrections / Self-Healing Applied**:
-  <none or details of fixes>
+  - `patchelf` and `openjdk-17` were identified as missing during initial sweep and were installed via `pkg install -y patchelf openjdk-17`.
 - **Handoff Notes**:
-  <context for next step>
-```
+  - Host environment is fully prepared for Android project scaffolding in Phase 1 (`AC-1.1`).

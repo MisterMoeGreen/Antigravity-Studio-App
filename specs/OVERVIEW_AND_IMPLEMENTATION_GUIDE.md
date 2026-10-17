@@ -95,7 +95,7 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
 ## 5. Command-Verified Acceptance Criteria Checklist
 
 ### Phase 0: Pre-Flight Environment & Source Readiness Gate
-- [ ] **AC-0.1: Host Toolchain & Source Binary Audit**
+- [x] **AC-0.1: Host Toolchain & Source Binary Audit**
   - Verify `clang`, `patchelf`, `python3`, `zstd`, `tar`, `readelf` (or `llvm-readelf`), and `java` (JDK 17+) are installed, and verify `/data/data/com.termux/files/usr/bin/agy.va39` and `~/.agy-ui/server.py` exist.
   - **Verification Gate**:
     ```bash
