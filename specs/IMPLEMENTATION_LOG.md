@@ -831,13 +831,15 @@
 
 ### Milestone P7.9 — Dynamic AGY Versioning & Post-Auth Prompt Resumption
 - **Status**: COMPLETED
-- **Timestamp**: 2026-10-17T16:48:00Z
+- **Timestamp**: 2026-10-17T17:49:00Z
 - **Files Created / Modified**:
-  - `~/.agy-ui/server.py` (dynamic `agy --version` probe with 20s caching, proactive unauthenticated turn interception, `_pending_auth_prompt` and `_pending_auth_attachments` retention, automatic turn dispatch in `_on_auth_success`)
-  - `~/.agy-ui/sw.js` (bumped Service Worker cache to `antigravity-studio-v9`)
+  - `~/.agy-ui/server.py` (dynamic `agy --version` probe with 20s caching, proactive unauthenticated turn interception, defined `attachments` parameter in `execute_turn(self, prompt, attachments=None)`, `_pending_auth_prompt` and `_pending_auth_attachments` retention, automatic turn dispatch in `_on_auth_success`)
+  - `~/.agy-ui/index.html` (stop live progress spinner upon `auth_required` event)
+  - `~/.agy-ui/sw.js` (bumped Service Worker cache to `antigravity-studio-v10`)
   - `/sdcard/Download/AntigravityStudio.apk` (built and deployed release binary)
 - **Deliverables**:
   - AGY CLI version is no longer hardcoded or read via static strings. It executes `agy --version` directly against the live binary, ensuring instant recognition of automatic CLI updates (`AGY_AUTO_UPDATE=1` or `agy update`).
+  - Fixed `NameError: name 'attachments' is not defined` during proactive auth trigger in `execute_turn`.
   - First-prompt loss resolved: When a user enters a prompt while unauthenticated, the system retains the prompt and file attachments, completes Google OAuth, and automatically resumes execution without requiring the user to re-enter their message.
   - Assembled release APK updated at `/sdcard/Download/AntigravityStudio.apk`.
 
