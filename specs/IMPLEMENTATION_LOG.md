@@ -829,8 +829,20 @@
   - Default workspace cleanly falls back to `/storage/emulated/0/Documents` instead of forcing `AgyStudio`.
   - Repository freed from binary bloat; APK distribution routed through GitHub Releases.
 
+### Milestone P7.9 — Dynamic AGY Versioning & Post-Auth Prompt Resumption
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-17T16:48:00Z
+- **Files Created / Modified**:
+  - `~/.agy-ui/server.py` (dynamic `agy --version` probe with 20s caching, proactive unauthenticated turn interception, `_pending_auth_prompt` and `_pending_auth_attachments` retention, automatic turn dispatch in `_on_auth_success`)
+  - `~/.agy-ui/sw.js` (bumped Service Worker cache to `antigravity-studio-v9`)
+  - `/sdcard/Download/AntigravityStudio.apk` (built and deployed release binary)
+- **Deliverables**:
+  - AGY CLI version is no longer hardcoded or read via static strings. It executes `agy --version` directly against the live binary, ensuring instant recognition of automatic CLI updates (`AGY_AUTO_UPDATE=1` or `agy update`).
+  - First-prompt loss resolved: When a user enters a prompt while unauthenticated, the system retains the prompt and file attachments, completes Google OAuth, and automatically resumes execution without requiring the user to re-enter their message.
+  - Assembled release APK updated at `/sdcard/Download/AntigravityStudio.apk`.
+
 ---
 
 ## Final Project Summary
-All phases (Phase 0 through Phase 7.8) have been implemented, tested, and verified.
+All phases (Phase 0 through Phase 7.9) have been implemented, tested, and verified.
 Both repositories (`~/.agy-ui` and `AgyStudio`) have clean, anonymized commit histories with author `MisterMoeGreen <48449987+MisterMoeGreen@users.noreply.github.com>`.
