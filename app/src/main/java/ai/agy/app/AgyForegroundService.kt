@@ -28,9 +28,19 @@ class AgyForegroundService : Service() {
         const val TAG = "AgyService"
         const val CHANNEL_ID = "agy_daemon_channel"
         const val NOTIFICATION_ID = 2001
+        const val ACTION_STOP_SERVICE = "ai.agy.app.action.STOP_SERVICE"
 
         private val _readyPortFlow = MutableStateFlow<Int?>(null)
         val readyPortFlow: StateFlow<Int?> = _readyPortFlow.asStateFlow()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP_SERVICE) {
+            Log.i(TAG, "Stop action requested via notification")
+            stopServiceGracefully()
+            return START_NOT_STICKY
+        }
+        return START_STICKY
     }
 
     override fun onCreate() {
@@ -73,11 +83,28 @@ class AgyForegroundService : Service() {
             PendingIntent.FLAG_IMMUTABLE
         )
 
+        val stopIntent = Intent(this, AgyForegroundService::class.java).apply {
+            action = ACTION_STOP_SERVICE
+        }
+        val stopPendingIntent = PendingIntent.getService(
+            this,
+            1,
+            stopIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val stopAction = Notification.Action.Builder(
+            android.graphics.drawable.Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel),
+            "Stop",
+            stopPendingIntent
+        ).build()
+
         val notification = Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("Antigravity Studio Running")
             .setContentText("Local AI coding agent active on port :$port")
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentIntent(pendingIntent)
+            .addAction(stopAction)
             .setOngoing(true)
             .build()
 
@@ -220,17 +247,43 @@ class AgyForegroundService : Service() {
         registerReceiver(receiver, filter)
     }
 
-    override fun onDestroy() {
-        serviceScope.cancel()
-        daemonProcess?.destroyForcibly()
+    private fun stopServiceGracefully() {
+        Log.i(TAG, "Stopping Antigravity background service and daemon...")
+        _readyPortFlow.value = null
+        try {
+            serviceScope.cancel()
+        } catch (_: Exception) {}
+        try {
+            daemonProcess?.destroyForcibly()
+            daemonProcess = null
+        } catch (_: Exception) {}
+        try {
+            Runtime.getRuntime().exec(arrayOf("killall", "-9", "server.py", "agy"))
+        } catch (_: Exception) {}
         networkCallback?.let {
             val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             try { cm.unregisterNetworkCallback(it) } catch (_: Exception) {}
+            networkCallback = null
         }
         batteryReceiver?.let {
             try { unregisterReceiver(it) } catch (_: Exception) {}
+            batteryReceiver = null
         }
-        wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock?.let {
+            if (it.isHeld) it.release()
+            wakeLock = null
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
+        stopSelf()
+    }
+
+    override fun onDestroy() {
+        stopServiceGracefully()
         super.onDestroy()
     }
 

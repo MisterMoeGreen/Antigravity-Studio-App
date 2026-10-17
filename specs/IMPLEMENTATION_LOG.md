@@ -888,8 +888,23 @@
   - In-session directory picker cleanly replaces session working directory instead of adding extra active directories; persists across application restarts in protobuf metadata and app settings.
   - Freshly assembled release APK deployed to `/sdcard/Download/AntigravityStudio.apk`.
 
+### Milestone P7.13 — Slash Command Consolidation (/quota) and Background Service Notification Stop Action
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-17T19:35:00Z
+- **Files Created / Modified**:
+  - `~/.agy-ui/index.html` (removed redundant `/usage` from `SLASH_COMMANDS` array; updated starter chips and `#pillStatus` click handler to dispatch `/quota`; kept progress label mappings)
+  - `~/.agy-ui/server.py` (updated `/help` markdown command reference table to feature `/quota` exclusively; verified `discover_models` and slash command routing)
+  - `~/.agy-ui/sw.js` (bumped Service Worker cache to `antigravity-studio-v14`)
+  - `AgyStudio/app/src/main/java/ai/agy/app/AgyForegroundService.kt` (added `ACTION_STOP_SERVICE`, added "Stop" `Notification.Action` with `PendingIntent` to persistent foreground notification, implemented `stopServiceGracefully()` to terminate python daemon, execute `killall -9 server.py agy`, release WakeLocks, unregister network/battery telemetry listeners, remove foreground notification via `STOP_FOREGROUND_REMOVE`, and call `stopSelf()`)
+  - `/sdcard/Download/AntigravityStudio.apk` (recompiled release binary)
+- **Deliverables**:
+  - Consolidated duplicate `/usage` and `/quota` slash commands into single standardized `/quota` command.
+  - Added user-accessible "Stop" action directly on the persistent Android notification, allowing clean and instant shutdown of background agent processes, daemon servers, and battery WakeLocks.
+  - Production release APK rebuilt and staged at `/sdcard/Download/AntigravityStudio.apk`.
+
 ---
 
 ## Final Project Summary
-All phases (Phase 0 through Phase 7.12) have been implemented, tested, and verified.
+All phases (Phase 0 through Phase 7.13) have been implemented, tested, and verified.
 Both repositories (`~/.agy-ui` and `AgyStudio`) have clean, anonymized commit histories with author `MisterMoeGreen <48449987+MisterMoeGreen@users.noreply.github.com>`.
+
