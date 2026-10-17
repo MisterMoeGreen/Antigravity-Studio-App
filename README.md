@@ -193,4 +193,5 @@ For detailed technical specifications, architectural diagrams, and verification 
 
 * **Application Code**: Licensed under the Apache License 2.0.
 * **Third-Party Components & Licenses**: Bundled toolchain utilities (`bash`, `git`, `python`, `ripgrep`, `curl`, `busybox`, `glibc`) retain their respective open-source licenses.
+* **Vector Iconography**: Provided by [Font Awesome Free](https://fontawesome.com) under the [CC BY 4.0 License](https://creativecommons.org/licenses/by/4.0/).
 * **Full Attributions & Disclaimers**: See [CREDITS.md](CREDITS.md) for complete license notices, upstream acknowledgments, and trademark disclaimers.

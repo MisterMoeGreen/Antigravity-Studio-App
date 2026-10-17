@@ -57,9 +57,19 @@
 * **Copyright**: &copy; The Android Open Source Project / Google LLC
 * **License**: Apache License 2.0
 
+### 11. Font Awesome Free (`fontawesome.com`)
+* **Copyright**: &copy; Fonticons, Inc.
+* **Website**: [https://fontawesome.com](https://fontawesome.com)
+* **License**:
+  * **Icons**: [CC BY 4.0 License](https://creativecommons.org/licenses/by/4.0/)
+  * **Fonts**: [SIL OFL 1.1 License](http://scripts.sil.org/OFL)
+  * **Code**: [MIT License](https://opensource.org/licenses/MIT)
+* **Usage**: Application UI vector iconography across toolbars, dialogs, drawers, and status indicators.
+
 ---
 
 ## Community Acknowledgments
 
 * **wallentx / `antigravity-cli-termux`**: Gratefully acknowledged for pioneering the initial community exploration of running Google Antigravity inside Android's Termux environment.
 * **Termux Community**: For packaging and maintaining Android-compatible AArch64 ports of developer toolchains.
+* **Font Awesome**: Gratefully acknowledged for providing open-source, high-quality vector iconography.
