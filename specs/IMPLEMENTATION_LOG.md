@@ -734,11 +734,60 @@
 
 ---
 
+## Phase 7 — Mobile Workspace Navigation, OAuth Authorization, & Subscription Telemetry
+
+### Milestone P7.1 — Device Workspace Directory Picker & Git Branch Telemetry
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-17T09:45:00Z
+- **Files Created / Modified**:
+  - `app/src/main/AndroidManifest.xml` (declared `MANAGE_EXTERNAL_STORAGE` and `READ_EXTERNAL_STORAGE`)
+  - `app/src/main/java/ai/agy/app/MainActivity.kt` (added Android 11+ `ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION` prompt)
+  - `~/.agy-ui/server.py` (implemented `list_directory`, `create_directory`, and `set_workspace`)
+  - `~/.agy-ui/index.html` (single-line ellipsis workspace bar above prompt input, drawer workspace paths, and modal folder picker)
+- **Deliverables**:
+  - Allowed sessions to navigate to any folder on the device (internal storage or SD card).
+  - Dynamically detects and displays active Git branch (`🌿 <branch>`) next to current directory.
+
+### Milestone P7.2 — In-App Google OAuth Consent & Authorization Code Capture
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-17T10:28:00Z
+- **Files Created / Modified**:
+  - `~/.agy-ui/server.py` (`AgyProcessOrchestrator` auth session tracking, PTY stdin writing, `submit_auth_code`, `_sync_oauth_token`)
+  - `~/.agy-ui/index.html` (inline auth code card, prompt input code interception, `auth_required` / `auth_success` handlers)
+- **Deliverables**:
+  - Automated out-of-band OAuth flow: captures consent URL, triggers browser window, and accepts pasted authorization code (`4/0...`) either via dedicated box or main chat prompt.
+  - Automatically seeds and backs up `antigravity-oauth-token` to `/storage/emulated/0/Documents/AgyStudio/antigravity-oauth-token`.
+  - Added `/login` and `/auth` slash commands for instant re-authentication.
+
+### Milestone P7.3 — Dynamic Model Discovery & Integrated Reasoning Effort Selector
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-17T10:31:00Z
+- **Files Created / Modified**:
+  - `~/.agy-ui/server.py` (dynamic `agy models` query, `VALID_EFFORTS = ["low", "medium", "high"]`, conditional `--effort` flag passing)
+  - `~/.agy-ui/index.html` (unified Model & Effort bottom sheet, removal of redundant toolbar effort pill)
+- **Deliverables**:
+  - Model list dynamically queries `agy models`; empty/login prompt displayed when unauthenticated.
+  - Reasoning effort selector (`Low | Medium | High`) integrated directly inside the Model Bottom Sheet.
+  - Grouped duplicate Gemini Flash variants into a single entry with adaptive effort badges.
+  - Prevented `--effort` flag collisions on Claude Sonnet/Opus and GPT-OSS models.
+
+### Milestone P7.4 — Subscription Quota & Context Window Telemetry
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-17T10:34:00Z
+- **Files Created / Modified**:
+  - `~/.agy-ui/server.py` (`get_subscription_quotas` parser, `/usage` and `/quota` command handlers)
+  - `~/.agy-ui/index.html` (renamed toolbar pill to `[📊 Quota]`, `/usage` / `/quota` slash command registration)
+- **Deliverables**:
+  - Completely removed synthetic per-token cost estimations and dollar values.
+  - Integrated real subscription quota telemetry (`agy -p "/usage"`): displays Weekly and 5-Hour remaining percentages and UTC reset schedules.
+  - Integrated visual context window utilization progress bar and active token counts.
+
+---
+
 ## Final Project Summary
-All phases (Phase 0 through Phase 6) and Post-Phase 6 milestones have been implemented, tested, and verified.
-Standalone release APK generated at:
-`AntigravityStudio.apk` (Size: 97.7 MB, Signed with APK Signature Scheme v2).
-Repo Status: Synchronized with `origin/master`.
+All phases (Phase 0 through Phase 7) have been implemented, tested, and verified.
+Both repositories (`~/.agy-ui` and `AgyStudio`) have clean, anonymized commit histories with author `MisterMoeGreen <48449987+MisterMoeGreen@users.noreply.github.com>`.
+APK build deferred per user instruction until additional open issues are reviewed.
 
 
 
