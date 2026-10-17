@@ -902,9 +902,22 @@
   - Added user-accessible "Stop" action directly on the persistent Android notification, allowing clean and instant shutdown of background agent processes, daemon servers, and battery WakeLocks.
   - Production release APK rebuilt and staged at `/sdcard/Download/AntigravityStudio.apk`.
 
+### Milestone P7.14 — In-App Update Loop Elimination & Semantic Versioning
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-17T20:15:00Z
+- **Files Created / Modified**:
+  - `AgyStudio/app/src/main/java/ai/agy/app/InAppUpdateManager.kt` (replaced naive string inequality check with strict `isNewerVersion()` semantic parsing; added 24-hour SharedPreferences prompt throttling for `last_attempted_tag` to permanently eliminate infinite update loops on app restart)
+  - `AgyStudio/app/build.gradle.kts` (bumped `versionCode` to `3` and synchronized `versionName` to `"1.0.1-hotfix"` matching the published GitHub release tag)
+  - `/sdcard/Download/AntigravityStudio.apk` (recompiled release binary)
+- **Deliverables**:
+  - Fixed infinite update loop where devices repeatedly prompted to install updates upon every application launch.
+  - Robust version comparison comparing numeric major.minor.patch components with pre-release/hotfix awareness.
+  - Persistent 24h throttling ensuring user is never repeatedly interrupted by system package installer prompts.
+  - Production release APK rebuilt and staged at `/sdcard/Download/AntigravityStudio.apk`.
+
 ---
 
 ## Final Project Summary
-All phases (Phase 0 through Phase 7.13) have been implemented, tested, and verified.
+All phases (Phase 0 through Phase 7.14) have been implemented, tested, and verified.
 Both repositories (`~/.agy-ui` and `AgyStudio`) have clean, anonymized commit histories with author `MisterMoeGreen <48449987+MisterMoeGreen@users.noreply.github.com>`.
 
