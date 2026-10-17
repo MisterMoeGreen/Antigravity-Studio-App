@@ -24,7 +24,7 @@ specs/
 ```
 
 Execution progress and step-by-step verification entries are recorded in the root tracking ledger:
-- [`IMPLEMENTATION_LOG.md`](../IMPLEMENTATION_LOG.md)
+- [`IMPLEMENTATION_LOG.md`](IMPLEMENTATION_LOG.md)
 
 ---
 
@@ -86,9 +86,9 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
 1. **Gating Rule**: An autonomous agent must never mark a criterion `[x]` unless its **Verification Gate** shell command exits with code `0`.
 2. **Atomic Verification**: After completing each task:
    - Run the exact verification command.
-   - If it passes, flip `[ ]` to `[x]` in both this guide and [`IMPLEMENTATION_LOG.md`](../IMPLEMENTATION_LOG.md).
+   - If it passes, flip `[ ]` to `[x]` in both this guide and [`IMPLEMENTATION_LOG.md`](IMPLEMENTATION_LOG.md).
    - If it fails, self-heal and re-test before moving to the next criterion.
-3. **Audit Log Update**: Append a completed entry to the Step Execution Ledger in [`IMPLEMENTATION_LOG.md`](../IMPLEMENTATION_LOG.md) including the timestamp, files modified, verification command output, and handoff notes for the next agent.
+3. **Audit Log Update**: Append a completed entry to the Step Execution Ledger in [`IMPLEMENTATION_LOG.md`](IMPLEMENTATION_LOG.md) including the timestamp, files modified, verification command output, and handoff notes for the next agent.
 
 ---
 

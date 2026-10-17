@@ -150,8 +150,8 @@ AgyStudio/
 │   ├── SPEC-03-ANDROID-APP-INFRASTRUCTURE-AND-SERVICES.md
 │   ├── SPEC-04-NETWORKING-DYNAMIC-DNS-AND-HARDWARE-BRIDGES.md
 │   ├── SPEC-05-SECURITY-PERMISSIONS-AND-IN-APP-UPDATES.md
-│   └── OVERVIEW_AND_IMPLEMENTATION_GUIDE.md # Complete criteria gates & acceptance tests
-├── IMPLEMENTATION_LOG.md             # Execution audit log across all 7 phases
+│   ├── OVERVIEW_AND_IMPLEMENTATION_GUIDE.md # Complete criteria gates & acceptance tests
+│   └── IMPLEMENTATION_LOG.md         # Execution audit log across all 7 phases
 ├── build.gradle.kts                  # Root project Gradle configuration
 └── settings.gradle.kts               # Module settings
 ```
@@ -184,10 +184,12 @@ bash ./gradlew assembleRelease
 
 For detailed technical specifications, architectural diagrams, and verification proofs:
 * [Overview & Implementation Guide](specs/OVERVIEW_AND_IMPLEMENTATION_GUIDE.md)
-* [Full Implementation & Verification Log](IMPLEMENTATION_LOG.md)
+* [Full Implementation & Verification Log](specs/IMPLEMENTATION_LOG.md)
 
 ---
 
-## License
+## License & Credits
 
-This project is licensed under the Apache License 2.0. Third-party components retain their respective licenses (`bash`, `git`, `python`, `ripgrep`, `curl`, and `busybox`).
+* **Application Code**: Licensed under the Apache License 2.0.
+* **Third-Party Components & Licenses**: Bundled toolchain utilities (`bash`, `git`, `python`, `ripgrep`, `curl`, `busybox`, `glibc`) retain their respective open-source licenses.
+* **Full Attributions & Disclaimers**: See [CREDITS.md](CREDITS.md) for complete license notices, upstream acknowledgments, and trademark disclaimers.
