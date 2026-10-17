@@ -19,7 +19,7 @@ import java.net.ServerSocket
 class AgyForegroundService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
-    private var daemonProcess: Process? = null
+    private var daemonProcess: java.lang.Process? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var batteryReceiver: BroadcastReceiver? = null
@@ -130,17 +130,20 @@ class AgyForegroundService : Service() {
         Log.i(TAG, "Spawned server.py process on 127.0.0.1:$port")
 
         // CRITICAL: Continuously drain stdout/stderr pipe to prevent 64KB kernel buffer deadlocks
-        serviceScope.launch {
-            val stream = daemonProcess?.inputStream ?: return@launch
-            val logFile = File("$usr/tmp/server.log")
-            BufferedReader(InputStreamReader(stream)).use { reader ->
-                logFile.bufferedWriter().use { writer ->
-                    var line: String?
-                    while (reader.readLine().also { line = it } != null) {
-                        Log.d("AgyServer", line!!)
-                        writer.write(line)
-                        writer.newLine()
-                        writer.flush()
+        val spawnedProc = daemonProcess
+        if (spawnedProc != null) {
+            serviceScope.launch {
+                val stream = spawnedProc.inputStream
+                val logFile = File("$usr/tmp/server.log")
+                BufferedReader(InputStreamReader(stream)).use { reader ->
+                    logFile.bufferedWriter().use { writer ->
+                        var line: String?
+                        while (reader.readLine().also { line = it } != null) {
+                            Log.d("AgyServer", line!!)
+                            writer.write(line)
+                            writer.newLine()
+                            writer.flush()
+                        }
                     }
                 }
             }

@@ -152,7 +152,7 @@ object EnvironmentBootstrapper {
             if (linkFile.isDirectory && !java.nio.file.Files.isSymbolicLink(linkFile.toPath())) {
                 linkFile.deleteRecursively()
             } else {
-                Os.unlink(linkFile.absolutePath)
+                Os.remove(linkFile.absolutePath)
             }
         } catch (_: Exception) {}
         try {

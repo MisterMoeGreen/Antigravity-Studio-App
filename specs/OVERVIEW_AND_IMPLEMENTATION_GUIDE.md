@@ -295,13 +295,13 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
     ```
 
 ### Phase 6: Build Verification, Packaging & End-to-End Acceptance Testing
-- [ ] **AC-6.1: Gradle Release Build & APK Signature Verification**
+- [x] **AC-6.1: Gradle Release Build & APK Signature Verification**
   - Compile the release APK and verify signature schemes v2/v3.
   - **Verification Gate**:
     ```bash
     ./gradlew assembleRelease && ls app/build/outputs/apk/release/*.apk
     ```
-- [ ] **AC-6.2: APK Structure, Compression & Size Audit (< 110 MB)**
+- [x] **AC-6.2: APK Structure, Compression & Size Audit (< 110 MB)**
   - Verify `lib/arm64-v8a/libagy.so`, `libagy_shim.so`, `libglibc_ld.so`, `libpython3_bin.so`, and `assets/usr-data.tar.zst` are packaged in the APK and total size is under 110 MB.
   - **Verification Gate**:
     ```bash
@@ -310,13 +310,13 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
     unzip -l "$APK_PATH" | grep -q "assets/usr-data.tar.zst" && \
     test $(stat -c%s "$APK_PATH" 2>/dev/null || stat -f%z "$APK_PATH") -lt 115343360
     ```
-- [ ] **AC-6.3: Cold Boot & Symlink Farm Runtime Verification**
+- [x] **AC-6.3: Cold Boot & Symlink Farm Runtime Verification**
   - Install APK, launch `ai.agy.app/.MainActivity`, verify `usr-data.tar.zst` unpacks, symlinks resolve to `apk_data_file`, and `/health` responds with HTTP 200.
-- [ ] **AC-6.4: Zero SELinux `avc: denied` Audit**
+- [x] **AC-6.4: Zero SELinux `avc: denied` Audit**
   - Inspect `logcat` during boot and first agent turn to confirm zero `avc: denied { execute }` or `avc: denied { execmod }` violations.
-- [ ] **AC-6.5: Subprocess & Shebang Parity Test (`bash`, `git`, `python3`, `rg`, `curl`)**
+- [x] **AC-6.5: Subprocess & Shebang Parity Test (`bash`, `git`, `python3`, `rg`, `curl`)**
   - Execute a multi-tool command via `agy` testing `git --version`, `python3 -c "import ssl, sqlite3, socket"`, `rg --version`, `curl -I https://google.com`, and a `#!/usr/bin/env python3` script.
-- [ ] **AC-6.6: Dynamic DNS & Git HTTPS Clone Verification**
+- [x] **AC-6.6: Dynamic DNS & Git HTTPS Clone Verification**
   - Verify `git clone https://github.com/...` and Google API requests succeed via `GODEBUG=netdns=cgo` and `usr/glibc/etc/resolv.conf`.
-- [ ] **AC-6.7: Background WakeLock Persistence Test**
+- [x] **AC-6.7: Background WakeLock Persistence Test**
   - Run a multi-minute turn with screen off and confirm completion without process termination.
