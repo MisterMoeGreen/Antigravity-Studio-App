@@ -152,6 +152,7 @@ cp -L "${HOME}/.agy-ui/sw.js" "${STAGING_DIR}/share/agy-ui/sw.js"
 cp -L "${HOME}/.agy-ui/server.py" "${STAGING_DIR}/share/agy-ui/server.py"
 cp -L "${HOME}/.agy-ui/icon-192.png" "${STAGING_DIR}/share/agy-ui/icon-192.png" 2>/dev/null || true
 cp -L "${HOME}/.agy-ui/icon-512.png" "${STAGING_DIR}/share/agy-ui/icon-512.png" 2>/dev/null || true
+cp -L "${HOME}/.agy-ui/manifest.json" "${STAGING_DIR}/share/agy-ui/manifest.json" 2>/dev/null || true
 
 PY_DIR=""
 for d in "${SOURCE_PREFIX}/lib/python3."*; do

@@ -782,13 +782,27 @@
   - Integrated real subscription quota telemetry (`agy -p "/usage"`): displays Weekly and 5-Hour remaining percentages and UTC reset schedules.
   - Integrated visual context window utilization progress bar and active token counts.
 
+### Milestone P7.5 — Custom App Logo & Brand Assets
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-17T10:55:00Z
+- **Files Created / Modified**:
+  - `AgyStudio/app/src/main/res/drawable/ic_launcher_background.xml` (updated background to `#090d16`)
+  - `AgyStudio/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml` (referenced `@mipmap/ic_launcher_foreground`)
+  - `AgyStudio/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml` (referenced `@mipmap/ic_launcher_foreground`)
+  - `AgyStudio/app/src/main/res/mipmap-{mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi}/` (adaptive foreground and legacy square/round icons)
+  - `AgyStudio/scripts/prepare_binaries.sh` (stages `manifest.json`, `icon-192.png`, `icon-512.png`)
+  - `~/.agy-ui/icon-192.png` & `~/.agy-ui/icon-512.png` (high-res web icons)
+  - `~/.agy-ui/manifest.json` (PWA standalone app manifest)
+  - `~/.agy-ui/index.html` (rendered app logo in welcome state)
+  - `~/.agy-ui/sw.js` (bumped cache to `antigravity-studio-v4`)
+- **Deliverables**:
+  - Generated full density suite of Android adaptive foreground icons (`ic_launcher_foreground.png`) with proper 66.6% safe-zone margin.
+  - Generated full density suite of legacy square squircle icons (`ic_launcher.png`) and round icons (`ic_launcher_round.png`) with brand `#090d16` background.
+  - Integrated custom branding across Web UI, Service Worker, and PWA manifest.
+
 ---
 
 ## Final Project Summary
-All phases (Phase 0 through Phase 7) have been implemented, tested, and verified.
+All phases (Phase 0 through Phase 7.5) have been implemented, tested, and verified.
 Both repositories (`~/.agy-ui` and `AgyStudio`) have clean, anonymized commit histories with author `MisterMoeGreen <48449987+MisterMoeGreen@users.noreply.github.com>`.
-APK build deferred per user instruction until additional open issues are reviewed.
-
-
-
-
+APK build deferred per user instruction until authorized.
