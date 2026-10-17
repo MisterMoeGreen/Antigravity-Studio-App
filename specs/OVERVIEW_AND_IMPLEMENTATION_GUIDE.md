@@ -106,20 +106,20 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
     ```
 
 ### Phase 1: Project Scaffolding & Build Configuration
-- [ ] **AC-1.1: Directory Hierarchy Creation**
+- [x] **AC-1.1: Directory Hierarchy Creation**
   - Create standard Android project layout: `app/src/main/{cpp,java/ai/agy/app,res/xml,res/values,res/drawable,jniLibs/arm64-v8a,assets}` and `scripts/`.
   - **Verification Gate**:
     ```bash
     test -d app/src/main/cpp && test -d app/src/main/java/ai/agy/app && \
     test -d app/src/main/res/xml && test -d scripts
     ```
-- [ ] **AC-1.2: `settings.gradle.kts` & Root `build.gradle.kts` Configuration**
+- [x] **AC-1.2: `settings.gradle.kts` & Root `build.gradle.kts` Configuration**
   - Configure `rootProject.name = "AntigravityStudio"`, `include(":app")`, `google()`, `mavenCentral()`, AGP `8.5.+`, and Kotlin `1.9.24+`.
   - **Verification Gate**:
     ```bash
     grep -q 'include(":app")' settings.gradle.kts && test -f build.gradle.kts && test -f gradle.properties
     ```
-- [ ] **AC-1.3: `app/build.gradle.kts` Core & 10-Char Geometry Configuration**
+- [x] **AC-1.3: `app/build.gradle.kts` Core & 10-Char Geometry Configuration**
   - Set `namespace = "ai.agy.app"`, `applicationId = "ai.agy.app"`, `minSdk = 28`, `compileSdk = 35`, `targetSdk = 35`, `ndk.abiFilters += "arm64-v8a"`, and `packaging.jniLibs.useLegacyPackaging = true`.
   - **Verification Gate**:
     ```bash
@@ -127,14 +127,14 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
     grep -q 'useLegacyPackaging = true' app/build.gradle.kts && \
     grep -q 'targetSdk = 35' app/build.gradle.kts
     ```
-- [ ] **AC-1.4: Dependencies & Signing Config Declaration**
+- [x] **AC-1.4: Dependencies & Signing Config Declaration**
   - Declare `androidx.core:core-ktx`, `androidx.appcompat:appcompat`, `androidx.webkit:webkit`, `androidx.browser:browser`, `kotlinx-coroutines-android`, `zstd-jni`, and `commons-compress`.
   - **Verification Gate**:
     ```bash
     grep -q 'zstd-jni' app/build.gradle.kts && grep -q 'commons-compress' app/build.gradle.kts && \
     grep -q 'androidx.browser' app/build.gradle.kts
     ```
-- [ ] **AC-1.5: Mandatory Android Resource Files (`file_paths.xml` & Icons)**
+- [x] **AC-1.5: Mandatory Android Resource Files (`file_paths.xml` & Icons)**
   - Create `app/src/main/res/xml/file_paths.xml` exposing `files-path` and `cache-path` for `FileProvider`, plus vector launcher icons.
   - **Verification Gate**:
     ```bash
