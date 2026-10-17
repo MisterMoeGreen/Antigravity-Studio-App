@@ -45,6 +45,12 @@ class MainActivity : AppCompatActivity() {
         val serviceIntent = Intent(this, AgyForegroundService::class.java)
         startForegroundService(serviceIntent)
 
+        // Non-blocking background check for repository updates
+        lifecycleScope.launch(Dispatchers.IO) {
+            delay(3000)
+            InAppUpdateManager.checkForUpdates(this@MainActivity)
+        }
+
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
@@ -56,7 +62,7 @@ class MainActivity : AppCompatActivity() {
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                     val url = request?.url?.toString() ?: return false
-                    if (url.startsWith("https://accounts.google.com/o/oauth2")) {
+                    if (url.contains("accounts.google.com")) {
                         CustomTabsIntent.Builder().setShowTitle(true).build()
                             .launchUrl(this@MainActivity, Uri.parse(url))
                         return true

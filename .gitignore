@@ -13,3 +13,5 @@ captures/
 # Note: libagy.so is 201MB which exceeds GitHub's 100MB file limit.
 app/src/main/jniLibs/
 app/src/main/assets/usr-data.tar.zst
+antigravity-oauth-token
+*.token

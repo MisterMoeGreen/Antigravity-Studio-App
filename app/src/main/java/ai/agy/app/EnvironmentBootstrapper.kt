@@ -5,10 +5,13 @@ import android.os.Build
 import android.system.Os
 import com.github.luben.zstd.ZstdInputStream
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
 
 object EnvironmentBootstrapper {
+
+    private const val TAG = "Bootstrapper"
 
     private val BIN_SYMLINKS = mapOf(
         "agy" to "libagy.so",
@@ -145,6 +148,38 @@ object EnvironmentBootstrapper {
                 "[init]\n\tdefaultBranch = main\n"
             )
         }
+
+        // 4. Seed and synchronize Antigravity OAuth Token with shared storage
+        val appGeminiDir = File(homeDir, ".gemini/antigravity-cli")
+        appGeminiDir.mkdirs()
+        val appTokenFile = File(appGeminiDir, "antigravity-oauth-token")
+
+        val candidateTokenPaths = listOf(
+            File("/storage/emulated/0/Documents/AgyStudio/antigravity-oauth-token"),
+            File("/storage/emulated/0/Documents/antigravity-oauth-token"),
+            File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOCUMENTS), "AgyStudio/antigravity-oauth-token")
+        )
+
+        for (candidate in candidateTokenPaths) {
+            try {
+                if (candidate.exists() && candidate.length() > 0) {
+                    if (!appTokenFile.exists() || candidate.lastModified() > appTokenFile.lastModified()) {
+                        candidate.copyTo(appTokenFile, overwrite = true)
+                        Log.i(TAG, "Successfully seeded antigravity-oauth-token from ${candidate.absolutePath}")
+                    }
+                    break
+                }
+            } catch (_: Exception) {}
+        }
+
+        // Mirror active token back to shared storage for seamless retention across reinstalls
+        try {
+            val backupDest = File("/storage/emulated/0/Documents/AgyStudio/antigravity-oauth-token")
+            if (appTokenFile.exists() && (!backupDest.exists() || appTokenFile.lastModified() > backupDest.lastModified())) {
+                backupDest.parentFile?.mkdirs()
+                appTokenFile.copyTo(backupDest, overwrite = true)
+            }
+        } catch (_: Exception) {}
     }
 
     private fun createOrUpdateSymlink(linkFile: File, targetPath: String) {

@@ -99,4 +99,44 @@ object InAppUpdateManager {
             activeSession.commit(pendingIntent.intentSender)
         }
     }
+
+    /**
+     * Periodically queries the repository's latest release and automatically
+     * triggers silent in-app APK installation if a newer version is published.
+     */
+    suspend fun checkForUpdates(context: Context) = withContext(Dispatchers.IO) {
+        try {
+            val url = URL("https://api.github.com/repos/MisterMoeGreen/Antigravity-Studio-App/releases/latest")
+            val connection = url.openConnection() as java.net.HttpURLConnection
+            connection.setRequestProperty("User-Agent", "AntigravityStudio")
+            connection.connectTimeout = 5000
+            connection.readTimeout = 5000
+
+            if (connection.responseCode == 200) {
+                val json = connection.inputStream.bufferedReader().use { it.readText() }
+                val jsonObj = org.json.JSONObject(json)
+                val tagName = jsonObj.optString("tag_name", "").removePrefix("v").trim()
+                val currentVersion = context.packageManager.getPackageInfo(context.packageName, 0).versionName
+
+                if (tagName.isNotEmpty() && tagName != currentVersion) {
+                    val assets = jsonObj.optJSONArray("assets")
+                    var downloadUrl: String? = null
+                    if (assets != null) {
+                        for (i in 0 until assets.length()) {
+                            val asset = assets.getJSONObject(i)
+                            if (asset.optString("name").endsWith(".apk")) {
+                                downloadUrl = asset.optString("browser_download_url")
+                                break
+                            }
+                        }
+                    }
+                    if (downloadUrl != null) {
+                        downloadAndInstall(context, downloadUrl) { progress ->
+                            android.util.Log.i("InAppUpdate", "Download progress: $progress%")
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+    }
 }
