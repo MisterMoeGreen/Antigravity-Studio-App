@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>The first fully standalone, autonomous AI coding agent & IDE for Android.</strong><br>
-  Zero Termux required &bull; Zero root required &bull; Self-contained toolchain &bull; Android 10 to 16 (API 28–35)
+  Zero Termux required &bull; Zero root required &bull; Self-contained toolchain &bull; Android 10 and above (API 28–35+)
 </p>
 
 <p align="center">
@@ -47,7 +47,7 @@ Android’s Bionic C library lacks traditional Linux system directories like `/b
 Any execution of `#!/bin/sh`, `#!/bin/bash`, or `#!/usr/bin/env python3` is transparently rewritten on the fly to point to the app’s internal sandbox toolchain.
 
 ### 🛡️ 16 KB Page Alignment & Modern Android Security
-Targeting Android 15 and 16 (API 35), Antigravity Studio complies with Android’s mandatory **16 KB memory page alignment** requirement. All shared libraries and binaries are extracted to `/data/app/.../lib/arm64/` under the SELinux `apk_data_file` security domain, ensuring zero W^X violations or text relocations.
+Antigravity Studio complies with Android’s mandatory **16 KB memory page alignment** requirement for modern and future Android releases (Android 15, 16, 17+). All shared libraries and binaries are extracted to `/data/app/.../lib/arm64/` under the SELinux `apk_data_file` security domain, ensuring zero W^X violations or text relocations across all current and future Android versions.
 
 ### 🔋 Background Durability & Hardware Telemetry
 * **Partial WakeLock**: Keeps the CPU active during multi-turn agent tasks even if your screen turns off.
