@@ -71,6 +71,17 @@ The Android app container is built with modern Kotlin and Android Jetpack librar
 </manifest>
 ```
 
+### FileProvider Paths Configuration (`app/src/main/res/xml/file_paths.xml`)
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <files-path name="internal_files" path="." />
+    <cache-path name="internal_cache" path="." />
+    <external-files-path name="external_files" path="." />
+</paths>
+```
+
 ---
 
 ## 3. Bootstrapper (`app/src/main/java/ai/agy/app/EnvironmentBootstrapper.kt`)
@@ -225,7 +236,11 @@ object EnvironmentBootstrapper {
 
     private fun createOrUpdateSymlink(linkFile: File, targetPath: String) {
         try {
-            Os.unlink(linkFile.absolutePath)
+            if (linkFile.isDirectory && !java.nio.file.Files.isSymbolicLink(linkFile.toPath())) {
+                linkFile.deleteRecursively()
+            } else {
+                Os.unlink(linkFile.absolutePath)
+            }
         } catch (_: Exception) {}
         try {
             Os.symlink(targetPath, linkFile.absolutePath)
@@ -534,9 +549,17 @@ class MainActivity : AppCompatActivity() {
         callback.onReceiveValue(uris)
     }
 
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* Notification permission status */ }
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
 
         val serviceIntent = Intent(this, AgyForegroundService::class.java)
         startForegroundService(serviceIntent)

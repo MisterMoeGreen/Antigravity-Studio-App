@@ -122,6 +122,7 @@ static inline const char* translate_path(const char* path, char* buf, size_t buf
 /* Check if target executable is the Glibc-linked agy binary */
 static inline int is_glibc_target(const char* path) {
     if (!path) return 0;
+    if (strcmp(path, "agy") == 0 || strcmp(path, "agy.va39") == 0) return 1;
     size_t len = strlen(path);
     if (len >= 4 && strcmp(path + len - 4, "/agy") == 0) return 1;
     if (len >= 10 && strcmp(path + len - 10, "/libagy.so") == 0) return 1;
