@@ -219,7 +219,7 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
     ```
 
 ### Phase 3: Android App Infrastructure (Kotlin)
-- [ ] **AC-3.1: `AndroidManifest.xml` Configuration**
+- [x] **AC-3.1: `AndroidManifest.xml` Configuration**
   - Declare permissions (`INTERNET`, `ACCESS_NETWORK_STATE`, `WAKE_LOCK`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SPECIAL_USE`, `POST_NOTIFICATIONS`, `REQUEST_INSTALL_PACKAGES`), `extractNativeLibs="true"`, `usesCleartextTraffic="true"`, `MainActivity`, `AgyForegroundService` (`specialUse` subtype), `UpdateReceiver`, and `FileProvider`.
   - **Verification Gate**:
     ```bash
@@ -227,14 +227,14 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
     grep -q 'FOREGROUND_SERVICE_SPECIAL_USE' app/src/main/AndroidManifest.xml && \
     grep -q 'ai.agy.app.fileprovider' app/src/main/AndroidManifest.xml
     ```
-- [ ] **AC-3.2: `EnvironmentBootstrapper.kt` Implementation**
+- [x] **AC-3.2: `EnvironmentBootstrapper.kt` Implementation**
   - Unpack `usr-data.tar.zst` with Zip-Slip canonical path validation, reconstruct symlinks from `.symlinks.manifest`, create `usr/bin/*` and `usr/libexec/git-core/*` symlinks, safely replace `usr/glibc/etc -> ../etc` (handling existing directories before `Os.unlink`), and seed `resolv.conf`, `nsswitch.conf`, `hosts`, and `gitconfig`.
   - **Verification Gate**:
     ```bash
     grep -q '.symlinks.manifest' app/src/main/java/ai/agy/app/EnvironmentBootstrapper.kt && \
     grep -q 'libexec/git-core' app/src/main/java/ai/agy/app/EnvironmentBootstrapper.kt
     ```
-- [ ] **AC-3.3: `AgyForegroundService.kt` Implementation**
+- [x] **AC-3.3: `AgyForegroundService.kt` Implementation**
   - Acquire `PARTIAL_WAKE_LOCK`, post API 34+ `FOREGROUND_SERVICE_TYPE_SPECIAL_USE` notification, kill any stale orphaned `server.py` processes before spawning, launch `server.py` with full environment (`GODEBUG=netdns=cgo`, `LD_PRELOAD`, `LD_LIBRARY_PATH` without glibc), drain stdout/stderr pipe in a coroutine, and publish active port via `readyPortFlow`.
   - **Verification Gate**:
     ```bash
@@ -242,7 +242,7 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
     grep -q 'readyPortFlow' app/src/main/java/ai/agy/app/AgyForegroundService.kt && \
     grep -q 'redirectErrorStream(true)' app/src/main/java/ai/agy/app/AgyForegroundService.kt
     ```
-- [ ] **AC-3.4: `MainActivity.kt` Implementation**
+- [x] **AC-3.4: `MainActivity.kt` Implementation**
   - Request `POST_NOTIFICATIONS` permission on API 33+, await `readyPortFlow` on `Dispatchers.IO`, poll `/health` until HTTP 200, configure `WebView` with file chooser (`onShowFileChooser`), intercept Google OAuth URLs into Chrome Custom Tabs, and wire `OnBackPressedCallback`.
   - **Verification Gate**:
     ```bash
@@ -251,20 +251,20 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
     ```
 
 ### Phase 4: Networking, Dynamic DNS & Hardware Telemetry
-- [ ] **AC-4.1: Dynamic Port Selection (`pickAvailablePort`)**
+- [x] **AC-4.1: Dynamic Port Selection (`pickAvailablePort`)**
   - Implement sequential fallback (`8081` -> `8082` -> `8090` -> `8091` -> ephemeral `0`) and pass `AGY_WEB_PORT` to `server.py`.
   - **Verification Gate**:
     ```bash
     grep -q 'pickAvailablePort' app/src/main/java/ai/agy/app/AgyForegroundService.kt
     ```
-- [ ] **AC-4.2: Atomic Dynamic DNS Watcher (`ConnectivityManager.NetworkCallback`)**
+- [x] **AC-4.2: Atomic Dynamic DNS Watcher (`ConnectivityManager.NetworkCallback`)**
   - Write active network DNS servers atomically via `.tmp` rename to `usr/etc/resolv.conf` on `onLinkPropertiesChanged`.
   - **Verification Gate**:
     ```bash
     grep -q 'onLinkPropertiesChanged' app/src/main/java/ai/agy/app/AgyForegroundService.kt && \
     grep -q 'resolv.conf' app/src/main/java/ai/agy/app/AgyForegroundService.kt
     ```
-- [ ] **AC-4.3: Battery & Thermal Telemetry Bridge (`android_telemetry.json`)**
+- [x] **AC-4.3: Battery & Thermal Telemetry Bridge (`android_telemetry.json`)**
   - Register `ACTION_BATTERY_CHANGED` receiver in `AgyForegroundService` writing `battery_pct`, `charging`, `temp_c`, and `timestamp` to `usr/tmp/android_telemetry.json`, and verify `server.py` reads this file first.
   - **Verification Gate**:
     ```bash
@@ -273,19 +273,19 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
     ```
 
 ### Phase 5: Authentication & In-App Update Engine
-- [ ] **AC-5.1: Google OAuth Loopback & Custom Tabs Handshake**
+- [x] **AC-5.1: Google OAuth Loopback & Custom Tabs Handshake**
   - Ensure `server.py` forwards OAuth URLs over WebSocket and `MainActivity` opens `https://accounts.google.com/o/oauth2` in Chrome Custom Tabs.
   - **Verification Gate**:
     ```bash
     grep -q 'accounts.google.com/o/oauth2' app/src/main/java/ai/agy/app/MainActivity.kt
     ```
-- [ ] **AC-5.2: Tier-1 OTA Asset Updater (`server.py`)**
+- [x] **AC-5.2: Tier-1 OTA Asset Updater (`server.py`)**
   - Verify `server.py` supports atomic OTA updates for `index.html`, `sw.js`, and `server.py` in `usr/share/agy-ui/` without overwritten changes on warm restarts.
   - **Verification Gate**:
     ```bash
     grep -q 'installedVersion != currentVersion' app/src/main/java/ai/agy/app/EnvironmentBootstrapper.kt
     ```
-- [ ] **AC-5.3: Tier-2 APK Self-Updater (`InAppUpdateManager.kt` & `UpdateReceiver.kt`)**
+- [x] **AC-5.3: Tier-2 APK Self-Updater (`InAppUpdateManager.kt` & `UpdateReceiver.kt`)**
   - Implement streaming APK download to `cacheDir/update.apk`, `PackageInstaller.SessionParams`, `USER_ACTION_NOT_REQUIRED` on API 31+, and `UpdateReceiver` handling `STATUS_PENDING_USER_ACTION` and `STATUS_SUCCESS`.
   - **Verification Gate**:
     ```bash
