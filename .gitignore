@@ -15,3 +15,7 @@ app/src/main/jniLibs/
 app/src/main/assets/usr-data.tar.zst
 antigravity-oauth-token
 *.token
+
+# APK artifacts (distributed via GitHub Releases)
+*.apk
+AntigravityStudio.apk

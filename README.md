@@ -1,7 +1,7 @@
 # Antigravity Studio for Android
 
 <p align="center">
-  <img src="app/src/main/res/drawable/ic_launcher_foreground.xml" width="128" height="128" alt="Antigravity Studio Logo" />
+  <img src="agystudio.png" width="128" height="128" alt="Antigravity Studio Logo" />
 </p>
 
 <p align="center">
@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/MisterMoeGreen/Antigravity-Studio-App/blob/master/AntigravityStudio.apk"><img src="https://img.shields.io/badge/Download-AntigravityStudio.apk%20(97.7%20MB)-success?style=for-the-badge&logo=android" alt="Download APK" /></a>
+  <a href="https://github.com/MisterMoeGreen/Antigravity-Studio-App/releases/latest"><img src="https://img.shields.io/badge/Download-Latest%20Release%20APK-success?style=for-the-badge&logo=android" alt="Download APK" /></a>
 </p>
 
 ---
@@ -107,7 +107,7 @@ flowchart TD
 ## Getting Started
 
 ### Installation
-1. Download [`AntigravityStudio.apk`](https://github.com/MisterMoeGreen/Antigravity-Studio-App/blob/master/AntigravityStudio.apk) from the root of this repository.
+1. Download **`AntigravityStudio.apk`** from the [GitHub Releases](https://github.com/MisterMoeGreen/Antigravity-Studio-App/releases) page.
 2. Open your device file manager (Files, Solid Explorer, etc.) and tap the downloaded `.apk`.
 3. If prompted, allow your browser or file manager to **Install unknown apps**.
 4. Tap **Install** and launch **Antigravity Studio**.
@@ -115,8 +115,9 @@ flowchart TD
 ### First Launch & Authentication
 1. On initial startup, grant the **Notification Permission** (required for background execution).
 2. Allow a few seconds for first-time environment initialization.
-3. Tap **Sign in with Google**. A Chrome Custom Tab will open for one-tap OAuth authentication and seamlessly redirect back to the studio.
-4. Select your workspace directory and start coding!
+3. Tap **Sign in with Google**. A browser tab will open for Google authentication.
+4. Copy the authorization code, paste it into the chat prompt, and hit send!
+5. Select your workspace directory and start coding!
 
 ---
 
@@ -124,7 +125,7 @@ flowchart TD
 
 ```text
 AgyStudio/
-├── AntigravityStudio.apk             # Compiled, signed release APK (97.7 MB)
+├── agystudio.png                     # Application logo
 ├── app/
 │   ├── src/main/
 │   │   ├── AndroidManifest.xml       # Permissions, FGS declaration, FileProvider

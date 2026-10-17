@@ -812,22 +812,25 @@
   - Eliminated false negative "Sign-In Failed (code None)" errors caused by `agy` remaining open in REPL mode after token exchange.
   - User responds directly in chat with the authorization code, and the token verification automatically captures newly written credentials.
 
-### Milestone P7.7 — Sticky Version Display & Reinstallation Asset Extraction Guarantee
+### Milestone P7.8 — Auth Reliability, Clean Version Presentation, and Release Decoupling
 - **Status**: COMPLETED
-- **Timestamp**: 2026-10-17T15:30:00Z
+- **Timestamp**: 2026-10-17T16:24:00Z
 - **Files Created / Modified**:
-  - `AgyStudio/app/build.gradle.kts` (bumped `versionCode = 2`, `versionName = "1.4.1"`)
-  - `AgyStudio/app/src/main/java/ai/agy/app/EnvironmentBootstrapper.kt` (check `lastUpdateTime` signature to ensure re-extraction of `usr-data.tar.zst` on every install/update)
-  - `AgyStudio/app/src/main/java/ai/agy/app/AgyForegroundService.kt` (forward `AGY_APP_VERSION` and `AGY_APP_VERSION_CODE` to daemon environment)
-  - `~/.agy-ui/index.html` (added sticky `.drawer-footer` at bottom of session drawer displaying App Version and AGY Runtime; added `/version` command)
-  - `~/.agy-ui/server.py` (added dynamic `get_agy_version()` and `system_info` payload to `init_state`; added `/version` handler)
-  - `~/.agy-ui/sw.js` (bumped Service Worker cache to `antigravity-studio-v6`)
+  - `~/.agy-ui/server.py` (fixed PTY window size 100x1000 to prevent pager traps, restored CRLF Enter key submission, removed hardcoded AgyStudio workspace default, removed build number from version payload)
+  - `~/.agy-ui/index.html` (restored chat bubble masking for credentials, removed build number from drawer footer, removed AgyStudio chip from workspace shortcuts)
+  - `~/.agy-ui/sw.js` (bumped Service Worker cache to `antigravity-studio-v8`)
+  - `AgyStudio/README.md` (integrated `agystudio.png` official logo, linked downloads to GitHub Releases)
+  - `AgyStudio/.gitignore` (ignored APKs so repository stays lightweight without 100MB blobs)
+  - `AgyStudio/AntigravityStudio.apk` (removed from git tracking; release APK deployed to `/sdcard/Download/AntigravityStudio.apk`)
 - **Deliverables**:
-  - Pinned a clean, small-print sticky footer at the bottom of the session drawer permanently displaying App Version and AGY CLI Runtime without scrolling.
-  - Eliminated stale-asset persistence after installing updated APKs by tying bootstrap asset extraction to package `lastUpdateTime`.
+  - Google OAuth sign-in functions with complete reliability via PTY CRLF injection and wide terminal geometry.
+  - Chat bubble gracefully masks authorization codes while transmitting unmasked values to the CLI.
+  - Session list footer displays clean `v1.0.1` and `v1.4.0` without internal build IDs.
+  - Default workspace cleanly falls back to `/storage/emulated/0/Documents` instead of forcing `AgyStudio`.
+  - Repository freed from binary bloat; APK distribution routed through GitHub Releases.
 
 ---
 
 ## Final Project Summary
-All phases (Phase 0 through Phase 7.7) have been implemented, tested, and verified.
+All phases (Phase 0 through Phase 7.8) have been implemented, tested, and verified.
 Both repositories (`~/.agy-ui` and `AgyStudio`) have clean, anonymized commit histories with author `MisterMoeGreen <48449987+MisterMoeGreen@users.noreply.github.com>`.
