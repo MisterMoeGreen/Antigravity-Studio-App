@@ -812,8 +812,22 @@
   - Eliminated false negative "Sign-In Failed (code None)" errors caused by `agy` remaining open in REPL mode after token exchange.
   - User responds directly in chat with the authorization code, and the token verification automatically captures newly written credentials.
 
+### Milestone P7.7 — Sticky Version Display & Reinstallation Asset Extraction Guarantee
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-17T15:30:00Z
+- **Files Created / Modified**:
+  - `AgyStudio/app/build.gradle.kts` (bumped `versionCode = 2`, `versionName = "1.4.1"`)
+  - `AgyStudio/app/src/main/java/ai/agy/app/EnvironmentBootstrapper.kt` (check `lastUpdateTime` signature to ensure re-extraction of `usr-data.tar.zst` on every install/update)
+  - `AgyStudio/app/src/main/java/ai/agy/app/AgyForegroundService.kt` (forward `AGY_APP_VERSION` and `AGY_APP_VERSION_CODE` to daemon environment)
+  - `~/.agy-ui/index.html` (added sticky `.drawer-footer` at bottom of session drawer displaying App Version and AGY Runtime; added `/version` command)
+  - `~/.agy-ui/server.py` (added dynamic `get_agy_version()` and `system_info` payload to `init_state`; added `/version` handler)
+  - `~/.agy-ui/sw.js` (bumped Service Worker cache to `antigravity-studio-v6`)
+- **Deliverables**:
+  - Pinned a clean, small-print sticky footer at the bottom of the session drawer permanently displaying App Version and AGY CLI Runtime without scrolling.
+  - Eliminated stale-asset persistence after installing updated APKs by tying bootstrap asset extraction to package `lastUpdateTime`.
+
 ---
 
 ## Final Project Summary
-All phases (Phase 0 through Phase 7.6) have been implemented, tested, and verified.
+All phases (Phase 0 through Phase 7.7) have been implemented, tested, and verified.
 Both repositories (`~/.agy-ui` and `AgyStudio`) have clean, anonymized commit histories with author `MisterMoeGreen <48449987+MisterMoeGreen@users.noreply.github.com>`.

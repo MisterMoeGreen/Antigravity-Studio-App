@@ -123,6 +123,11 @@ class AgyForegroundService : Service() {
         env["SSL_CERT_FILE"] = "$usr/etc/tls/cert.pem"
         env["GIT_SSL_CAINFO"] = "$usr/etc/tls/cert.pem"
         env["GIT_EXEC_PATH"] = "$usr/libexec/git-core"
+        val pInfo = packageManager.getPackageInfo(packageName, 0)
+        val vName = pInfo.versionName ?: "1.4.1"
+        val vCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) pInfo.longVersionCode else @Suppress("DEPRECATION") pInfo.versionCode.toLong()
+        env["AGY_APP_VERSION"] = vName
+        env["AGY_APP_VERSION_CODE"] = vCode.toString()
         env["PYTHONHOME"] = usr
         env["PYTHONPATH"] = "$usr/lib/python3.14:$usr/lib/python3.14/site-packages:$usr/lib/python3.12:$usr/lib/python3.12/site-packages"
 

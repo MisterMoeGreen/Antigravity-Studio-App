@@ -71,7 +71,7 @@ object EnvironmentBootstrapper {
             it.mkdirs()
         }
 
-        // 1. Unpack assets/usr-data.tar.zst on first launch or version upgrade
+        // 1. Unpack assets/usr-data.tar.zst on first launch or version/build upgrade
         val versionFile = File(usrDir, ".version_code")
         val pkgInfo = context.packageManager.getPackageInfo(context.packageName, 0)
         val currentVersion = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -79,11 +79,13 @@ object EnvironmentBootstrapper {
         } else {
             @Suppress("DEPRECATION") pkgInfo.versionCode.toLong()
         }
-        val installedVersion = if (versionFile.exists()) versionFile.readText().trim().toLongOrNull() else -1L
+        val currentBuildId = "${currentVersion}_${pkgInfo.lastUpdateTime}"
+        val installedBuildId = if (versionFile.exists()) versionFile.readText().trim() else ""
 
-        if (installedVersion != currentVersion) {
+        if (installedBuildId != currentBuildId) {
+            Log.i(TAG, "Unpacking assets/usr-data.tar.zst (build $installedBuildId -> $currentBuildId)...")
             extractZstdTarAsset(context, "usr-data.tar.zst", usrDir)
-            versionFile.writeText(currentVersion.toString())
+            versionFile.writeText(currentBuildId)
         }
 
         // 2. Refresh symlinks to application nativeLibraryDir (< 5 ms)
