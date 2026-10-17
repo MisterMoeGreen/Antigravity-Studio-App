@@ -800,9 +800,20 @@
   - Generated full density suite of legacy square squircle icons (`ic_launcher.png`) and round icons (`ic_launcher_round.png`) with brand `#090d16` background.
   - Integrated custom branding across Web UI, Service Worker, and PWA manifest.
 
+### Milestone P7.6 — Simplified In-Chat OAuth & Token Polling
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-17T13:35:00Z
+- **Files Created / Modified**:
+  - `~/.agy-ui/index.html` (removed dedicated auth input container/card; directly accept auth code in regular chat prompt)
+  - `~/.agy-ui/server.py` (rewrote `submit_auth_code` to poll `antigravity-oauth-token` and PTY output, eliminating the "Sign-In Failed (code None)" timeout bug)
+  - `~/.agy-ui/sw.js` (bumped Service Worker cache to `antigravity-studio-v5`)
+- **Deliverables**:
+  - Eliminated the stuck dedicated input mask above the prompt row.
+  - Eliminated false negative "Sign-In Failed (code None)" errors caused by `agy` remaining open in REPL mode after token exchange.
+  - User responds directly in chat with the authorization code, and the token verification automatically captures newly written credentials.
+
 ---
 
 ## Final Project Summary
-All phases (Phase 0 through Phase 7.5) have been implemented, tested, and verified.
+All phases (Phase 0 through Phase 7.6) have been implemented, tested, and verified.
 Both repositories (`~/.agy-ui` and `AgyStudio`) have clean, anonymized commit histories with author `MisterMoeGreen <48449987+MisterMoeGreen@users.noreply.github.com>`.
-APK build deferred per user instruction until authorized.
