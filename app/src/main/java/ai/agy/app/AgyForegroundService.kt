@@ -202,6 +202,10 @@ class AgyForegroundService : Service() {
                                  status == BatteryManager.BATTERY_STATUS_FULL
 
                 val json = JSONObject().apply {
+                    put("device_model", Build.MODEL)
+                    put("device_manufacturer", Build.MANUFACTURER)
+                    put("android_release", Build.VERSION.RELEASE)
+                    put("sdk_int", Build.VERSION.SDK_INT)
                     put("battery_pct", if (scale > 0) (level * 100) / scale else level)
                     put("charging", isCharging)
                     put("temp_c", tempTenths / 10.0)
