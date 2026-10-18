@@ -240,7 +240,7 @@ sequenceDiagram
 
 ### Phase 6: On-Device Package Manager UI & AI Disambiguation
 - [ ] **AC-6.1: Fast Alpine Package DB Parser & API Endpoint**
-  - Verify `server.py` implements `get_installed_packages()` by directly reading `/etc/apk/world` and `/lib/apk/db/installed`, correctly calculating size in MB and filtering base packages.
+  - Verify `server.py` implements `get_installed_packages()` by directly reading `/etc/apk/world` and `/lib/apk/db/installed`, correctly calculating size in MB, rolling up meta-packages, and filtering protected base packages.
   - **Verification Gate**:
     ```bash
     python3 -c '
@@ -249,12 +249,12 @@ sequenceDiagram
     res = get_installed_packages()
     assert "packages" in res and "total_size_mb" in res
     assert isinstance(res["packages"], list)
-    print("AC-6.1 PASSED")
+    print("AC-6.1 PASSED: Package parser returned", len(res["packages"]), "packages")
     '
     ```
 
 - [ ] **AC-6.2: Package Mutation Handlers (`delete`, `upgrade`, `upgrade_all`)**
-  - Verify WebSocket message routing for `delete_package`, `upgrade_package`, and `upgrade_all_packages` executes `apk` via `usr/bin/agy-sh`.
+  - Verify WebSocket message routing for `delete_package`, `upgrade_package`, and `upgrade_all_packages` executes `apk` directly with `asyncio.create_subprocess_exec` using `--wait 30`.
   - **Verification Gate**:
     ```bash
     grep -q 'delete_package' agy-ui/server.py && \
@@ -272,7 +272,7 @@ sequenceDiagram
     ```
 
 - [ ] **AC-6.4: Install Package Modal Sheet & Touch Ergonomics**
-  - Verify `#modalInstallPackage`, `#inputPackageName`, `#btnConfirmInstallPackage`, and preset chips are defined with mobile safe-area paddings.
+  - Verify `#modalInstallPackage`, `#inputPackageName`, `#btnConfirmInstallPackage`, preset chips, and safe-area paddings are defined.
   - **Verification Gate**:
     ```bash
     grep -q 'id="modalInstallPackage"' agy-ui/index.html && \
@@ -281,10 +281,30 @@ sequenceDiagram
     ```
 
 - [ ] **AC-6.5: AI Turn Handoff & Disambiguation Prompt**
-  - Verify `server.py` handles `install_package_prompt` by creating a new session with the package disambiguation prompt referencing `ask_question`.
+  - Verify `server.py` handles `install_package_prompt` by creating an interactive turn with the package disambiguation prompt referencing `ask_question`.
   - **Verification Gate**:
     ```bash
     grep -q 'install_package_prompt' agy-ui/server.py && \
     grep -q 'ask_question' agy-ui/server.py
     ```
+
+- [ ] **AC-6.6: Package Name Validation, Protected Package Guard & Lock Serialization**
+  - Verify `server.py` enforces regex validation (`APK_PKG_NAME_RE`), blocks deletion of `PROTECTED_PACKAGES`, serializes mutations with `asyncio.Lock()`, executes via `argv` arrays without shell interpolation, and strips `/etc/apk/world` constraints.
+  - **Verification Gate**:
+    ```bash
+    python3 -c '
+    import sys; sys.path.insert(0, "agy-ui")
+    import server
+    assert hasattr(server, "PROTECTED_PACKAGES"), "Missing PROTECTED_PACKAGES"
+    assert "apk-tools" in server.PROTECTED_PACKAGES and "musl" in server.PROTECTED_PACKAGES
+    for bad in ["nodejs; id", "../etc/passwd", "--initdb", ""]:
+        try:
+            server.validate_pkg_name(bad)
+            raise AssertionError(f"Failed to reject malicious package name: {bad}")
+        except ValueError:
+            pass
+    print("AC-6.6 PASSED: Security validation and protected package guards verified")
+    '
+    ```
+
 

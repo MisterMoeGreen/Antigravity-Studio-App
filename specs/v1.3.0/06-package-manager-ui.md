@@ -148,7 +148,18 @@ In `#settingsHubMenuList`, a dedicated navigation card positioned after "MCP Ser
 
 * **Prompt Label**: *"What package do you want to install?"*
 * **Text Input (`#inputPackageName`)**: Focused automatically with touch keyboard support.
-* **Preset Chips**: One-tap quick selection for popular developer runtimes (`nodejs`, `python3`, `openjdk21-jre-headless`, `rust`, `gcc musl-dev`, `go`, `clang`, `php`).
+* **Preset Chips**: One-tap quick selection for practical developer toolchains:
+  - `Node.js` (`nodejs npm`)
+  - `Python 3` (`python3 py3-pip`)
+  - `OpenJDK 21` (`openjdk21-jre-headless`)
+  - `Rust` (`rust cargo`)
+  - `C/C++ (GCC)` (`build-base`)
+  - `Go` (`go`)
+  - `Clang` (`clang lld musl-dev`)
+  - `PHP` (`php83 php83-cli`)
+  - `FFmpeg` (`ffmpeg`)
+* **Empty State UI**: Displays an empty state placeholder when `packages.length === 0`: *"No additional packages installed. Tap [+ Install Package] to add compilers and runtimes."*
+* **Mobile Safe Area**: Applies `padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px))` across `#viewPackages` and `#modalInstallPackage`.
 * **Submit Action (`#btnConfirmInstallPackage`)**: Initiates the AI session handoff.
 
 ---
@@ -157,28 +168,68 @@ In `#settingsHubMenuList`, a dedicated navigation card positioned after "MCP Ser
 
 ### A. High-Speed DB Parser (`server.py`)
 To ensure the Settings Hub loads instantaneously without waking the PRoot tracer or incurring process execution latency:
-* **Explicit Packages**: Read `/data/data/ai.agy.app/files/rootfs/etc/apk/world`.
-  Filter out default Alpine base system packages:
-  `BASE_PACKAGES = {"alpine-baselayout", "alpine-keys", "apk-tools", "busybox", "libc-utils"}`.
-* **Package Metadata Index**: Single-pass parse of `/data/data/ai.agy.app/files/rootfs/lib/apk/db/installed`.
-  Format is key-value blocks separated by blank lines:
+* **Dynamic Rootfs Resolution**: Resolve rootfs path via `os.environ.get("AGY_FILES_DIR")` or relative to `server.py` (`Path(__file__).resolve().parent.parent / "rootfs"`). Gracefully return `{"packages": [], "total_size_mb": 0.0}` if the container rootfs is not yet initialized.
+* **Protected Core Packages**: An immutable set of essential system packages filtered from UI listing and permanently forbidden from deletion:
+  ```python
+  PROTECTED_PACKAGES: frozenset[str] = frozenset({
+      "alpine-baselayout",
+      "alpine-baselayout-data",
+      "alpine-keys",
+      "alpine-release",
+      "apk-tools",
+      "busybox",
+      "busybox-binsh",
+      "ca-certificates-bundle",
+      "libc-utils",
+      "libcrypto3",
+      "libssl3",
+      "musl",
+      "musl-utils",
+      "scanelf",
+      "ssl_client",
+      "zlib",
+  })
+  ```
+* **Explicit Packages**: Read `<rootfs>/etc/apk/world`, stripping version pins and repo tags via `re.split(r"[@=<>~]", line.strip(), maxsplit=1)[0]` and filtering out `PROTECTED_PACKAGES`.
+* **Package Metadata Index**: Single-pass parse of `<rootfs>/lib/apk/db/installed`:
   - `P:<name>`: Package name.
   - `V:<version>`: Installed version string.
-  - `I:<bytes>`: Installed size in bytes (converted to `round(bytes / (1024 * 1024), 1)` MB).
+  - `I:<bytes>`: Installed size in bytes.
   - `T:<description>`: Short package description.
   - `U:<url>`: Upstream URL.
+  - `D:<dependencies>`: Space-separated dependencies (stripped of constraints and virtual `so:`, `cmd:`, `pc:`, `!` tags).
+* **Storage Accounting & Meta-Package Rollup**:
+  - `total_size_mb`: Sums `I:<bytes>` across **all** non-protected packages in `/lib/apk/db/installed` (including transitive dependencies like `gcc`, `libstdc++`, `llvm-libs`), so `Container Storage` reflects true disk consumption.
+  - For meta-packages (where `I:<bytes> <= 16384` and `deps` are present, such as `build-base`), roll up the sum of direct non-base dependencies' installed sizes so the UI card displays meaningful size information instead of `0.0 MB`.
 * **Performance**: Direct Python file I/O completes in **$< 3\text{ms}$** on ARM64 flash storage.
 
 ---
 
-### B. Mutation Execution Engine
-Package mutation commands run asynchronously inside the container via `usr/bin/agy-sh`:
+### B. Mutation Execution Engine & Security Controls
+All package mutations run asynchronously inside the container via direct subprocess execution, guarded against injection, race conditions, and bricking:
 
-| Action | Executed Container Command |
+1. **Package Name Validation**: All input package names are strictly validated against `^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,127}$`:
+   ```python
+   APK_PKG_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,127}$")
+   def validate_pkg_name(name: str) -> str:
+       if not isinstance(name, str) or not APK_PKG_NAME_RE.match(name):
+           raise ValueError(f"Invalid Alpine package name: {name!r}")
+       return name
+   ```
+2. **Deletion Protection**: Attempting to delete any package in `PROTECTED_PACKAGES` raises a `PermissionError` immediately before invoking `apk`.
+3. **Lock Serialization & Timeout**:
+   - In-process operations are serialized via a global `APK_MUTATION_LOCK = asyncio.Lock()`.
+   - Cross-process concurrency (e.g. agent CLI turns running `apk` concurrently) is handled by passing `--wait 30` to every `apk` invocation.
+   - Operations are bounded by `asyncio.wait_for(..., timeout=180.0)`.
+4. **Direct Subprocess Execution (No Shell Injection)**: Subprocesses are invoked directly with `asyncio.create_subprocess_exec` using `argv` arrays (never via shell interpolation or `agy-sh -c`):
+
+| Action | Executed Subprocess (`argv` array) |
 | :--- | :--- |
-| **Delete Package** | `/data/data/ai.agy.app/files/usr/bin/agy-sh -c "apk del --purge <name>"` |
-| **Upgrade Package** | `/data/data/ai.agy.app/files/usr/bin/agy-sh -c "apk add --upgrade <name>"` |
-| **Upgrade All** | `/data/data/ai.agy.app/files/usr/bin/agy-sh -c "apk update && apk upgrade"` |
+| **Delete Package** | `[apk_bin, "--wait", "30", "del", "--purge", "--", pkg_name]` |
+| **Upgrade Package** | `[apk_bin, "--wait", "30", "add", "--upgrade", "--", pkg_name]` |
+| **Upgrade All** | `[apk_bin, "--wait", "30", "upgrade", "--update-cache"]` |
+
+5. **Ghost Deletion Detection**: If `apk del --purge -- <name>` exits with code `0` but prints `"not removed due to"`, or if `<name>` remains present in `/lib/apk/db/installed` because another installed package depends on it, `server.py` re-adds `<name>` to `/etc/apk/world` and returns an error informing the user which dependent package must be removed first.
 
 ---
 
@@ -214,13 +265,33 @@ Package mutation commands run asynchronously inside the container via `usr/bin/a
 
 // 6. Client Initiates Package Install Handoff
 {"type": "install_package_prompt", "package_query": "c++"}
+
+// 7. Server Broadcasts Mutation Status (In-Progress)
+{
+  "type": "package_mutation_status",
+  "action": "delete" | "upgrade" | "upgrade_all",
+  "package": "nodejs",
+  "in_progress": true
+}
+
+// 8. Server Broadcasts Mutation Completion / Result
+{
+  "type": "package_mutation_result",
+  "action": "delete" | "upgrade" | "upgrade_all",
+  "package": "nodejs",
+  "success": true,
+  "message": "Removed nodejs (42.5 MB freed)"
+}
 ```
 
 ---
 
 ## 5. Agent Disambiguation Protocol (v1.2.0 Synergy)
 
-When the user submits a package query via the install modal, `server.py` resets the conversational session and dispatches a structured system turn to the agent:
+When the user submits a package query via the install modal:
+1. `server.py` sanitizes `package_query` (`re.sub(r"[\r\n\t`]", " ", query).strip()[:100]`).
+2. Checks whether an agent turn is currently active. If busy, returns an error toast rather than clobbering active state.
+3. Dispatches a visible user message and structured system prompt without silently wiping conversation context:
 
 ```text
 The user wants to install the package: "{package_query}" in the Antigravity Studio Alpine Linux container.
@@ -258,7 +329,8 @@ Instructions:
        "toolSummary": "Package disambiguation"
      }
      EOF
-   - Once the user makes their selection from the touch bottom-sheet, install the chosen package using `apk add --no-cache <selected>` and run a quick verification.
+   - CRITICAL OPTION EXTRACTION: When the user selects an option from `ask_question`, extract ONLY the valid Alpine package name(s) (stripping prefixes like `(Recommended)` and suffixes like `- <description>`) before executing `apk add --no-cache <pkg>`.
+   - Run a quick verification of the installed binary to confirm readiness.
 ```
 
 ---
@@ -266,7 +338,7 @@ Instructions:
 ## 6. Acceptance Criteria & Verification Checklist
 
 - [ ] **AC-6.1: Fast Alpine Package DB Parser & API Endpoint**
-  - Verify `server.py` implements `get_installed_packages()` by directly reading `/etc/apk/world` and `/lib/apk/db/installed`, correctly calculating size in MB and filtering base packages.
+  - Verify `server.py` implements `get_installed_packages()` by directly reading `/etc/apk/world` and `/lib/apk/db/installed`, correctly calculating size in MB, rolling up meta-packages, and filtering protected base packages.
   - **Verification Gate**:
     ```bash
     python3 -c '
@@ -280,7 +352,7 @@ Instructions:
     ```
 
 - [ ] **AC-6.2: Package Mutation Handlers (`delete`, `upgrade`, `upgrade_all`)**
-  - Verify WebSocket message routing for `delete_package`, `upgrade_package`, and `upgrade_all_packages` executes `apk` via `usr/bin/agy-sh`.
+  - Verify WebSocket message routing for `delete_package`, `upgrade_package`, and `upgrade_all_packages` executes `apk` directly with `asyncio.create_subprocess_exec` using `--wait 30`.
   - **Verification Gate**:
     ```bash
     grep -q 'delete_package' agy-ui/server.py && \
@@ -298,7 +370,7 @@ Instructions:
     ```
 
 - [ ] **AC-6.4: Install Package Modal Sheet & Touch Ergonomics**
-  - Verify `#modalInstallPackage`, `#inputPackageName`, `#btnConfirmInstallPackage`, and preset chips are defined with mobile safe-area paddings.
+  - Verify `#modalInstallPackage`, `#inputPackageName`, `#btnConfirmInstallPackage`, preset chips, and safe-area paddings are defined.
   - **Verification Gate**:
     ```bash
     grep -q 'id="modalInstallPackage"' agy-ui/index.html && \
@@ -307,9 +379,29 @@ Instructions:
     ```
 
 - [ ] **AC-6.5: AI Turn Handoff & Disambiguation Prompt**
-  - Verify `server.py` handles `install_package_prompt` by creating a new session with the package disambiguation prompt referencing `ask_question`.
+  - Verify `server.py` handles `install_package_prompt` by creating an interactive turn with the package disambiguation prompt referencing `ask_question`.
   - **Verification Gate**:
     ```bash
     grep -q 'install_package_prompt' agy-ui/server.py && \
     grep -q 'ask_question' agy-ui/server.py
     ```
+
+- [ ] **AC-6.6: Package Name Validation, Protected Package Guard & Lock Serialization**
+  - Verify `server.py` enforces regex validation (`APK_PKG_NAME_RE`), blocks deletion of `PROTECTED_PACKAGES`, serializes mutations with `asyncio.Lock()`, executes via `argv` arrays without shell interpolation, and strips `/etc/apk/world` constraints.
+  - **Verification Gate**:
+    ```bash
+    python3 -c '
+    import sys; sys.path.insert(0, "agy-ui")
+    import server
+    assert hasattr(server, "PROTECTED_PACKAGES"), "Missing PROTECTED_PACKAGES"
+    assert "apk-tools" in server.PROTECTED_PACKAGES and "musl" in server.PROTECTED_PACKAGES
+    for bad in ["nodejs; id", "../etc/passwd", "--initdb", ""]:
+        try:
+            server.validate_pkg_name(bad)
+            raise AssertionError(f"Failed to reject malicious package name: {bad}")
+        except ValueError:
+            pass
+    print("AC-6.6 PASSED: Security validation and protected package guards verified")
+    '
+    ```
+
