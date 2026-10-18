@@ -111,7 +111,7 @@ Following an architectural review by **Gemini 4 Argon** (`argon-subagent`), 14 m
 ## 6. Command-Verified Acceptance Criteria Checklist
 
 ### Phase 1: Backend Question API & Concurrency Manager
-- [ ] **AC-1.1: Question Bridge Endpoints in `server.py`**
+- [x] **AC-1.1: Question Bridge Endpoints in `server.py`**
   - Verify `/api/question/ask`, `/api/question/respond`, and `/api/question/pending` are registered in `server.py`.
   - **Verification Gate**:
     ```bash
@@ -125,7 +125,7 @@ Following an architectural review by **Gemini 4 Argon** (`argon-subagent`), 14 m
     '
     ```
 
-- [ ] **AC-1.2: Future Lifecycle & Timeout Handling**
+- [x] **AC-1.2: Future Lifecycle & Timeout Handling**
   - Verify `server.py` handles timeouts, cancellations on turn abort, and secret redaction.
   - **Verification Gate**:
     ```bash
@@ -138,7 +138,7 @@ Following an architectural review by **Gemini 4 Argon** (`argon-subagent`), 14 m
     ```
 
 ### Phase 2: Bridge Client Executable
-- [ ] **AC-2.1: `ask_question.py` Staged & Executable**
+- [x] **AC-2.1: `ask_question.py` Staged & Executable**
   - Verify `agy-ui/ask_question.py` exists, is syntax-valid, and uses zero external dependencies.
   - **Verification Gate**:
     ```bash
@@ -157,7 +157,7 @@ Following an architectural review by **Gemini 4 Argon** (`argon-subagent`), 14 m
     '
     ```
 
-- [ ] **AC-2.2: Standardized Formatting Output**
+- [x] **AC-2.2: Standardized Formatting Output**
   - Verify `ask_question.py` properly formats `Created At`, `Completed At`, and `A1: ...` responses.
   - **Verification Gate**:
     ```bash
@@ -170,7 +170,7 @@ Following an architectural review by **Gemini 4 Argon** (`argon-subagent`), 14 m
     ```
 
 ### Phase 3: Mobile Touch Bottom-Sheet UI & Interactions
-- [ ] **AC-3.1: Modal Bottom Sheet Container in `index.html`**
+- [x] **AC-3.1: Modal Bottom Sheet Container in `index.html`**
   - Verify `#modalAskQuestion`, option card container, write-in input, and actions exist.
   - **Verification Gate**:
     ```bash
@@ -182,7 +182,7 @@ Following an architectural review by **Gemini 4 Argon** (`argon-subagent`), 14 m
     '
     ```
 
-- [ ] **AC-3.2: Touch Targets & Recommendation Badges**
+- [x] **AC-3.2: Touch Targets & Recommendation Badges**
   - Verify option cards adhere to $\ge 48\text{px}$ minimum height and recommendation badge styles exist.
   - **Verification Gate**:
     ```bash
@@ -190,7 +190,7 @@ Following an architectural review by **Gemini 4 Argon** (`argon-subagent`), 14 m
     grep -q 'min-height:' agy-ui/index.html
     ```
 
-- [ ] **AC-3.3: Back Button Interception**
+- [x] **AC-3.3: Back Button Interception**
   - Verify `window.handleAndroidBack` handles `#modalAskQuestion` cleanly.
   - **Verification Gate**:
     ```bash
@@ -202,14 +202,14 @@ Following an architectural review by **Gemini 4 Argon** (`argon-subagent`), 14 m
     ```
 
 ### Phase 4: System Directives & Skill Seeding
-- [ ] **AC-4.1: Mobile Directive Section 7 in `default_app_prompt.md`**
+- [x] **AC-4.1: Mobile Directive Section 7 in `default_app_prompt.md`**
   - Verify Section 7 on Interactive Decision Prompts exists in `default_app_prompt.md`.
   - **Verification Gate**:
     ```bash
     grep -q 'Interactive Decision Prompts' agy-ui/default_app_prompt.md
     ```
 
-- [ ] **AC-4.2: Skill Frontmatter & Definition**
+- [x] **AC-4.2: Skill Frontmatter & Definition**
   - Verify `ask-question` skill frontmatter passes zero-dependency YAML validator.
   - **Verification Gate**:
     ```bash
@@ -226,7 +226,7 @@ Following an architectural review by **Gemini 4 Argon** (`argon-subagent`), 14 m
     ```
 
 ### Phase 5: Build Verification, Version Bump & Asset Packaging
-- [ ] **AC-5.1: Version Bump to v1.2.0**
+- [x] **AC-5.1: Version Bump to v1.2.0**
   - Verify `VERSION_NAME=1.2.0` and `VERSION_CODE=10` in `version.properties` and `app/build.gradle.kts`.
   - **Verification Gate**:
     ```bash
@@ -234,7 +234,7 @@ Following an architectural review by **Gemini 4 Argon** (`argon-subagent`), 14 m
     grep -q 'VERSION_CODE=10' version.properties
     ```
 
-- [ ] **AC-5.2: Asset Bundle Packaging (`usr-data.tar.zst`)**
+- [x] **AC-5.2: Asset Bundle Packaging (`usr-data.tar.zst`)**
   - Verify `prepare_binaries.sh` stages `ask_question.py` and regenerates `usr-data.tar.zst`.
   - **Verification Gate**:
     ```bash
@@ -242,7 +242,7 @@ Following an architectural review by **Gemini 4 Argon** (`argon-subagent`), 14 m
     ```
 
 ### Phase 6: End-to-End Release Build Verification
-- [ ] **AC-6.1: Gradle Release APK Build**
+- [x] **AC-6.1: Gradle Release APK Build**
   - Verify clean Gradle build producing a signed Release APK under 110 MB.
   - **Verification Gate**:
     ```bash

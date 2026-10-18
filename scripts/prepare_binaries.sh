@@ -158,6 +158,14 @@ fi
 cp -L "${AGY_UI_DIR}/index.html" "${STAGING_DIR}/share/agy-ui/index.html"
 cp -L "${AGY_UI_DIR}/sw.js" "${STAGING_DIR}/share/agy-ui/sw.js"
 cp -L "${AGY_UI_DIR}/server.py" "${STAGING_DIR}/share/agy-ui/server.py"
+cp -L "${AGY_UI_DIR}/ask_question.py" "${STAGING_DIR}/share/agy-ui/ask_question.py"
+chmod 0755 "${STAGING_DIR}/share/agy-ui/ask_question.py"
+mkdir -p "${STAGING_DIR}/bin"
+ln -sf "../share/agy-ui/ask_question.py" "${STAGING_DIR}/bin/ask_question"
+if [ -d "${AGY_UI_DIR}/skills" ]; then
+  mkdir -p "${STAGING_DIR}/share/agy-ui/skills"
+  cp -rL "${AGY_UI_DIR}/skills"/* "${STAGING_DIR}/share/agy-ui/skills/" 2>/dev/null || true
+fi
 cp -L "${AGY_UI_DIR}/icon-192.png" "${STAGING_DIR}/share/agy-ui/icon-192.png" 2>/dev/null || true
 cp -L "${AGY_UI_DIR}/icon-512.png" "${STAGING_DIR}/share/agy-ui/icon-512.png" 2>/dev/null || true
 cp -L "${AGY_UI_DIR}/manifest.json" "${STAGING_DIR}/share/agy-ui/manifest.json" 2>/dev/null || true

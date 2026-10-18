@@ -220,6 +220,21 @@ object EnvironmentBootstrapper {
             }
             createOrUpdateSymlink(File(homeDir, ".gemini/GEMINI.md"), geminiMd.absolutePath)
         } catch (_: Exception) {}
+
+        // 6. Seed ask-question binary symlink & global skill
+        try {
+            val askQuestionScript = File(usrDir, "share/agy-ui/ask_question.py")
+            if (askQuestionScript.exists()) {
+                createOrUpdateSymlink(File(binDir, "ask_question"), askQuestionScript.absolutePath)
+            }
+            val askQuestionSkillSrc = File(usrDir, "share/agy-ui/skills/ask-question/SKILL.md")
+            val targetSkillDir = File(homeDir, ".gemini/config/skills/ask-question")
+            val targetSkillMd = File(targetSkillDir, "SKILL.md")
+            if (askQuestionSkillSrc.exists() && (!targetSkillMd.exists() || askQuestionSkillSrc.lastModified() > targetSkillMd.lastModified())) {
+                targetSkillDir.mkdirs()
+                askQuestionSkillSrc.copyTo(targetSkillMd, overwrite = true)
+            }
+        } catch (_: Exception) {}
     }
 
     private fun createOrUpdateSymlink(linkFile: File, targetPath: String) {

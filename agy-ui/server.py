@@ -230,8 +230,8 @@ def get_agy_version() -> str:
 
     return _cached_agy_version or "1.4.2"
 
-APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.1.2")
-APP_BUILD = os.environ.get("AGY_APP_VERSION_CODE", "9")
+APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.2.0")
+APP_BUILD = os.environ.get("AGY_APP_VERSION_CODE", "10")
 AGY_VERSION = get_agy_version()
 
 logging.basicConfig(
@@ -1040,11 +1040,11 @@ async def delete_mcp_server(name: str) -> dict[str, Any]:
 
 
 async def check_github_updates() -> dict[str, Any]:
-    installed_version = os.environ.get("AGY_APP_VERSION", "1.1.2")
-    installed_code = int(os.environ.get("AGY_APP_VERSION_CODE", "9"))
+    installed_version = os.environ.get("AGY_APP_VERSION", "1.2.0")
+    installed_code = int(os.environ.get("AGY_APP_VERSION_CODE", "10"))
     url = "https://api.github.com/repos/MisterMoeGreen/Antigravity-Studio-App/releases/latest"
 
-    cmd = ["curl", "-sSL", "-H", "User-Agent: AntigravityStudio/1.1.2", url]
+    cmd = ["curl", "-sSL", "-H", "User-Agent: AntigravityStudio/1.2.0", url]
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
@@ -2263,6 +2263,7 @@ class AgyProcessOrchestrator:
                 proc_env = dict(os.environ)
                 proc_env["AGY_AUTO_UPDATE"] = "1"
                 proc_env["GIT_SSH_COMMAND"] = f"{USR_DIR}/bin/ssh -F {SSH_DIR}/config"
+                proc_env["AGY_WEB_PORT"] = str(PORT)
                 active_api_keys = get_active_api_keys()
                 for ak_k, ak_v in active_api_keys.items():
                     if ak_k not in PROTECTED_ENV_NAMES:
@@ -3231,6 +3232,27 @@ class AgyWebServer:
         self.discovered_models: list[dict[str, Any]] = []
         self._cached_quotas: Optional[list[dict[str, str]]] = None
         self._quotas_cached_at: float = 0.0
+        self._pending_questions: dict[str, dict[str, Any]] = {}
+
+    async def _cancel_all_pending_questions(self, reason: str = "user_aborted") -> None:
+        if not self._pending_questions:
+            return
+        for qid, qentry in list(self._pending_questions.items()):
+            fut = qentry.get("future")
+            if fut and not fut.done():
+                fut.set_result({
+                    "status": "aborted",
+                    "question_id": qid,
+                    "skipped": True,
+                    "answers": [],
+                    "formatted_output": "A1: User Aborted",
+                })
+            await self.broadcast({
+                "type": "dismiss_question",
+                "question_id": qid,
+                "reason": reason,
+            })
+        self._pending_questions.clear()
 
     async def discover_models(self) -> list[dict[str, Any]]:
         models: list[dict[str, Any]] = []
@@ -3611,6 +3633,204 @@ class AgyWebServer:
             res = await check_github_updates()
             return _json_response(res)
 
+        if path == "/api/question/ask":
+            if request.method == "POST":
+                try:
+                    payload = json.loads(request.body.decode("utf-8")) if request.body else {}
+                except Exception as exc:
+                    return _json_response({"error": f"Invalid JSON payload: {exc}"}, HTTPStatus.BAD_REQUEST)
+
+                # Shorthand wrapping: if single question passed at root
+                raw_questions = payload.get("questions")
+                if not raw_questions and (payload.get("question") or payload.get("title")):
+                    raw_questions = [{
+                        "question": payload.get("question") or payload.get("title"),
+                        "options": payload.get("options") or payload.get("choices") or ["(Recommended) Proceed", "Skip"],
+                        "is_multi_select": bool(payload.get("is_multi_select") or payload.get("isMultiSelect", False)),
+                    }]
+
+                if not raw_questions or not isinstance(raw_questions, list):
+                    return _json_response({"error": "Missing or invalid 'questions' array"}, HTTPStatus.BAD_REQUEST)
+
+                normalized_questions = []
+                for q in raw_questions:
+                    if not isinstance(q, dict):
+                        continue
+                    q_text = str(q.get("question") or q.get("title") or "").strip()
+                    if not q_text:
+                        continue
+                    raw_opts = q.get("options") or q.get("choices") or ["(Recommended) Proceed", "Skip"]
+                    opts = [str(o).strip() for o in raw_opts if str(o).strip()]
+                    if not opts:
+                        opts = ["(Recommended) Proceed", "Skip"]
+                    multi = bool(q.get("is_multi_select") or q.get("isMultiSelect", False))
+                    normalized_questions.append({
+                        "question": q_text,
+                        "options": opts,
+                        "is_multi_select": multi,
+                    })
+
+                if not normalized_questions:
+                    return _json_response({"error": "No valid questions found in payload"}, HTTPStatus.BAD_REQUEST)
+
+                tool_action = str(payload.get("tool_action") or payload.get("toolAction") or "Waiting for user decision").strip()
+                tool_summary = str(payload.get("tool_summary") or payload.get("toolSummary") or "Decision required").strip()
+                try:
+                    timeout_val = float(payload.get("timeout_seconds") or payload.get("timeoutSeconds") or 300)
+                except (ValueError, TypeError):
+                    timeout_val = 300.0
+
+                question_id = f"q-{uuid.uuid4().hex[:8]}"
+                loop = asyncio.get_running_loop()
+                future = loop.create_future()
+
+                self._pending_questions[question_id] = {
+                    "future": future,
+                    "session_id": self.orchestrator.config.conversation_id,
+                    "created_at": int(time.time()),
+                    "questions": normalized_questions,
+                    "tool_action": tool_action,
+                    "tool_summary": tool_summary,
+                }
+
+                # Broadcast WebSocket frame to all connected mobile clients
+                await self.broadcast({
+                    "type": "ask_question",
+                    "question_id": question_id,
+                    "created_at": int(time.time()),
+                    "tool_action": tool_action,
+                    "tool_summary": tool_summary,
+                    "questions": normalized_questions,
+                })
+
+                try:
+                    result = await asyncio.wait_for(future, timeout=timeout_val)
+                    return _json_response(result)
+                except asyncio.TimeoutError:
+                    timeout_res = {
+                        "status": "timeout",
+                        "question_id": question_id,
+                        "skipped": True,
+                        "answers": [],
+                        "formatted_output": f"A1: User Timed Out (no response received within {int(timeout_val)}s)",
+                    }
+                    await self.broadcast({
+                        "type": "dismiss_question",
+                        "question_id": question_id,
+                        "reason": "timeout",
+                    })
+                    return _json_response(timeout_res)
+                except asyncio.CancelledError:
+                    await self.broadcast({
+                        "type": "dismiss_question",
+                        "question_id": question_id,
+                        "reason": "client_disconnected",
+                    })
+                    raise
+                finally:
+                    self._pending_questions.pop(question_id, None)
+
+        if path == "/api/question/respond":
+            if request.method == "POST":
+                try:
+                    payload = json.loads(request.body.decode("utf-8")) if request.body else {}
+                except Exception as exc:
+                    return _json_response({"error": f"Invalid JSON payload: {exc}"}, HTTPStatus.BAD_REQUEST)
+
+                question_id = str(payload.get("question_id") or "").strip()
+                if not question_id or question_id not in self._pending_questions:
+                    return _json_response({"error": "Question not found or already resolved"}, HTTPStatus.NOT_FOUND)
+
+                entry = self._pending_questions[question_id]
+                future: asyncio.Future = entry.get("future")
+                if not future or future.done():
+                    return _json_response({"error": "Question already completed"}, HTTPStatus.GONE)
+
+                skipped = bool(payload.get("skipped", False))
+                if skipped:
+                    res = {
+                        "status": "skipped",
+                        "question_id": question_id,
+                        "skipped": True,
+                        "answers": [],
+                        "formatted_output": "A1: User Skipped",
+                    }
+                else:
+                    responses = payload.get("responses")
+                    if responses and isinstance(responses, list):
+                        lines = []
+                        all_answers = []
+                        for idx, item in enumerate(responses):
+                            if not isinstance(item, dict):
+                                continue
+                            q_idx = item.get("question_index", idx)
+                            selected = [str(s).strip() for s in (item.get("selected") or []) if str(s).strip()]
+                            write_in = str(item.get("write_in") or "").strip()
+                            all_answers.extend(selected)
+                            if write_in:
+                                all_answers.append(write_in)
+
+                            if selected and write_in:
+                                line_content = f"{', '.join(selected)} (User Note: {write_in})"
+                            elif selected:
+                                line_content = ", ".join(selected)
+                            elif write_in:
+                                line_content = write_in
+                            else:
+                                line_content = "User Skipped"
+                            lines.append(f"A{q_idx + 1}: {line_content}")
+                        formatted_out = "\n".join(lines) if lines else "A1: User Skipped"
+                    else:
+                        answers = [str(a).strip() for a in (payload.get("answers") or []) if str(a).strip()]
+                        write_in = str(payload.get("write_in") or "").strip()
+                        all_answers = list(answers)
+                        if write_in:
+                            all_answers.append(write_in)
+                        if answers and write_in:
+                            line_content = f"{', '.join(answers)} (User Note: {write_in})"
+                        elif answers:
+                            line_content = ", ".join(answers)
+                        elif write_in:
+                            line_content = write_in
+                        else:
+                            line_content = "User Skipped"
+                        formatted_out = f"A1: {line_content}"
+
+                    res = {
+                        "status": "success",
+                        "question_id": question_id,
+                        "skipped": False,
+                        "answers": all_answers,
+                        "formatted_output": formatted_out,
+                    }
+
+                future.set_result(res)
+                await self.broadcast({
+                    "type": "dismiss_question",
+                    "question_id": question_id,
+                    "reason": "skipped" if skipped else "answered",
+                })
+                return _json_response({"status": "ok", "message": "Question response accepted"})
+
+        if path == "/api/question/pending":
+            if request.method == "GET":
+                pending_list = []
+                for qid, qentry in self._pending_questions.items():
+                    pending_list.append({
+                        "question_id": qid,
+                        "created_at": qentry.get("created_at", 0),
+                        "questions": qentry.get("questions", []),
+                        "tool_action": qentry.get("tool_action", ""),
+                        "tool_summary": qentry.get("tool_summary", ""),
+                    })
+                return _json_response({"pending": pending_list})
+
+        if path == "/api/stop":
+            if request.method == "POST":
+                stopped = await self.orchestrator.abort_current_turn()
+                await self._cancel_all_pending_questions(reason="user_aborted")
+                return _json_response({"status": "ok", "stopped": stopped})
+
         if path == "/health":
             body = json.dumps({"status": "ok", "pid": os.getpid()}).encode("utf-8")
             return Response(
@@ -3703,6 +3923,22 @@ class AgyWebServer:
                         }
                     )
                 )
+
+            # Hydrate any active pending questions (M-14)
+            if self._pending_questions:
+                for qid, qentry in list(self._pending_questions.items()):
+                    await websocket.send(
+                        json.dumps(
+                            {
+                                "type": "ask_question",
+                                "question_id": qid,
+                                "created_at": qentry.get("created_at", int(time.time())),
+                                "tool_action": qentry.get("tool_action", ""),
+                                "tool_summary": qentry.get("tool_summary", ""),
+                                "questions": qentry.get("questions", []),
+                            }
+                        )
+                    )
 
             async for raw_msg in websocket:
                 try:
@@ -4258,6 +4494,7 @@ class AgyWebServer:
 
         if mtype == "abort_generation":
             stopped = await self.orchestrator.abort_current_turn()
+            await self._cancel_all_pending_questions(reason="user_aborted")
             await self.broadcast(
                 {
                     "type": "status",
@@ -4279,6 +4516,7 @@ class AgyWebServer:
             cid = str(data.get("conversation_id") or "").strip()
             if not cid:
                 return
+            await self._cancel_all_pending_questions(reason="session_changed")
             self.orchestrator.config.conversation_id = cid
             meta = self.storage.get_conversation_meta(cid)
             if meta.get("workspaces"):
@@ -4314,6 +4552,7 @@ class AgyWebServer:
             return
 
         if mtype == "new_session":
+            await self._cancel_all_pending_questions(reason="session_changed")
             self.orchestrator.config.conversation_id = None
             self.orchestrator.config.total_input_tokens = 0
             self.orchestrator.config.total_output_tokens = 0

@@ -1739,6 +1739,215 @@
       background: #fee2e2;
     }
 
+    /* Interactive Decision Prompts & Touch Bottom Sheet (v1.2.0) */
+    .question-modal-dialog {
+      align-items: flex-end !important;
+      padding: 0 !important;
+      z-index: 1300 !important;
+    }
+    .question-sheet {
+      width: 100%;
+      max-width: 520px;
+      max-height: 85dvh;
+      border-top-left-radius: 20px;
+      border-top-right-radius: 20px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-bottom: none;
+      box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.45);
+      display: flex;
+      flex-direction: column;
+      animation: questionSheetSlideUp 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+      box-sizing: border-box;
+      margin: 0 auto;
+    }
+    @keyframes questionSheetSlideUp {
+      from { transform: translateY(100%); }
+      to { transform: translateY(0); }
+    }
+    .question-header {
+      padding: 12px 16px 8px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .question-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+    .question-badge {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      padding: 2px 8px;
+      border-radius: 6px;
+      background: var(--accent-subtle, rgba(99, 102, 241, 0.15));
+      color: var(--accent-primary, #6366f1);
+    }
+    .question-counter {
+      font-size: 12px;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+    .question-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin: 0 0 4px 0;
+      line-height: 1.35;
+    }
+    .question-subtitle {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin: 0;
+    }
+    .question-body.scrollable {
+      flex: 1 1 auto;
+      overflow-y: auto;
+      padding: 12px 16px;
+      -webkit-overflow-scrolling: touch;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .question-options-container {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .option-card {
+      min-height: 52px;
+      display: flex;
+      align-items: center;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: var(--bg-base);
+      border: 1.5px solid var(--border-subtle);
+      cursor: pointer;
+      touch-action: manipulation;
+      gap: 12px;
+      transition: all 0.15s ease;
+      user-select: none;
+      box-sizing: border-box;
+    }
+    .option-card:active {
+      transform: scale(0.985);
+    }
+    .option-card.selected {
+      border-color: var(--accent-primary, #6366f1);
+      background: var(--accent-subtle, rgba(99, 102, 241, 0.12));
+    }
+    .option-indicator {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      border: 2px solid var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: all 0.15s;
+      box-sizing: border-box;
+    }
+    .option-card.is-multi .option-indicator {
+      border-radius: 6px;
+    }
+    .option-card.selected .option-indicator {
+      border-color: var(--accent-primary, #6366f1);
+      background: var(--accent-primary, #6366f1);
+    }
+    .option-card.selected .option-indicator::after {
+      content: '';
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #fff;
+    }
+    .option-card.is-multi.selected .option-indicator::after {
+      content: '✓';
+      color: #fff;
+      font-size: 12px;
+      font-weight: 800;
+      background: transparent;
+      width: auto;
+      height: auto;
+    }
+    .option-text-group {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      flex: 1;
+    }
+    .option-label {
+      font-size: 13.5px;
+      font-weight: 600;
+      color: var(--text-primary);
+      line-height: 1.35;
+    }
+    .badge-rec {
+      display: inline-block;
+      background: var(--accent-primary, #6366f1);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      padding: 2px 6px;
+      border-radius: 4px;
+      width: fit-content;
+      letter-spacing: 0.3px;
+      margin-bottom: 2px;
+    }
+    .question-writein-container {
+      margin-top: 4px;
+    }
+    .writein-toggle-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--accent-primary, #6366f1);
+      cursor: pointer;
+      padding: 6px 4px;
+    }
+    .writein-input-wrapper {
+      margin-top: 6px;
+    }
+    .writein-input-wrapper textarea {
+      width: 100%;
+      border-radius: 10px;
+      background: var(--bg-base);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-primary);
+      padding: 10px 12px;
+      font-size: 13px;
+      font-family: inherit;
+      resize: none;
+      box-sizing: border-box;
+    }
+    .writein-input-wrapper textarea:focus {
+      outline: none;
+      border-color: var(--accent-primary, #6366f1);
+    }
+    .question-actions {
+      display: flex;
+      gap: 12px;
+      padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px)) 16px;
+      border-top: 1px solid var(--border-subtle);
+      background: var(--bg-surface);
+    }
+    .question-actions .modal-btn {
+      flex: 1;
+      height: 44px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .question-actions .modal-btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
     /* Floating Scroll-to-Bottom Action Button */
     .scroll-bottom-btn {
       position: absolute;
@@ -3038,6 +3247,45 @@
     </div>
   </div>
 
+  <!-- Interactive Decision Modal (v1.2.0) -->
+  <div class="modal-dialog question-modal-dialog" id="modalAskQuestion" style="display:none;">
+    <div class="bottom-sheet-content question-sheet">
+      <!-- Drag Handle & Sticky Header -->
+      <div class="sheet-handle" style="margin-top:4px;"></div>
+      <header class="question-header">
+        <div class="question-meta">
+          <span class="question-badge" id="questionStepBadge">Decision Required</span>
+          <span class="question-counter" id="questionCounter">1 of 1</span>
+        </div>
+        <h3 class="question-title" id="questionPromptText">Question Title...</h3>
+        <p class="question-subtitle" id="questionSubtitle">Select an option to proceed</p>
+      </header>
+
+      <!-- Unified Scrollable Container (M-09: Options + Write-in) -->
+      <div class="question-body scrollable" id="questionBodyScrollable">
+        <!-- Dynamically populated option cards -->
+        <div class="question-options-container" id="questionOptionsContainer"></div>
+
+        <!-- Custom Write-in Field inside scroll body to avoid IME keyboard occlusion -->
+        <div class="question-writein-container">
+          <div class="writein-toggle-bar" id="btnToggleWriteIn">
+            <svg class="fa-icon" viewBox="0 0 512 512" aria-hidden="true" focusable="false" style="width:14px;height:14px;"><path fill="currentColor" d="M410.3 231l11.3-11.3-33.9-33.9-62.1-62.1L291.7 89.8l-11.3 11.3-22.6 22.6L58.6 322.9c-10.4 10.4-18 23.3-22.2 37.4L1 480.7c-2.5 8.4-.2 17.5 6.1 23.7s15.3 8.5 23.7 6.1l120.4-35.4c14.1-4.2 27-11.8 37.4-22.2L387.7 253.6 410.3 231zM160 399.4l-91.9 27 27-91.9 204.3-204.3 64.9 64.9L160 399.4zM492.7 75.3l-56-56c-17.7-17.7-46.3-17.7-64 0l-33.9 33.9 120 120 33.9-33.9c17.7-17.7 17.7-46.3 0-64z"/></svg>
+            <span>Or type custom response...</span>
+          </div>
+          <div class="writein-input-wrapper" id="writeInWrapper" style="display:none;">
+            <textarea id="questionWriteInInput" rows="2" placeholder="Enter custom instructions or alternative choice..."></textarea>
+          </div>
+        </div>
+      </div>
+
+      <!-- Fixed Bottom Actions Bar with SDK 35 Safe-Area Insets (M-12) -->
+      <footer class="question-actions" id="questionActions">
+        <button class="modal-btn secondary" id="btnQuestionSkip">Skip</button>
+        <button class="modal-btn primary" id="btnQuestionSubmit" disabled>Submit</button>
+      </footer>
+    </div>
+  </div>
+
   <!-- Floating Toast Notification -->
   <div id="toast" class="toast"></div>
 
@@ -3347,6 +3595,9 @@
 
         ws.onopen = () => {
           setRuntimeStatus('idle', 'Ready');
+          if (typeof fetchPendingQuestions === 'function') {
+            fetchPendingQuestions();
+          }
         };
 
         ws.onmessage = (ev) => {
@@ -3948,6 +4199,14 @@
 
           case 'update_check_result':
             handleUpdateResult(msg);
+            break;
+
+          case 'ask_question':
+            handleAskQuestionEvent(msg);
+            break;
+
+          case 'dismiss_question':
+            handleDismissQuestionEvent(msg);
             break;
 
           case 'open_external_url':
@@ -6363,8 +6622,256 @@
         }
       };
 
+      // ---------------------------------------------------------------------
+      // Interactive Decision Modal Subsystem (v1.2.0)
+      // ---------------------------------------------------------------------
+      let activeQuestionData = null;
+      let activeQuestionIndex = 0;
+      let collectedQuestionResponses = [];
+
+      function handleAskQuestionEvent(data) {
+        if (!data || !data.question_id) return;
+        // M-14: Deduplicate identical question ID to preserve in-progress touch input
+        if (activeQuestionData && activeQuestionData.question_id === data.question_id) {
+          return;
+        }
+        activeQuestionData = data;
+        activeQuestionIndex = 0;
+        collectedQuestionResponses = [];
+        renderCurrentQuestionStep();
+        const modal = document.getElementById('modalAskQuestion');
+        if (modal) {
+          modal.style.display = 'flex';
+        }
+      }
+
+      function handleDismissQuestionEvent(data) {
+        if (activeQuestionData && (!data.question_id || data.question_id === activeQuestionData.question_id)) {
+          closeQuestionModal();
+        }
+      }
+
+      function closeQuestionModal() {
+        activeQuestionData = null;
+        activeQuestionIndex = 0;
+        collectedQuestionResponses = [];
+        const modal = document.getElementById('modalAskQuestion');
+        if (modal) {
+          modal.style.display = 'none';
+        }
+        const writeIn = document.getElementById('questionWriteInInput');
+        if (writeIn) writeIn.value = '';
+        const writeInWrap = document.getElementById('writeInWrapper');
+        if (writeInWrap) writeInWrap.style.display = 'none';
+      }
+
+      function renderCurrentQuestionStep() {
+        if (!activeQuestionData || !activeQuestionData.questions || !activeQuestionData.questions.length) {
+          closeQuestionModal();
+          return;
+        }
+        const questions = activeQuestionData.questions;
+        const currentQ = questions[activeQuestionIndex];
+        if (!currentQ) {
+          closeQuestionModal();
+          return;
+        }
+
+        const badge = document.getElementById('questionStepBadge');
+        if (badge) {
+          badge.textContent = activeQuestionData.tool_summary || activeQuestionData.tool_action || 'Decision Required';
+        }
+        const counter = document.getElementById('questionCounter');
+        if (counter) {
+          counter.textContent = questions.length > 1 ? `Question ${activeQuestionIndex + 1} of ${questions.length}` : '1 of 1';
+        }
+        const title = document.getElementById('questionPromptText');
+        if (title) {
+          title.textContent = currentQ.question || 'Please make a selection';
+        }
+        const subtitle = document.getElementById('questionSubtitle');
+        if (subtitle) {
+          subtitle.textContent = currentQ.is_multi_select ? 'Select one or more options' : 'Select an option to proceed';
+        }
+
+        const container = document.getElementById('questionOptionsContainer');
+        if (container) {
+          container.innerHTML = '';
+          const isMulti = !!currentQ.is_multi_select;
+          (currentQ.options || []).forEach((optStr) => {
+            const card = document.createElement('div');
+            card.className = `option-card${isMulti ? ' is-multi' : ''}`;
+            card.dataset.value = optStr;
+
+            const isRec = optStr.startsWith('(Recommended)') || optStr.startsWith('(recommended)');
+            const labelText = isRec ? optStr.replace(/^\(recommended\)\s*/i, '') : optStr;
+
+            card.innerHTML = `
+              <div class="option-indicator"></div>
+              <div class="option-text-group">
+                ${isRec ? '<span class="badge-rec">Recommended</span>' : ''}
+                <span class="option-label">${escapeHtml(labelText)}</span>
+              </div>
+            `;
+
+            card.addEventListener('click', () => {
+              if (isMulti) {
+                card.classList.toggle('selected');
+              } else {
+                container.querySelectorAll('.option-card').forEach(c => c.classList.remove('selected'));
+                card.classList.add('selected');
+              }
+              updateQuestionSubmitState();
+            });
+
+            container.appendChild(card);
+          });
+        }
+
+        const writeIn = document.getElementById('questionWriteInInput');
+        if (writeIn) writeIn.value = '';
+        const writeInWrap = document.getElementById('writeInWrapper');
+        if (writeInWrap) writeInWrap.style.display = 'none';
+
+        const submitBtn = document.getElementById('btnQuestionSubmit');
+        if (submitBtn) {
+          submitBtn.textContent = activeQuestionIndex < questions.length - 1 ? 'Next' : 'Submit';
+          submitBtn.disabled = true;
+        }
+      }
+
+      function updateQuestionSubmitState() {
+        const container = document.getElementById('questionOptionsContainer');
+        const hasSelected = container ? container.querySelectorAll('.option-card.selected').length > 0 : false;
+        const writeIn = document.getElementById('questionWriteInInput');
+        const hasWriteIn = writeIn && writeIn.value.trim().length > 0;
+        const submitBtn = document.getElementById('btnQuestionSubmit');
+        if (submitBtn) {
+          submitBtn.disabled = !hasSelected && !hasWriteIn;
+        }
+      }
+
+      async function submitQuestionResponse(options) {
+        if (!activeQuestionData) return;
+        const qid = activeQuestionData.question_id;
+
+        if (options && options.skipped) {
+          closeQuestionModal();
+          try {
+            await fetch('/api/question/respond', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ question_id: qid, skipped: true }),
+            });
+          } catch (e) {
+            console.warn('Failed to submit question skip:', e);
+          }
+          return;
+        }
+
+        const container = document.getElementById('questionOptionsContainer');
+        const selectedCards = container ? Array.from(container.querySelectorAll('.option-card.selected')) : [];
+        const selectedValues = selectedCards.map(c => c.dataset.value);
+        const writeIn = document.getElementById('questionWriteInInput');
+        const writeInText = writeIn ? writeIn.value.trim() : '';
+
+        collectedQuestionResponses.push({
+          question_index: activeQuestionIndex,
+          selected: selectedValues,
+          write_in: writeInText,
+        });
+
+        // Multi-question wizard progression (M-13)
+        if (activeQuestionIndex < activeQuestionData.questions.length - 1) {
+          activeQuestionIndex++;
+          renderCurrentQuestionStep();
+          return;
+        }
+
+        const responsesToSend = [...collectedQuestionResponses];
+        closeQuestionModal();
+
+        try {
+          await fetch('/api/question/respond', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              question_id: qid,
+              skipped: false,
+              responses: responsesToSend,
+            }),
+          });
+        } catch (e) {
+          console.warn('Failed to submit question response:', e);
+        }
+      }
+
+      async function fetchPendingQuestions() {
+        try {
+          const res = await fetch('/api/question/pending');
+          if (res.ok) {
+            const data = await res.json();
+            if (data.pending && data.pending.length > 0) {
+              handleAskQuestionEvent(data.pending[0]);
+            }
+          }
+        } catch (e) {
+          // Ignore network errors during reconnect
+        }
+      }
+
+      // Question Modal DOM wiring
+      const btnToggleWriteIn = document.getElementById('btnToggleWriteIn');
+      if (btnToggleWriteIn) {
+        btnToggleWriteIn.addEventListener('click', () => {
+          const wrap = document.getElementById('writeInWrapper');
+          if (wrap) {
+            const isHidden = wrap.style.display === 'none';
+            wrap.style.display = isHidden ? 'block' : 'none';
+            if (isHidden) {
+              const inp = document.getElementById('questionWriteInInput');
+              if (inp) {
+                inp.focus();
+                // M-09: Smooth center scroll on soft keyboard appearance
+                setTimeout(() => {
+                  inp.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }, 150);
+              }
+            }
+          }
+        });
+      }
+
+      const questionWriteInInput = document.getElementById('questionWriteInInput');
+      if (questionWriteInInput) {
+        questionWriteInInput.addEventListener('input', () => {
+          updateQuestionSubmitState();
+        });
+      }
+
+      const btnQuestionSkip = document.getElementById('btnQuestionSkip');
+      if (btnQuestionSkip) {
+        btnQuestionSkip.addEventListener('click', () => {
+          submitQuestionResponse({ skipped: true });
+        });
+      }
+
+      const btnQuestionSubmit = document.getElementById('btnQuestionSubmit');
+      if (btnQuestionSubmit) {
+        btnQuestionSubmit.addEventListener('click', () => {
+          submitQuestionResponse({ skipped: false });
+        });
+      }
+
       // Standard Android Back Gesture Dispatcher
       window.handleAndroidBack = function() {
+        // 0. Intercept active question bottom-sheet (v1.2.0: Treat Back as deliberate Skip)
+        const qModal = document.getElementById('modalAskQuestion');
+        if (qModal && qModal.style.display !== 'none' && qModal.style.display !== '') {
+          submitQuestionResponse({ skipped: true });
+          return true;
+        }
+
         // 1. Dismiss any open modal dialogs
         const modals = Array.from(document.querySelectorAll('.modal-dialog'));
         for (let i = modals.length - 1; i >= 0; i--) {
