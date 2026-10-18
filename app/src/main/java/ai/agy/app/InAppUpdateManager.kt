@@ -78,18 +78,36 @@ object InAppUpdateManager {
             break
         }
 
-        val totalLength = connection.contentLength
+        val totalLength = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            connection.contentLengthLong
+        } else {
+            connection.getHeaderField("Content-Length")?.toLongOrNull() ?: connection.contentLength.toLong()
+        }
+
         connection.inputStream.use { input ->
             destFile.outputStream().use { output ->
-                val buffer = ByteArray(8192)
+                val buffer = ByteArray(32768)
                 var bytesRead: Int
-                var downloaded = 0
+                var downloaded = 0L
+                var lastReportedPct = -1
                 while (input.read(buffer).also { bytesRead = it } != -1) {
                     output.write(buffer, 0, bytesRead)
                     downloaded += bytesRead
-                    if (totalLength > 0) {
-                        onProgress((downloaded * 100) / totalLength)
+                    if (totalLength > 0L) {
+                        val pct = ((downloaded * 100L) / totalLength).toInt().coerceIn(0, 100)
+                        if (pct != lastReportedPct) {
+                            lastReportedPct = pct
+                            onProgress(pct)
+                        }
+                    } else {
+                        if (lastReportedPct != -1) {
+                            lastReportedPct = -1
+                            onProgress(-1)
+                        }
                     }
+                }
+                if (lastReportedPct < 100) {
+                    onProgress(100)
                 }
             }
         }

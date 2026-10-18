@@ -2423,8 +2423,19 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      background: var(--accent-primary);
-      color: #fff;
+      background: #090d16;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 6px;
+      box-sizing: border-box;
+      overflow: hidden;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+    }
+    .updates-app-logo img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+      border-radius: 8px;
     }
     .updates-app-title {
       font-size: 17px;
@@ -3001,7 +3012,7 @@
       <div class="subview-body">
         <div class="updates-app-card">
           <div class="updates-app-logo">
-            <svg class="fa-icon" viewBox="0 0 640 512" style="width:30px;height:30px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M320 0c17.7 0 32 14.3 32 32l0 64 120 0c39.8 0 72 32.2 72 72l0 272c0 39.8-32.2 72-72 72l-304 0c-39.8 0-72-32.2-72-72l0-272c0-39.8 32.2-72 72-72l120 0 0-64c0-17.7 14.3-32 32-32zM208 384c-8.8 0-16 7.2-16 16s7.2 16 16 16l32 0c8.8 0 16-7.2 16-16s-7.2-16-16-16l-32 0zm96 0c-8.8 0-16 7.2-16 16s7.2 16 16 16l32 0c8.8 0 16-7.2 16-16s-7.2-16-16-16l-32 0zm96 0c-8.8 0-16 7.2-16 16s7.2 16 16 16l32 0c8.8 0 16-7.2 16-16s-7.2-16-16-16l-32 0zM264 256a40 40 0 1 0 -80 0 40 40 0 1 0 80 0zm152 40a40 40 0 1 0 0-80 40 40 0 1 0 0 80zM48 224l16 0 0 192-16 0c-26.5 0-48-21.5-48-48l0-96c0-26.5 21.5-48 48-48zm544 0c26.5 0 48 21.5 48 48l0 96c0 26.5-21.5 48-48 48l-16 0 0-192 16 0z"/></svg>
+            <img src="/icon-192.png" alt="Antigravity Studio" />
           </div>
           <div>
             <div class="updates-app-title">Antigravity Studio</div>
@@ -6877,7 +6888,9 @@
           btnInstallUpdate.disabled = true;
           btnInstallUpdate.innerHTML = `<svg class="fa-icon fa-spin" viewBox="0 0 512 512" style="width:14px;height:14px;margin-right:6px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M48.5 224L40 224c-13.3 0-24-10.7-24-24L16 72c0-9.7 5.8-18.5 14.8-22.2s19.3-1.7 26.2 5.2L98.6 96.6c87.6-86.5 228.7-86.2 315.8 1c87.5 87.5 87.5 229.3 0 316.8s-229.3 87.5-316.8 0c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0c62.5 62.5 163.8 62.5 226.3 0s62.5-163.8 0-226.3c-62.2-62.2-162.7-62.5-225.3-1L185 183c6.9 6.9 8.9 17.2 5.2 26.2s-12.5 14.8-22.2 14.8L48.5 224z"/></svg>Downloading Update...`;
           if (updateProgressContainer) updateProgressContainer.style.display = 'block';
-          if (updateProgressStatusText) updateProgressStatusText.textContent = 'Downloading APK update package...';
+          if (updateProgressStatusText) {
+            updateProgressStatusText.innerHTML = `${faIcon('spinner', 'fa-spin', 'width:12px;height:12px;margin-right:4px;')} Downloading APK update package...`;
+          }
           if (updateProgressText) updateProgressText.textContent = '0%';
           if (updateProgressBar) updateProgressBar.style.width = '0%';
 
@@ -6892,12 +6905,26 @@
       // Native progress receiver
       window.onUpdateProgress = function(progress) {
         if (updateProgressContainer) updateProgressContainer.style.display = 'block';
-        if (updateProgressText) updateProgressText.textContent = `${progress}%`;
-        if (updateProgressBar) updateProgressBar.style.width = `${progress}%`;
-        if (progress >= 100) {
-          if (updateProgressStatusText) updateProgressStatusText.textContent = 'Launching Package Installer...';
-          if (btnInstallUpdate) {
-            btnInstallUpdate.innerHTML = `<svg class="fa-icon fa-spin" viewBox="0 0 512 512" style="width:14px;height:14px;margin-right:6px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M48.5 224L40 224c-13.3 0-24-10.7-24-24L16 72c0-9.7 5.8-18.5 14.8-22.2s19.3-1.7 26.2 5.2L98.6 96.6c87.6-86.5 228.7-86.2 315.8 1c87.5 87.5 87.5 229.3 0 316.8s-229.3 87.5-316.8 0c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0c62.5 62.5 163.8 62.5 226.3 0s62.5-163.8 0-226.3c-62.2-62.2-162.7-62.5-225.3-1L185 183c6.9 6.9 8.9 17.2 5.2 26.2s-12.5 14.8-22.2 14.8L48.5 224z"/></svg>Installing Package...`;
+        const p = Number(progress);
+        if (isNaN(p) || p < 0) {
+          if (updateProgressText) updateProgressText.textContent = '';
+          if (updateProgressStatusText) {
+            updateProgressStatusText.innerHTML = `${faIcon('spinner', 'fa-spin', 'width:12px;height:12px;margin-right:4px;')} Downloading APK update package...`;
+          }
+          if (updateProgressBar) updateProgressBar.style.width = '100%';
+        } else {
+          const clamped = Math.max(0, Math.min(100, Math.round(p)));
+          if (updateProgressText) updateProgressText.textContent = `${clamped}%`;
+          if (updateProgressBar) updateProgressBar.style.width = `${clamped}%`;
+          if (clamped >= 100) {
+            if (updateProgressStatusText) updateProgressStatusText.textContent = 'Launching Package Installer...';
+            if (btnInstallUpdate) {
+              btnInstallUpdate.innerHTML = `<svg class="fa-icon fa-spin" viewBox="0 0 512 512" style="width:14px;height:14px;margin-right:6px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M48.5 224L40 224c-13.3 0-24-10.7-24-24L16 72c0-9.7 5.8-18.5 14.8-22.2s19.3-1.7 26.2 5.2L98.6 96.6c87.6-86.5 228.7-86.2 315.8 1c87.5 87.5 87.5 229.3 0 316.8s-229.3 87.5-316.8 0c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0c62.5 62.5 163.8 62.5 226.3 0s62.5-163.8 0-226.3c-62.2-62.2-162.7-62.5-225.3-1L185 183c6.9 6.9 8.9 17.2 5.2 26.2s-12.5 14.8-22.2 14.8L48.5 224z"/></svg>Installing Package...`;
+            }
+          } else {
+            if (updateProgressStatusText) {
+              updateProgressStatusText.innerHTML = `${faIcon('spinner', 'fa-spin', 'width:12px;height:12px;margin-right:4px;')} Downloading APK update package...`;
+            }
           }
         }
       };
@@ -7011,6 +7038,10 @@
                 container.querySelectorAll('.option-card').forEach(c => c.classList.remove('selected'));
                 card.classList.add('selected');
               }
+              const writeIn = document.getElementById('questionWriteInInput');
+              if (writeIn && writeIn.value) {
+                writeIn.value = '';
+              }
               updateQuestionSubmitState();
             });
 
@@ -7102,6 +7133,13 @@
       }
 
       // Question Modal DOM wiring
+      function clearQuestionOptionSelections() {
+        const container = document.getElementById('questionOptionsContainer');
+        if (container) {
+          container.querySelectorAll('.option-card.selected').forEach(c => c.classList.remove('selected'));
+        }
+      }
+
       const btnToggleWriteIn = document.getElementById('btnToggleWriteIn');
       if (btnToggleWriteIn) {
         btnToggleWriteIn.addEventListener('click', () => {
@@ -7110,6 +7148,8 @@
             const isHidden = wrap.style.display === 'none';
             wrap.style.display = isHidden ? 'block' : 'none';
             if (isHidden) {
+              clearQuestionOptionSelections();
+              updateQuestionSubmitState();
               const inp = document.getElementById('questionWriteInInput');
               if (inp) {
                 inp.focus();
@@ -7125,7 +7165,16 @@
 
       const questionWriteInInput = document.getElementById('questionWriteInInput');
       if (questionWriteInInput) {
+        questionWriteInInput.addEventListener('focus', () => {
+          clearQuestionOptionSelections();
+          updateQuestionSubmitState();
+        });
+        questionWriteInInput.addEventListener('click', () => {
+          clearQuestionOptionSelections();
+          updateQuestionSubmitState();
+        });
         questionWriteInInput.addEventListener('input', () => {
+          clearQuestionOptionSelections();
           updateQuestionSubmitState();
         });
       }

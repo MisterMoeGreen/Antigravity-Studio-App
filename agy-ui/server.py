@@ -1961,35 +1961,94 @@ class AntigravityStorageEngine:
         t_full = brain_path / ".system_generated" / "logs" / "transcript_full.jsonl"
 
         # If step_index wasn't explicitly provided, find it from transcript by prompt_text
-        if target_step is None and t_jsonl.exists():
-            clean_search = self._clean_user_prompt(prompt_text).strip()
-            with t_jsonl.open("r", encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    try:
-                        ev = json.loads(line)
-                        if ev.get("type") == "USER_INPUT":
-                            c_text = self._clean_user_prompt(self._extract_text(ev)).strip()
-                            if clean_search and (clean_search in c_text or c_text in clean_search):
-                                target_step = ev.get("step_index")
-                                if not target_prompt:
+        clean_search = self._clean_user_prompt(prompt_text).strip()
+        if target_step is None and clean_search:
+            if t_jsonl.exists():
+                try:
+                    raw_lines = t_jsonl.read_text(encoding="utf-8", errors="replace").splitlines()
+                    # 1. Reverse search for exact match
+                    for line in reversed(raw_lines):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            ev = json.loads(line)
+                            if ev.get("type") == "USER_INPUT":
+                                c_text = self._clean_user_prompt(self._extract_text(ev)).strip()
+                                if c_text == clean_search:
+                                    target_step = ev.get("step_index")
                                     target_prompt = c_text
-                    except Exception:
-                        pass
+                                    break
+                        except Exception:
+                            pass
+                    # 2. Reverse search for substring match if exact not found
+                    if target_step is None:
+                        for line in reversed(raw_lines):
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                ev = json.loads(line)
+                                if ev.get("type") == "USER_INPUT":
+                                    c_text = self._clean_user_prompt(self._extract_text(ev)).strip()
+                                    if clean_search in c_text or c_text in clean_search:
+                                        target_step = ev.get("step_index")
+                                        target_prompt = c_text
+                                        break
+                            except Exception:
+                                pass
+                except Exception as exc:
+                    logger.warning("Error searching transcript for rewind: %s", exc)
 
-        if target_step is None and t_jsonl.exists():
-            with t_jsonl.open("r", encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    if not line.strip():
+            # Fallback to SQLite DB if not found in transcript.jsonl
+            if target_step is None:
+                conv_db = CONVERSATIONS_DIR / f"{cid}.db"
+                if conv_db.exists():
+                    try:
+                        conn = sqlite3.connect(conv_db, timeout=5.0)
+                        c = conn.cursor()
+                        c.execute("SELECT idx, payload FROM steps ORDER BY idx DESC")
+                        for s_idx, payload in c.fetchall():
+                            if isinstance(payload, str) and payload.strip().startswith("{"):
+                                try:
+                                    obj = json.loads(payload)
+                                    if obj.get("type") == "USER_INPUT" or "USER" in str(obj.get("role", "")).upper():
+                                        c_text = self._clean_user_prompt(self._extract_text(obj)).strip()
+                                        if c_text == clean_search or clean_search in c_text or c_text in clean_search:
+                                            target_step = s_idx
+                                            target_prompt = c_text
+                                            break
+                                except Exception:
+                                    pass
+                        conn.close()
+                    except Exception as exc:
+                        logger.warning("Error searching SQLite db for rewind: %s", exc)
+
+            # If clean_search was provided but not found anywhere (e.g. prompt was aborted
+            # before agy engine persisted it), the persistent transcript is already clean.
+            # Preceding prompts MUST NOT be truncated! Return the requested prompt to editor.
+            if target_step is None:
+                target_prompt = clean_search
+
+        # Only if NEITHER step_index nor prompt_text was provided (bare rewind),
+        # rewind to the last recorded USER_INPUT in transcript
+        elif target_step is None and not clean_search and t_jsonl.exists():
+            try:
+                raw_lines = t_jsonl.read_text(encoding="utf-8", errors="replace").splitlines()
+                for line in reversed(raw_lines):
+                    line = line.strip()
+                    if not line:
                         continue
                     try:
                         ev = json.loads(line)
                         if ev.get("type") == "USER_INPUT":
                             target_step = ev.get("step_index")
                             target_prompt = self._clean_user_prompt(self._extract_text(ev)).strip()
+                            break
                     except Exception:
                         pass
+            except Exception as exc:
+                logger.warning("Error reading transcript for bare rewind: %s", exc)
 
         if target_step is not None:
             # 1. Truncate JSONL files
