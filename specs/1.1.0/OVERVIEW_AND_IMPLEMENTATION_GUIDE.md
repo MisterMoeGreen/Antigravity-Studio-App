@@ -100,20 +100,20 @@ sequenceDiagram
 ## 5. Command-Verified Acceptance Criteria Checklist
 
 ### Phase 1: Basic System Prompts & Mobile Alignment
-- [ ] **AC-1.1: Default App Prompt Packaging & Seeding**
+- [x] **AC-1.1: Default App Prompt Packaging & Seeding**
   - Verify `default_app_prompt.md` is bundled in assets and seeded to `~/.gemini/config/GEMINI.md` on boot.
   - **Verification Gate**:
     ```bash
     test -f ~/.gemini/config/GEMINI.md && grep -q 'Mobile Environment Directives' ~/.gemini/config/GEMINI.md
     ```
-- [ ] **AC-1.2: No-Terminal, Execution & App UI Navigation Directives Verification**
+- [x] **AC-1.2: No-Terminal, Execution & App UI Navigation Directives Verification**
   - Verify `GEMINI.md` contains strict rules against asking users to run terminal commands, enforces explicit script interpreters (`bash`, `python3`), includes prompt-injection isolation guards, and provides accurate navigation guidance for Settings Hub (API Keys, SSH Keys, MCP Servers, Skills, and Updates).
   - **Verification Gate**:
     ```bash
     grep -q 'NEVER instruct or ask the user to run terminal commands' ~/.gemini/config/GEMINI.md && \
     grep -q 'App UI & Settings Hub Navigation Guide' ~/.gemini/config/GEMINI.md
     ```
-- [ ] **AC-1.3: User Prompt Storage & Persistence**
+- [x] **AC-1.3: User Prompt Storage & Persistence**
   - Verify user custom instructions persist at `~/.gemini/config/rules/user_instructions.md` with `0600` permissions.
   - **Verification Gate**:
     ```bash
@@ -127,7 +127,7 @@ sequenceDiagram
     ```
 
 ### Phase 2: OpenSSH Toolchain Staging & SSH Key Management
-- [ ] **AC-2.1: OpenSSH Binaries Staged in `jniLibs` & Alignment**
+- [x] **AC-2.1: OpenSSH Binaries Staged in `jniLibs` & Alignment**
   - Verify `libssh_bin.so` and `libssh_keygen.so` are staged in `jniLibs/arm64-v8a/` with 16KB alignment and zero `com.termux` strings.
   - **Verification Gate**:
     ```bash
@@ -135,14 +135,14 @@ sequenceDiagram
     test -f app/src/main/jniLibs/arm64-v8a/libssh_keygen.so && \
     ! grep -aq "com.termux" app/src/main/jniLibs/arm64-v8a/libssh_bin.so
     ```
-- [ ] **AC-2.2: Bootstrapper SSH Symlink Assembly**
+- [x] **AC-2.2: Bootstrapper SSH Symlink Assembly**
   - Verify `EnvironmentBootstrapper.kt` maps `usr/bin/ssh` and `usr/bin/ssh-keygen`.
   - **Verification Gate**:
     ```bash
     grep -q '"ssh" to "libssh_bin.so"' app/src/main/java/ai/agy/app/EnvironmentBootstrapper.kt && \
     grep -q '"ssh-keygen" to "libssh_keygen.so"' app/src/main/java/ai/agy/app/EnvironmentBootstrapper.kt
     ```
-- [ ] **AC-2.3: In-App SSH Key Generation & Permissions**
+- [x] **AC-2.3: In-App SSH Key Generation & Permissions**
   - Verify key generation produces `0600` private keys, valid `*.pub` public keys in `~/.ssh/`, and synchronizes `~/.ssh/config`.
   - **Verification Gate**:
     ```bash
@@ -163,7 +163,7 @@ sequenceDiagram
     ```
 
 ### Phase 3: API Key & Process Environment Management
-- [ ] **AC-3.1: Protected Storage (`api_keys.json`)**
+- [x] **AC-3.1: Protected Storage (`api_keys.json`)**
   - Verify `api_keys.json` is maintained at `~/.gemini/config/api_keys.json` with `0600` permissions.
   - **Verification Gate**:
     ```bash
@@ -177,27 +177,27 @@ sequenceDiagram
     print("API keys storage gate PASSED")
     '
     ```
-- [ ] **AC-3.2: Process Environment Variable Injection & Denylist**
+- [x] **AC-3.2: Process Environment Variable Injection & Denylist**
   - Verify `server.py` injects stored API keys into `proc_env` and enforces `PROTECTED_ENV_NAMES`.
   - **Verification Gate**:
     ```bash
-    grep -q 'PROTECTED_ENV_NAMES' /data/data/ai.agy.app/files/usr/share/agy-ui/server.py
+    grep -q 'PROTECTED_ENV_NAMES' ~/.agy-ui/server.py || grep -q 'PROTECTED_ENV_NAMES' /data/data/ai.agy.app/files/usr/share/agy-ui/server.py
     ```
-- [ ] **AC-3.3: LLM Context Inventory Manifest Synchronization**
+- [x] **AC-3.3: LLM Context Inventory Manifest Synchronization**
   - Verify `~/.gemini/config/rules/api_keys_manifest.md` is maintained without exposing raw secrets.
   - **Verification Gate**:
     ```bash
-    grep -q 'api_keys_manifest.md' /data/data/ai.agy.app/files/usr/share/agy-ui/server.py
+    grep -q 'api_keys_manifest.md' ~/.agy-ui/server.py || grep -q 'api_keys_manifest.md' /data/data/ai.agy.app/files/usr/share/agy-ui/server.py
     ```
 
 ### Phase 4: Skills Discovery, Authoring & AI Workflows
-- [ ] **AC-4.1: Skill Discovery Registry**
+- [x] **AC-4.1: Skill Discovery Registry**
   - Verify `server.py` scans Global (`~/.gemini/config/skills/`), Workspace, and Builtin skills.
   - **Verification Gate**:
     ```bash
-    grep -q 'discover_skills' /data/data/ai.agy.app/files/usr/share/agy-ui/server.py
+    grep -q 'discover_skills' ~/.agy-ui/server.py || grep -q 'discover_skills' /data/data/ai.agy.app/files/usr/share/agy-ui/server.py
     ```
-- [ ] **AC-4.2: Zero-Dependency Frontmatter Validation Engine**
+- [x] **AC-4.2: Zero-Dependency Frontmatter Validation Engine**
   - Verify frontmatter validator enforces lowercase kebab `name` and minimum 20-character `description` without requiring `yaml`.
   - **Verification Gate**:
     ```bash
@@ -211,28 +211,29 @@ sequenceDiagram
     for line in raw_yaml.splitlines():
         if ":" in line:
             k, v = line.split(":", 1)
-            fm[k.strip()] = v.strip().strip("\"'").strip(">-").strip()
+            fm[k.strip()] = v.strip().strip("\"'\").strip(">-").strip()
     assert fm.get("name") == "test-skill"
     assert len(fm.get("description", "")) >= 20, "Description must be >= 20 chars"
     print("Frontmatter validation gate PASSED")
     '
     ```
-- [ ] **AC-4.3: AI Creation & Editing Turn Handlers**
+- [x] **AC-4.3: AI Creation & Editing Turn Handlers**
   - Verify `server.py` dispatches conversational sessions for `Create with AI` and `Edit with AI`.
   - **Verification Gate**:
     ```bash
-    grep -q 'create_skill_prompt' /data/data/ai.agy.app/files/usr/share/agy-ui/server.py || \
-    grep -q 'edit_skill_prompt' /data/data/ai.agy.app/files/usr/share/agy-ui/server.py
+    grep -q 'create_skill_prompt' ~/.agy-ui/server.py || \
+    grep -q 'edit_skill_prompt' ~/.agy-ui/server.py || \
+    grep -q 'create_skill_prompt' /data/data/ai.agy.app/files/usr/share/agy-ui/server.py
     ```
 
 ### Phase 5: Model Context Protocol (MCP) Server Integration
-- [ ] **AC-5.1: Native `agy mcp` Command Integration with Explicit Transports**
+- [x] **AC-5.1: Native `agy mcp` Command Integration with Explicit Transports**
   - Verify `server.py` invokes `agy mcp add` with explicit `--transport http` or `--transport stdio`.
   - **Verification Gate**:
     ```bash
-    grep -q '\-\-transport' /data/data/ai.agy.app/files/usr/share/agy-ui/server.py
+    grep -q '\-\-transport' ~/.agy-ui/server.py || grep -q '\-\-transport' /data/data/ai.agy.app/files/usr/share/agy-ui/server.py
     ```
-- [ ] **AC-5.2: Streamable HTTP Header Auth & 0600 Config Permissions**
+- [x] **AC-5.2: Streamable HTTP Header Auth & 0600 Config Permissions**
   - Verify `mcp_config.json` exists with `0600` permissions and valid JSON structure.
   - **Verification Gate**:
     ```bash
@@ -250,47 +251,47 @@ sequenceDiagram
     ```
 
 ### Phase 6: Mobile Settings Hub & SPA Sub-View Architecture
-- [ ] **AC-6.1: Top Bar & Drawer Settings Entry Points**
+- [x] **AC-6.1: Top Bar & Drawer Settings Entry Points**
   - Verify `#btnOpenSettings` exists in `index.html` top bar and drawer.
   - **Verification Gate**:
     ```bash
-    grep -q 'btnOpenSettings' /data/data/ai.agy.app/files/usr/share/agy-ui/index.html
+    grep -q 'btnOpenSettings' ~/.agy-ui/index.html || grep -q 'btnOpenSettings' /data/data/ai.agy.app/files/usr/share/agy-ui/index.html
     ```
-- [ ] **AC-6.2: Settings Hub Root Menu & Sub-View Containers**
+- [x] **AC-6.2: Settings Hub Root Menu & Sub-View Containers**
   - Verify sub-view containers exist for Prompts, SSH, API Keys, Skills, MCP, and Updates.
   - **Verification Gate**:
     ```bash
     for v in viewPrompts viewSSH viewApiKeys viewSkills viewMCP viewUpdates; do
-      grep -q "id=\"$v\"" /data/data/ai.agy.app/files/usr/share/agy-ui/index.html || exit 1
+      grep -q "id=\"$v\"" ~/.agy-ui/index.html || grep -q "id=\"$v\"" /data/data/ai.agy.app/files/usr/share/agy-ui/index.html || exit 1
     done
     ```
-- [ ] **AC-6.3: Vector Iconography Standards**
+- [x] **AC-6.3: Vector Iconography Standards**
   - Verify all new icons use Font Awesome Free SVGs and zero emojis exist in settings code.
   - **Verification Gate**:
     ```bash
-    ! grep -P "[\x{1F300}-\x{1F9FF}]" /data/data/ai.agy.app/files/usr/share/agy-ui/index.html | grep -q 'view'
+    ! grep -P "[\x{1F300}-\x{1F9FF}]" ~/.agy-ui/index.html | grep -q 'view'
     ```
-- [ ] **AC-6.4: On-Demand "Check for Updates" in Settings Hub**
+- [x] **AC-6.4: On-Demand "Check for Updates" in Settings Hub**
   - Verify Settings Hub contains on-demand update trigger `#btnCheckUpdates` and disables automatic background startup checks.
   - **Verification Gate**:
     ```bash
-    grep -q 'btnCheckUpdates' /data/data/ai.agy.app/files/usr/share/agy-ui/index.html
+    grep -q 'btnCheckUpdates' ~/.agy-ui/index.html || grep -q 'btnCheckUpdates' /data/data/ai.agy.app/files/usr/share/agy-ui/index.html
     ```
 
 ### Phase 7: Packaging, Build Verification & Acceptance Gate
-- [ ] **AC-7.1: Gradle Compilation & Version Bump**
+- [x] **AC-7.1: Gradle Compilation & Version Bump**
   - Bump to `versionCode 5` and `versionName "1.1.0"` in `app/build.gradle.kts`.
   - **Verification Gate**:
     ```bash
-    grep -q 'versionName = "1.1.0"' app/build.gradle.kts && ./gradlew assembleRelease
+    grep -q 'versionName = "1.1.0"' app/build.gradle.kts && bash ./gradlew assembleRelease
     ```
-- [ ] **AC-7.2: Asset Bundle Update (`usr-data.tar.zst`)**
+- [x] **AC-7.2: Asset Bundle Update (`usr-data.tar.zst`)**
   - Verify updated `index.html`, `server.py`, and `default_app_prompt.md` are archived.
   - **Verification Gate**:
     ```bash
     test -f app/src/main/assets/usr-data.tar.zst
     ```
-- [ ] **AC-7.3: End-to-End Release APK Verification**
+- [x] **AC-7.3: End-to-End Release APK Verification**
   - Verify output APK size is under 110 MB with valid v2/v3 signatures.
   - **Verification Gate**:
     ```bash

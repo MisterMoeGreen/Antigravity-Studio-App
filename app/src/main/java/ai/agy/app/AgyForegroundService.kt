@@ -299,7 +299,9 @@ class AgyForegroundService : Service() {
             "bash" to "libbash.so",
             "sh" to "libbash.so",
             "git" to "libgit.so",
-            "python3" to "libpython3_bin.so"
+            "python3" to "libpython3_bin.so",
+            "ssh" to "libssh_bin.so",
+            "ssh-keygen" to "libssh_keygen.so"
         )
 
         for ((binName, soName) in symlinkMap) {

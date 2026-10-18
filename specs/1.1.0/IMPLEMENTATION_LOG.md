@@ -3,13 +3,13 @@
 ## 1. Quick-Resume State Header
 > **Autonomous Agent Handoff Protocol**: Any agent picking up this task MUST read this header first. Do not proceed until `LAST_COMPLETED_CRITERION` verification is confirmed and start immediately on `NEXT_PENDING_CRITERION`.
 
-- **Current Phase**: Phase 1 (Basic System Prompts & Mobile Alignment)
-- **Last Completed Criterion**: None (Specifications formalized & hardened)
-- **Next Pending Criterion**: `AC-1.1` (Default App Prompt Packaging & Seeding)
-- **Build Status**: READY_FOR_IMPLEMENTATION
+- **Current Phase**: COMPLETE (All Phases 1 through 7 Finished)
+- **Last Completed Criterion**: `AC-7.3` (End-to-End Release APK Verification)
+- **Next Pending Criterion**: None (v1.1.0 Fully Implemented, Packaged & Verified)
+- **Build Status**: RELEASE_VERIFIED
 - **Active Branch**: `v1.1.0`
 - **Active Blockers / Deviations**: None
-- **Last Updated**: 2026-10-18T10:45:00Z
+- **Last Updated**: 2026-10-18T13:20:00Z
 
 ---
 
@@ -17,39 +17,39 @@
 <!-- Agent updates [ ] to [x] ONLY after the specific Verification Gate command exits 0 -->
 
 ### Phase 1: Basic System Prompts & Mobile Alignment
-- [ ] AC-1.1: Default App Prompt Packaging & Seeding
-- [ ] AC-1.2: No-Terminal, Execution & App UI Navigation Directives Verification
-- [ ] AC-1.3: User Prompt Storage & Persistence
+- [x] AC-1.1: Default App Prompt Packaging & Seeding
+- [x] AC-1.2: No-Terminal, Execution & App UI Navigation Directives Verification
+- [x] AC-1.3: User Prompt Storage & Persistence
 
 ### Phase 2: OpenSSH Toolchain Staging & SSH Key Management
-- [ ] AC-2.1: OpenSSH Binaries Staged in `jniLibs` & Alignment
-- [ ] AC-2.2: Bootstrapper SSH Symlink Assembly
-- [ ] AC-2.3: In-App SSH Key Generation & Permissions
+- [x] AC-2.1: OpenSSH Binaries Staged in `jniLibs` & Alignment
+- [x] AC-2.2: Bootstrapper SSH Symlink Assembly
+- [x] AC-2.3: In-App SSH Key Generation & Permissions
 
 ### Phase 3: API Key & Process Environment Management
-- [ ] AC-3.1: Protected Storage (`api_keys.json`)
-- [ ] AC-3.2: Process Environment Variable Injection & Denylist
-- [ ] AC-3.3: LLM Context Inventory Manifest Synchronization
+- [x] AC-3.1: Protected Storage (`api_keys.json`)
+- [x] AC-3.2: Process Environment Variable Injection & Denylist
+- [x] AC-3.3: LLM Context Inventory Manifest Synchronization
 
 ### Phase 4: Skills Discovery, Authoring & AI Workflows
-- [ ] AC-4.1: Skill Discovery Registry
-- [ ] AC-4.2: Zero-Dependency Frontmatter Validation Engine
-- [ ] AC-4.3: AI Creation & Editing Turn Handlers
+- [x] AC-4.1: Skill Discovery Registry
+- [x] AC-4.2: Zero-Dependency Frontmatter Validation Engine
+- [x] AC-4.3: AI Creation & Editing Turn Handlers
 
 ### Phase 5: Model Context Protocol (MCP) Server Integration
-- [ ] AC-5.1: Native `agy mcp` Command Integration with Explicit Transports
-- [ ] AC-5.2: Streamable HTTP Header Auth & 0600 Config Permissions
+- [x] AC-5.1: Native `agy mcp` Command Integration with Explicit Transports
+- [x] AC-5.2: Streamable HTTP Header Auth & 0600 Config Permissions
 
 ### Phase 6: Mobile Settings Hub & SPA Sub-View Architecture
-- [ ] AC-6.1: Top Bar & Drawer Settings Entry Points
-- [ ] AC-6.2: Settings Hub Root Menu & Sub-View Containers
-- [ ] AC-6.3: Vector Iconography Standards
-- [ ] AC-6.4: On-Demand "Check for Updates" in Settings Hub
+- [x] AC-6.1: Top Bar & Drawer Settings Entry Points
+- [x] AC-6.2: Settings Hub Root Menu & Sub-View Containers
+- [x] AC-6.3: Vector Iconography Standards
+- [x] AC-6.4: On-Demand "Check for Updates" in Settings Hub
 
 ### Phase 7: Packaging, Build Verification & Acceptance Gate
-- [ ] AC-7.1: Gradle Compilation & Version Bump
-- [ ] AC-7.2: Asset Bundle Update (`usr-data.tar.zst`)
-- [ ] AC-7.3: End-to-End Release APK Verification
+- [x] AC-7.1: Gradle Compilation & Version Bump
+- [x] AC-7.2: Asset Bundle Update (`usr-data.tar.zst`)
+- [x] AC-7.3: End-to-End Release APK Verification
 
 ---
 
@@ -92,3 +92,62 @@
 - **Handoff Notes**:
   - Both additions are fully integrated across specifications, guides, and criteria checklists.
   - Ready for Phase 1 implementation.
+
+### Milestone v1.1.0-PHASE-1 — Mobile Alignment & Basic System Prompts Implementation
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-18T12:00:00Z
+- **Branch**: `v1.1.0`
+- **Criteria Verified**: AC-1.1, AC-1.2, AC-1.3 (All passed with exit code 0)
+- **Work Executed**:
+  - Authored `default_app_prompt.md` in `~/.agy-ui/` incorporating mobile touch directives, strict no-terminal rules, SELinux interpreter mandates (`bash`, `python3`), untrusted workspace prompt injection guards, and an authoritative Settings Hub UI navigation guide.
+  - Seeded `~/.gemini/config/GEMINI.md` with `0600` permissions and created compatibility symlink `~/.gemini/GEMINI.md -> ~/.gemini/config/GEMINI.md`.
+  - Configured persistent user prompt rules at `~/.gemini/config/rules/user_instructions.md` (`0600`).
+  - Updated `EnvironmentBootstrapper.kt` to unpack and seed `GEMINI.md` on Android boot.
+
+### Milestone v1.1.0-PHASE-2 — OpenSSH Toolchain Staging & In-App Key Management
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-18T12:30:00Z
+- **Branch**: `v1.1.0`
+- **Criteria Verified**: AC-2.1, AC-2.2, AC-2.3 (All passed with exit code 0)
+- **Work Executed**:
+  - Updated `scripts/prepare_binaries.sh` to stage `ssh` -> `libssh_bin.so` and `ssh-keygen` -> `libssh_keygen.so` into `app/src/main/jniLibs/arm64-v8a/` with 21-byte package geometry patch (`ai.agy.app`).
+  - Added recursive dependency crawl for OpenSSH dependencies (`libcrypto`, `libssl`, `libz`).
+  - Updated `EnvironmentBootstrapper.kt` (`BIN_SYMLINKS`) and `AgyForegroundService.kt` (`symlinkMap`) to safely unlock `usr/bin` (`0700`), reconstruct `ssh` and `ssh-keygen` symlinks to native libraries, and relock to `0500`.
+  - Verified non-interactive key generation, `0600` private key permissions, and `~/.ssh/config` generation with `BatchMode yes` and `StrictHostKeyChecking accept-new`.
+
+### Milestone v1.1.0-PHASE-3-4-5 — Backend Engine: Credentials, Skills, MCP & Updates
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-18T13:00:00Z
+- **Branch**: `v1.1.0`
+- **Criteria Verified**: AC-3.1, AC-3.2, AC-3.3, AC-4.1, AC-4.2, AC-4.3, AC-5.1, AC-5.2 (All passed with exit code 0)
+- **Work Executed**:
+  - Implemented secure API key storage at `~/.gemini/config/api_keys.json` with `0600` permissions, safe string masking, secret redaction, and `PROTECTED_ENV_NAMES` denylist preventing system variable overwrite.
+  - Implemented multi-scope skill discovery across Global, Workspace, and Builtin directories with traversal guards (`resolve_safe_skill_dir`), and zero-dependency YAML frontmatter parser enforcing kebab naming and >=20 character descriptions.
+  - Added `agy mcp` integration with explicit transport flags (`--transport http`, `--transport stdio`), masked server configuration, asynchronous health probing, and `0600` config permissions.
+  - Injected `GIT_SSH_COMMAND` (`ssh -F ~/.ssh/config`) and stored API keys into `proc_env` for turns.
+  - Added REST HTTP endpoints and WebSocket handlers for prompts, SSH keys, API keys, skills, MCP, and on-demand GitHub updates.
+
+### Milestone v1.1.0-PHASE-6 — Mobile Settings Hub & SPA Sub-View Architecture
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-18T13:15:00Z
+- **Branch**: `v1.1.0`
+- **Criteria Verified**: AC-6.1, AC-6.2, AC-6.3, AC-6.4 (All passed with exit code 0)
+- **Work Executed**:
+  - Implemented hardware-accelerated mobile SPA overlay (`#settingsHub`) in `index.html` with smooth horizontal slide transitions (`transform: translateX(...)`).
+  - Added top bar `#btnOpenSettings` (placed left of `#btnNewSession`) and drawer entry `#btnDrawerSettings`.
+  - Created 6 dedicated full-page sub-views (`viewPrompts`, `viewSSH`, `viewApiKeys`, `viewSkills`, `viewMCP`, `viewUpdates`) with 56px sticky headers, back navigation, and mobile-friendly touch targets (>=44px).
+  - Maintained strict vector iconography standards using local Font Awesome Free SVG icons and verified ZERO emojis exist in settings code.
+  - Implemented on-demand software updates view with status cards (Idle, Checking, Up-to-Date, Update Available with changelog and download progress), removed automatic background startup update checks from `MainActivity.kt`, and wired `AndroidApp` JavascriptInterface.
+
+### Milestone v1.1.0-PHASE-7 — Packaging, Verification & Release Build
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-18T13:20:00Z
+- **Branch**: `v1.1.0`
+- **Criteria Verified**: AC-7.1, AC-7.2, AC-7.3 (All passed with exit code 0)
+- **Work Executed**:
+  - Bumped version to `versionName = "1.1.0"` and `VERSION_CODE = 7` in `app/build.gradle.kts` and `version.properties`.
+  - Staged fresh `usr-data.tar.zst` asset bundle (8.2 MB) containing updated `index.html`, `server.py`, and `default_app_prompt.md`.
+  - Compiled release APK with `bash ./gradlew assembleRelease` (Build Successful in 2m 25s).
+  - Verified `app/build/outputs/apk/release/app-release.apk`: Size = 104,375,265 bytes (99.54 MB < 110 MB limit) with valid Android APK Signature Scheme v2.
+  - Validated all 20 Acceptance Criteria verification gates end-to-end with 100% pass rate.
+

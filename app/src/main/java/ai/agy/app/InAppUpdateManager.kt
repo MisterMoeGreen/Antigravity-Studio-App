@@ -154,7 +154,7 @@ object InAppUpdateManager {
      * APK installation if a newer version is published.
      * Avoids infinite update prompt loops via semantic/integer version comparison and 24h throttling.
      */
-    suspend fun checkForUpdates(context: Context) = withContext(Dispatchers.IO) {
+    suspend fun checkForUpdates(context: Context, force: Boolean = false) = withContext(Dispatchers.IO) {
         try {
             val url = URL("https://api.github.com/repos/MisterMoeGreen/Antigravity-Studio-App/releases/latest")
             val connection = url.openConnection() as java.net.HttpURLConnection
@@ -208,13 +208,13 @@ object InAppUpdateManager {
                     return@withContext
                 }
 
-                // Check 24-hour throttling to prevent repeated prompts on every app start
+                // Check 24-hour throttling to prevent repeated prompts on every app start (bypassed if force is true)
                 val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 val lastAttemptedTag = prefs.getString(KEY_LAST_ATTEMPTED_TAG, "")
                 val lastAttemptedTime = prefs.getLong(KEY_LAST_ATTEMPTED_TIME, 0L)
                 val now = System.currentTimeMillis()
 
-                if (lastAttemptedTag == rawTagName && (now - lastAttemptedTime) < 24 * 3600 * 1000L) {
+                if (!force && lastAttemptedTag == rawTagName && (now - lastAttemptedTime) < 24 * 3600 * 1000L) {
                     android.util.Log.d(TAG, "Update for $rawTagName already attempted recently; throttling")
                     return@withContext
                 }

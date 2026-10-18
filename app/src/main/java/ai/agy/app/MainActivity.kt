@@ -46,11 +46,7 @@ class MainActivity : AppCompatActivity() {
         val serviceIntent = Intent(this, AgyForegroundService::class.java)
         startForegroundService(serviceIntent)
 
-        // Non-blocking background check for repository updates
-        lifecycleScope.launch(Dispatchers.IO) {
-            delay(3000)
-            InAppUpdateManager.checkForUpdates(this@MainActivity)
-        }
+        // Non-blocking background check for repository updates disabled in v1.1.0 in favor of on-demand check in Settings Hub
 
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
@@ -59,6 +55,7 @@ class MainActivity : AppCompatActivity() {
             settings.allowFileAccess = false
             settings.allowContentAccess = true
             settings.mediaPlaybackRequiresUserGesture = false
+            addJavascriptInterface(AndroidAppInterface(), "AndroidApp")
 
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
@@ -144,6 +141,26 @@ class MainActivity : AppCompatActivity() {
         } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
             if (checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 requestPermissions(arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE, android.Manifest.permission.WRITE_EXTERNAL_STORAGE), 101)
+            }
+        }
+    }
+
+    inner class AndroidAppInterface {
+        @JavascriptInterface
+        fun triggerUpdateCheck(force: Boolean) {
+            lifecycleScope.launch(Dispatchers.IO) {
+                InAppUpdateManager.checkForUpdates(this@MainActivity, force = force)
+            }
+        }
+
+        @JavascriptInterface
+        fun installUpdate(apkUrl: String) {
+            lifecycleScope.launch(Dispatchers.IO) {
+                InAppUpdateManager.downloadAndInstall(this@MainActivity, apkUrl) { progress ->
+                    runOnUiThread {
+                        webView.evaluateJavascript("window.onUpdateProgress && window.onUpdateProgress($progress);", null)
+                    }
+                }
             }
         }
     }

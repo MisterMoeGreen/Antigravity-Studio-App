@@ -101,6 +101,8 @@ declare -A TOOL_MAP=(
   ["git"]="libgit.so"
   ["rg"]="librg.so"
   ["curl"]="libcurl_bin.so"
+  ["ssh"]="libssh_bin.so"
+  ["ssh-keygen"]="libssh_keygen.so"
 )
 
 for tool in "${!TOOL_MAP[@]}"; do
@@ -153,6 +155,7 @@ cp -L "${HOME}/.agy-ui/server.py" "${STAGING_DIR}/share/agy-ui/server.py"
 cp -L "${HOME}/.agy-ui/icon-192.png" "${STAGING_DIR}/share/agy-ui/icon-192.png" 2>/dev/null || true
 cp -L "${HOME}/.agy-ui/icon-512.png" "${STAGING_DIR}/share/agy-ui/icon-512.png" 2>/dev/null || true
 cp -L "${HOME}/.agy-ui/manifest.json" "${STAGING_DIR}/share/agy-ui/manifest.json" 2>/dev/null || true
+cp -L "${HOME}/.agy-ui/default_app_prompt.md" "${STAGING_DIR}/share/agy-ui/default_app_prompt.md" 2>/dev/null || true
 
 PY_DIR=""
 for d in "${SOURCE_PREFIX}/lib/python3."*; do
@@ -199,6 +202,7 @@ queue=()
 for elf in "${JNI_DIR}"/libbash.so "${JNI_DIR}"/libbusybox.so "${JNI_DIR}"/libgit.so \
            "${JNI_DIR}"/libgit_remote_https.so "${JNI_DIR}"/librg.so \
            "${JNI_DIR}"/libcurl_bin.so "${JNI_DIR}"/libpython3_bin.so \
+           "${JNI_DIR}"/libssh_bin.so "${JNI_DIR}"/libssh_keygen.so \
            "${JNI_DIR}"/libpyext_*.so; do
   [ -f "$elf" ] && queue+=("$elf")
 done

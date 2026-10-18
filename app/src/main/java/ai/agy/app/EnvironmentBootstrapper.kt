@@ -27,7 +27,9 @@ object EnvironmentBootstrapper {
         "python3.14" to "libpython3_bin.so",
         "python3.12" to "libpython3_bin.so",
         "python" to "libpython3_bin.so",
-        "env" to "libbusybox.so"
+        "env" to "libbusybox.so",
+        "ssh" to "libssh_bin.so",
+        "ssh-keygen" to "libssh_keygen.so"
     )
 
     private val GIT_CORE_SYMLINKS = mapOf(
@@ -184,6 +186,19 @@ object EnvironmentBootstrapper {
                 backupDest.parentFile?.mkdirs()
                 appTokenFile.copyTo(backupDest, overwrite = true)
             }
+        } catch (_: Exception) {}
+
+        // 5. Seed and synchronize default_app_prompt.md -> ~/.gemini/config/GEMINI.md
+        try {
+            val geminiConfigDir = File(homeDir, ".gemini/config")
+            val geminiRulesDir = File(geminiConfigDir, "rules")
+            geminiRulesDir.mkdirs()
+            val geminiMd = File(geminiConfigDir, "GEMINI.md")
+            val defaultPromptAsset = File(usrDir, "share/agy-ui/default_app_prompt.md")
+            if (defaultPromptAsset.exists()) {
+                defaultPromptAsset.copyTo(geminiMd, overwrite = true)
+            }
+            createOrUpdateSymlink(File(homeDir, ".gemini/GEMINI.md"), geminiMd.absolutePath)
         } catch (_: Exception) {}
     }
 
