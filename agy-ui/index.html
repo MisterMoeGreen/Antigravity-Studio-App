@@ -2867,7 +2867,6 @@
               <div class="settings-menu-title">Package Manager</div>
               <div class="settings-menu-desc">Alpine Linux container packages & runtimes</div>
             </div>
-            <span class="settings-menu-badge" id="packagesMenuBadge" style="display:none;font-size:11px;padding:2px 8px;border-radius:12px;background:var(--bg-tertiary);color:var(--text-secondary);margin-right:8px;"></span>
             <svg class="settings-menu-chevron fa-icon" viewBox="0 0 320 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg>
           </div>
 
@@ -3053,6 +3052,7 @@
               <div class="updates-progress-fill" id="updateProgressBar"></div>
             </div>
           </div>
+        </div>
       </div>
     </div>
 
@@ -6605,7 +6605,6 @@
       const packagesEmptyState = document.getElementById('packagesEmptyState');
       const packagesTotalSize = document.getElementById('packagesTotalSize');
       const packagesCount = document.getElementById('packagesCount');
-      const packagesMenuBadge = document.getElementById('packagesMenuBadge');
       const btnUpdateAllPackages = document.getElementById('btnUpdateAllPackages');
       const btnOpenInstallPackageModal = document.getElementById('btnOpenInstallPackageModal');
       const btnOpenInstallPackageTop = document.getElementById('btnOpenInstallPackageTop');
@@ -6691,15 +6690,6 @@
 
         if (packagesTotalSize) packagesTotalSize.textContent = `${totalMb} MB`;
         if (packagesCount) packagesCount.textContent = `${pkgs.length}`;
-
-        if (packagesMenuBadge) {
-          if (pkgs.length > 0) {
-            packagesMenuBadge.style.display = 'inline-block';
-            packagesMenuBadge.textContent = `${pkgs.length} pkgs • ${totalMb} MB`;
-          } else {
-            packagesMenuBadge.style.display = 'none';
-          }
-        }
 
         if (!packagesListContainer) return;
         packagesListContainer.innerHTML = '';
