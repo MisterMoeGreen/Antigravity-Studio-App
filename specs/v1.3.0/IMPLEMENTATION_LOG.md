@@ -4,12 +4,12 @@
 > **Autonomous Agent Handoff Protocol**: Any agent picking up this task MUST read this header first. Do not proceed until `LAST_COMPLETED_CRITERION` verification is confirmed and start immediately on `NEXT_PENDING_CRITERION`.
 
 - **Current Phase**: COMPLETED
-- **Last Completed Criterion**: `AC-5.4` (Version Bump to v1.3.0 & 16 KB Aligned Release APK Verification)
-- **Next Pending Criterion**: None (All Acceptance Criteria Fully Verified)
+- **Last Completed Criterion**: `AC-5.4` + `PROMPT-FIX` (Agent Directives Alignment & Dynamic Package Awareness)
+- **Next Pending Criterion**: None (All Acceptance Criteria & Alignment Audits Fully Verified)
 - **Build Status**: RELEASE_APK_VERIFIED
 - **Active Branch**: `v1.3.0`
 - **Active Blockers / Deviations**: None
-- **Last Updated**: 2026-10-18T20:42:00Z
+- **Last Updated**: 2026-10-18T21:05:00Z
 
 ---
 
@@ -150,4 +150,18 @@
   - AC-5.2: Java OpenJDK 21 headless runtime installation and execution verified (`openjdk version "21.0.8"`).
   - AC-5.3: Native C compilation via GCC and execution of newly compiled anonymous ELF binary in writable storage verified (`ANON_ELF_EXEC_OK`).
   - AC-5.4: `version.properties` version bump verified, 16 KB segment alignment verified across all 115 native `.so` binaries in `jniLibs/arm64-v8a`, and release APK clean assembly verified (`app/build/outputs/apk/release/app-release.apk`).
+
+### Milestone v1.3.0-PROMPT-FIX — Agent Directives Alignment & Dynamic Package Awareness
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-18T21:05:00Z
+- **Artifacts Staged**:
+  - `/storage/emulated/0/Download/AntigravityStudio-v1.3.0.apk` (Release APK v1.3.0 code 12, 104 MB, SHA-256: `4666ca6010142df61459dad42b599b90721abb820f43cd460b30ad1c0c80de66`)
+  - `app/src/main/assets/usr-data.tar.zst` (Repacked with updated `default_app_prompt.md` and `server.py`)
+- **Modifications**:
+  - `agy-ui/default_app_prompt.md`: Updated Section 3 (Android & Alpine Linux Subsystem Environment), Section 4 (Execution & Toolchain Directives), and Section 6 (MCP Servers). Authoritatively instructed the agent that it operates inside a W^X-aware Alpine Linux container with `apk` package management (`apk add --no-cache nodejs npm`, `apk add gcc`, etc.), that native execution and JIT runtimes are unrestricted, and explicitly prohibited refusing requests to install Node.js, npm, or other packages.
+  - `agy-ui/server.py`: Updated MCP AI setup prompt at line 4477 to include `node`/`npx` as supported stdio runtimes via `apk add`.
+  - `app/src/main/java/ai/agy/app/EnvironmentBootstrapper.kt`: Enforced `outFile.setWritable(true, false)` on extracted files and directories in `extractZstdTarAsset`.
+  - `version.properties`: Bumped `VERSION_CODE=12` to ensure the release APK is recognized as a clean update by Android package manager.
+  - `~/.gemini/config/GEMINI.md` and `~/.gemini/GEMINI.md`: Synchronized active directives in local environment.
+
 

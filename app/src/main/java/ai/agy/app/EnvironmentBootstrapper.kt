@@ -292,6 +292,7 @@ object EnvironmentBootstrapper {
                         }
                         if (entry.isDirectory) {
                             outFile.mkdirs()
+                            outFile.setWritable(true, false)
                         } else if (entry.isSymbolicLink) {
                             createOrUpdateSymlink(outFile, entry.linkName)
                         } else {
@@ -299,6 +300,7 @@ object EnvironmentBootstrapper {
                             FileOutputStream(outFile).use { out ->
                                 tarIn.copyTo(out)
                             }
+                            outFile.setWritable(true, false)
                             if ((entry.mode and 0b001000000) != 0) {
                                 outFile.setExecutable(true, false)
                             }

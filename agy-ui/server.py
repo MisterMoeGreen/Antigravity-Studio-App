@@ -4474,7 +4474,7 @@ class AgyWebServer:
                 f"Environment Context:\n"
                 f"- Config path: ~/.gemini/config/mcp_config.json (must have 0600 permissions).\n"
                 f"- CLI tool: `agy mcp` (run `agy mcp --help` and `agy mcp add --help` to inspect exact flags). Always pass `--type http` for remote URLs or `--type stdio` for local commands.\n"
-                f"- Available local runtimes for Stdio MCP servers: `python3` (Python 3.14), `bash`, `curl`, `git`, `busybox`. Note that `node`/`npx` and `docker` are NOT pre-installed in this Android sandbox; prefer Streamable HTTP (`--type http`) or Python-based (`python3`) MCP servers.\n"
+                f"- Available local runtimes for Stdio MCP servers: `python3` (Python 3.14), `node`/`npx` (installable on demand via `apk add --no-cache nodejs npm`), `bash`, `curl`, `git`, `busybox`. Note that `docker` is NOT supported in this Android sandbox; prefer Streamable HTTP (`--type http`) or local Python/Node MCP servers.\n"
                 f"- Pre-configured environment API keys available: {keys_hint}.\n\n"
                 f"Please configure this server, verify ~/.gemini/config/mcp_config.json is valid JSON with 0600 permissions, and test readiness with `agy mcp list`."
             )
