@@ -195,3 +195,23 @@
 
 
 
+
+### Milestone v1.3.0-PHASE-6-ARGON-AUDIT — Argon Audit Review & Spec Hardening
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-18T21:42:00Z
+- **Branch**: `v1.3.0`
+- **Audit Tool**: `gemini-4-argon` (`--thinking-level high`, 5,516 input tokens, 6,970 output tokens)
+- **Verdict**: **NEEDS REVISION** $\to$ **AMENDED & APPROVED**
+- **Key Findings & Hardening Applied**:
+  - `AUD-06-01` (FATAL): Eliminated shell string interpolation in package mutations. Added strict regex validation (`^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,127}$`) and direct `asyncio.create_subprocess_exec` using `argv` arrays with `--`.
+  - `AUD-06-02` (CRITICAL): Defined immutable `PROTECTED_PACKAGES` set blocking removal of essential Alpine packages (`musl`, `libcrypto3`, `libssl3`, `ca-certificates-bundle`, `alpine-baselayout-data`, `apk-tools`, `busybox`, etc.).
+  - `AUD-06-03` (CRITICAL): Serialized mutations with `APK_MUTATION_LOCK = asyncio.Lock()`, added `--wait 30` to avoid `/lib/apk/db/lock` collisions with agent CLI turns, and bounded execution with 180s timeout.
+  - `AUD-06-04` (HIGH): Fixed `/etc/apk/world` constraint stripping (`re.split(r"[@=<>~]", line)[0]`), accurate `total_size_mb` calculation summing all non-base packages in `/lib/apk/db/installed`, dependency rollups for meta-packages (e.g. `build-base`), and reverse-dependency retention checks.
+  - `AUD-06-05` (HIGH): Dynamically resolved paths via `get_apk_bin()` and `get_rootfs_path()`, and unified single PRoot lock acquisition via `apk upgrade --update-cache`.
+  - `AUD-06-06` (HIGH): Protected active sessions from unwarned resets, sanitized `package_query`, and instructed agent to extract clean package names from `ask_question` options.
+  - `AUD-06-07` (MEDIUM): Added server-to-client WebSocket frame contracts `package_mutation_status` and `package_mutation_result`.
+  - `AUD-06-08` (LOW): Updated preset chips to practical developer toolchain bundles (`nodejs npm`, `build-base`, `python3 py3-pip`, `rust cargo`), added empty-state UI, and mobile safe-area insets.
+  - Added Acceptance Criterion `AC-6.6` to formal test suite.
+- **Files Updated**:
+  - `specs/v1.3.0/06-package-manager-ui.md`
+  - `specs/v1.3.0/OVERVIEW_AND_IMPLEMENTATION_GUIDE.md`
