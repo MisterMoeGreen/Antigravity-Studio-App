@@ -711,7 +711,7 @@ def resolve_safe_skill_dir(target_path: str, allowed_roots: list[str]) -> str:
     raise PermissionError(f"Path '{target_path}' is outside allowed mutable skill directories")
 
 
-def discover_skills(workspace_dir: Optional[str] = None) -> list[dict[str, Any]]:
+def discover_skills(workspace_dir: Optional[str] = None, include_builtin: bool = False) -> list[dict[str, Any]]:
     skills = []
     seen_names = set()
 
@@ -756,7 +756,7 @@ def discover_skills(workspace_dir: Optional[str] = None) -> list[dict[str, Any]]
                         logger.debug("Skipping invalid workspace skill %s: %s", d.name, exc)
 
     # 3. Builtin Skills: ~/.gemini/antigravity-cli/builtin/skills/
-    if BUILTIN_SKILLS_DIR.exists():
+    if include_builtin and BUILTIN_SKILLS_DIR.exists():
         for d in sorted(BUILTIN_SKILLS_DIR.iterdir()):
             if d.is_dir() and (d / "SKILL.md").exists():
                 try:
