@@ -300,11 +300,54 @@ def get_user_prompt_data() -> dict[str, Any]:
     }
 
 
+def sync_gemini_md_prompt() -> None:
+    """
+    Synchronizes default_app_prompt.md and user_instructions.md into ~/.gemini/config/GEMINI.md.
+    Ensures that libagy.so loads both the mobile directives and the user's custom instructions
+    into RULE[user_global] on every turn.
+    """
+    base_prompt = ""
+    app_prompt_asset = APP_DIR / "default_app_prompt.md"
+    if app_prompt_asset.exists():
+        try:
+            base_prompt = app_prompt_asset.read_text(encoding="utf-8").strip()
+        except Exception as exc:
+            logger.warning("Could not read default_app_prompt.md: %s", exc)
+
+    if not base_prompt and DEFAULT_APP_PROMPT_FILE.exists():
+        try:
+            raw = DEFAULT_APP_PROMPT_FILE.read_text(encoding="utf-8").strip()
+            if "\n\n# User Custom Instructions" in raw:
+                base_prompt = raw.split("\n\n# User Custom Instructions")[0].strip()
+            else:
+                base_prompt = raw
+        except Exception:
+            pass
+
+    user_instructions = ""
+    if USER_INSTRUCTIONS_FILE.exists():
+        try:
+            user_instructions = USER_INSTRUCTIONS_FILE.read_text(encoding="utf-8").strip()
+        except Exception as exc:
+            logger.warning("Could not read user_instructions.md: %s", exc)
+
+    combined = base_prompt
+    if user_instructions:
+        combined += f"\n\n# User Custom Instructions\n\n{user_instructions}\n"
+
+    try:
+        atomic_write_secure(str(DEFAULT_APP_PROMPT_FILE), combined, mode=0o644)
+        logger.info("Synchronized GEMINI.md with user instructions (%d bytes)", len(combined.encode("utf-8")))
+    except Exception as exc:
+        logger.warning("Failed to sync GEMINI.md: %s", exc)
+
+
 def save_user_prompt_data(content: str) -> dict[str, Any]:
     encoded = content.encode("utf-8")
     if len(encoded) > 24000:
         raise ValueError("Prompt exceeds maximum allowed size of 24,000 bytes")
     bytes_written = atomic_write_secure(str(USER_INSTRUCTIONS_FILE), content, mode=0o600)
+    sync_gemini_md_prompt()
     return {"status": "ok", "bytes": bytes_written}
 
 
@@ -677,7 +720,7 @@ def discover_skills(workspace_dir: Optional[str] = None) -> list[dict[str, Any]]
                     skills.append({
                         "name": meta["name"],
                         "description": meta["description"],
-                        "scope": "Global",
+                        "scope": "global",
                         "path": str(d / "SKILL.md"),
                         "dir_path": str(d),
                         "is_builtin": False,
@@ -697,7 +740,7 @@ def discover_skills(workspace_dir: Optional[str] = None) -> list[dict[str, Any]]
                         skills.append({
                             "name": meta["name"],
                             "description": meta["description"],
-                            "scope": "Workspace",
+                            "scope": "workspace",
                             "path": str(d / "SKILL.md"),
                             "dir_path": str(d),
                             "is_builtin": False,
@@ -716,7 +759,7 @@ def discover_skills(workspace_dir: Optional[str] = None) -> list[dict[str, Any]]
                         skills.append({
                             "name": meta["name"],
                             "description": meta["description"],
-                            "scope": "Builtin",
+                            "scope": "builtin",
                             "path": str(d / "SKILL.md"),
                             "dir_path": str(d),
                             "is_builtin": True,
@@ -4805,6 +4848,7 @@ class AgyWebServer:
 
 
 async def main() -> None:
+    sync_gemini_md_prompt()
     app = AgyWebServer()
     stop_event = asyncio.Event()
 

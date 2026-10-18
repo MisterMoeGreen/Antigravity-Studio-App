@@ -195,8 +195,28 @@ object EnvironmentBootstrapper {
             geminiRulesDir.mkdirs()
             val geminiMd = File(geminiConfigDir, "GEMINI.md")
             val defaultPromptAsset = File(usrDir, "share/agy-ui/default_app_prompt.md")
-            if (defaultPromptAsset.exists()) {
-                defaultPromptAsset.copyTo(geminiMd, overwrite = true)
+            val userInstructionsFile = File(geminiRulesDir, "user_instructions.md")
+
+            var basePrompt = if (defaultPromptAsset.exists()) {
+                defaultPromptAsset.readText(Charsets.UTF_8).trim()
+            } else if (geminiMd.exists()) {
+                val raw = geminiMd.readText(Charsets.UTF_8).trim()
+                if (raw.contains("\n\n# User Custom Instructions")) {
+                    raw.substringBefore("\n\n# User Custom Instructions").trim()
+                } else {
+                    raw
+                }
+            } else ""
+
+            if (userInstructionsFile.exists()) {
+                val userText = userInstructionsFile.readText(Charsets.UTF_8).trim()
+                if (userText.isNotEmpty()) {
+                    basePrompt += "\n\n# User Custom Instructions\n\n$userText\n"
+                }
+            }
+
+            if (basePrompt.isNotEmpty()) {
+                geminiMd.writeText(basePrompt, Charsets.UTF_8)
             }
             createOrUpdateSymlink(File(homeDir, ".gemini/GEMINI.md"), geminiMd.absolutePath)
         } catch (_: Exception) {}

@@ -1127,7 +1127,7 @@
       background: rgba(4, 7, 14, 0.55);
       backdrop-filter: blur(2px);
       -webkit-backdrop-filter: blur(2px);
-      z-index: 65;
+      z-index: 1100;
       opacity: 0;
       pointer-events: none;
       transition: opacity 0.2s ease;
@@ -1322,7 +1322,7 @@
       background: var(--bg-surface);
       border-top: 1px solid var(--border-subtle);
       border-radius: 20px 20px 0 0;
-      z-index: 70;
+      z-index: 1200;
       max-height: 70vh;
       display: flex;
       flex-direction: column;
@@ -1622,7 +1622,7 @@
     .modal-dialog {
       position: fixed;
       inset: 0;
-      z-index: 80;
+      z-index: 1300;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -1778,7 +1778,7 @@
       font-size: 13px;
       font-weight: 500;
       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-      z-index: 999;
+      z-index: 2000;
       opacity: 0;
       pointer-events: none;
       transition: all 0.22s cubic-bezier(0.22, 1, 0.36, 1);
@@ -3828,6 +3828,13 @@
 
           case 'user_prompt_saved':
           case 'prompts_saved':
+            if (btnSavePrompts) {
+              btnSavePrompts.disabled = false;
+              btnSavePrompts.textContent = 'Saved ✓';
+              setTimeout(() => {
+                if (btnSavePrompts) btnSavePrompts.textContent = 'Save';
+              }, 1600);
+            }
             showToast('Custom instructions saved');
             break;
 
@@ -5356,6 +5363,8 @@
       if (btnSavePrompts) {
         btnSavePrompts.addEventListener('click', () => {
           const val = txtUserPrompt ? txtUserPrompt.value : '';
+          btnSavePrompts.disabled = true;
+          btnSavePrompts.textContent = 'Saving...';
           sendWs({
             type: 'save_user_prompt',
             user_prompt: val,
@@ -5732,8 +5741,14 @@
         skillsList.innerHTML = '';
 
         const filtered = allDiscoveredSkills.filter(s => {
-          if (currentSkillFilter === 'global') return s.scope === 'global';
-          if (currentSkillFilter === 'workspace') return s.scope === 'workspace';
+          const sScope = (s.scope || '').toLowerCase();
+          const isBuiltin = Boolean(s.is_builtin || sScope === 'builtin');
+          if (currentSkillFilter === 'global') {
+            return sScope === 'global' || isBuiltin;
+          }
+          if (currentSkillFilter === 'workspace') {
+            return sScope === 'workspace' && !isBuiltin;
+          }
           return true;
         });
 
@@ -5745,20 +5760,22 @@
         filtered.forEach(s => {
           const card = document.createElement('div');
           card.className = 'skill-card';
+          const sScope = (s.scope || '').toLowerCase();
+          const isBuiltin = Boolean(s.is_builtin || sScope === 'builtin');
           let badgeClass = 'badge-global';
-          if (s.scope === 'workspace') badgeClass = 'badge-workspace';
-          if (s.scope === 'builtin') badgeClass = 'badge-builtin';
+          if (sScope === 'workspace') badgeClass = 'badge-workspace';
+          if (isBuiltin) badgeClass = 'badge-builtin';
 
           card.innerHTML = `
             <div class="card-top-row">
-              <div class="card-main-title">${escapeHtml(s.name)} <span class="card-badge ${badgeClass}">${escapeHtml(s.scope)}</span></div>
+              <div class="card-main-title">${escapeHtml(s.name)} <span class="card-badge ${badgeClass}">${escapeHtml(isBuiltin ? 'builtin' : s.scope)}</span></div>
             </div>
             <div class="card-meta-text" style="color:var(--text-secondary);font-family:var(--font-sans);font-size:12px;line-height:1.4;">${escapeHtml(s.description || 'No description provided')}</div>
             <div class="card-actions-row">
               <button class="card-action-btn" data-action="read">
                 ${faIcon('book-open', '', 'width:12px;height:12px;')} Read
               </button>
-              ${s.scope !== 'builtin' ? `
+              ${!isBuiltin ? `
               <button class="card-action-btn" data-action="edit">
                 ${faIcon('pen-to-square', '', 'width:12px;height:12px;')} Edit
               </button>
