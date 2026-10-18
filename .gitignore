@@ -19,3 +19,9 @@ antigravity-oauth-token
 # APK artifacts (distributed via GitHub Releases)
 *.apk
 AntigravityStudio.apk
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.log

@@ -1,0 +1,169 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# =============================================================================
+# agy-web: One-Command Launcher for Antigravity Mobile UI on Android Termux
+# Usage: agy-web [start|stop|restart|status|logs] [--no-browser|-n]
+# =============================================================================
+
+set -euo pipefail
+
+APP_DIR="${HOME}/.agy-ui"
+SERVER_SCRIPT="${APP_DIR}/server.py"
+PID_FILE="${APP_DIR}/agy-web.pid"
+LOG_FILE="${APP_DIR}/agy-web.log"
+HOST="${AGY_WEB_HOST:-127.0.0.1}"
+PORT="${AGY_WEB_PORT:-8081}"
+URL="http://${HOST}:${PORT}"
+PYTHON_BIN="/data/data/com.termux/files/usr/bin/python3"
+
+mkdir -p "${APP_DIR}"
+
+NO_BROWSER=0
+if [[ "${AGY_WEB_NO_BROWSER:-0}" == "1" ]] || [[ "${AGY_NO_BROWSER:-0}" == "1" ]]; then
+  NO_BROWSER=1
+fi
+
+ACTION=""
+for arg in "$@"; do
+  case "$arg" in
+    --no-browser|-n|--headless)
+      NO_BROWSER=1
+      ;;
+    start|stop|restart|status|logs)
+      ACTION="$arg"
+      ;;
+    -h|--help|help)
+      echo "Usage: agy-web [start|stop|restart|status|logs] [--no-browser|-n]"
+      echo ""
+      echo "Commands:"
+      echo "  start       Start UI server (auto-launches browser by default)"
+      echo "  stop        Stop running UI server and release wake-lock"
+      echo "  restart     Restart UI server"
+      echo "  status      Check if UI server is running"
+      echo "  logs        Live stream server log output"
+      echo ""
+      echo "Options:"
+      echo "  --no-browser, -n, --headless   Skip auto-launching Android browser on start"
+      exit 0
+      ;;
+  esac
+done
+
+ACTION="${ACTION:-start}"
+
+is_running() {
+  if [[ -f "${PID_FILE}" ]]; then
+    local pid
+    pid="$(cat "${PID_FILE}" 2>/dev/null || true)"
+    if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+open_browser() {
+  if command -v termux-open-url >/dev/null 2>&1; then
+    termux-open-url "${URL}"
+  elif command -v am >/dev/null 2>&1; then
+    am start -a android.intent.action.VIEW -d "${URL}" >/dev/null 2>&1 || true
+  fi
+}
+
+start_server() {
+  if is_running; then
+    local pid
+    pid="$(cat "${PID_FILE}")"
+    echo "[agy-web] Server already running (PID ${pid}) at ${URL}"
+    if [[ "${NO_BROWSER}" -eq 0 ]]; then
+      open_browser
+    fi
+    return 0
+  fi
+
+  if command -v termux-wake-lock >/dev/null 2>&1; then
+    termux-wake-lock 2>/dev/null || true
+  fi
+
+  echo "[agy-web] Starting Antigravity Mobile UI on ${URL} ..."
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "${PYTHON_BIN}" "${SERVER_SCRIPT}" </dev/null >"${LOG_FILE}" 2>&1 &
+  else
+    nohup "${PYTHON_BIN}" "${SERVER_SCRIPT}" </dev/null >"${LOG_FILE}" 2>&1 &
+  fi
+  local pid=$!
+  disown "${pid}" 2>/dev/null || true
+  echo "${pid}" > "${PID_FILE}"
+
+  # Poll /health until ready (typically < 150ms on modern ARM64 devices)
+  for _ in {1..25}; do
+    if "${PYTHON_BIN}" -c "import urllib.request; urllib.request.urlopen('${URL}/health', timeout=0.5)" >/dev/null 2>&1; then
+      if [[ "${NO_BROWSER}" -eq 0 ]]; then
+        echo "[agy-web] Ready (PID ${pid}). Opening browser..."
+        open_browser
+      else
+        echo "[agy-web] Ready (PID ${pid}) at ${URL} (browser launch skipped)"
+      fi
+      return 0
+    fi
+    sleep 0.1
+  done
+
+  echo "[agy-web] Warning: Server started (PID ${pid}), check logs via 'agy-web logs'"
+  if [[ "${NO_BROWSER}" -eq 0 ]]; then
+    open_browser
+  fi
+}
+
+stop_server() {
+  if is_running; then
+    local pid
+    pid="$(cat "${PID_FILE}")"
+    echo "[agy-web] Stopping server (PID ${pid})..."
+    kill "${pid}" 2>/dev/null || true
+    for _ in {1..25}; do
+      if kill -0 "${pid}" 2>/dev/null; then
+        sleep 0.1
+      else
+        break
+      fi
+    done
+    if kill -0 "${pid}" 2>/dev/null; then
+      kill -9 "${pid}" 2>/dev/null || true
+    fi
+    rm -f "${PID_FILE}"
+  else
+    echo "[agy-web] Server is not running."
+    rm -f "${PID_FILE}"
+  fi
+  if command -v termux-wake-unlock >/dev/null 2>&1; then
+    termux-wake-unlock 2>/dev/null || true
+  fi
+}
+
+case "${ACTION}" in
+  start)
+    start_server
+    ;;
+  stop)
+    stop_server
+    ;;
+  restart)
+    stop_server
+    sleep 0.3
+    start_server
+    ;;
+  status)
+    if is_running; then
+      echo "[agy-web] RUNNING (PID $(cat "${PID_FILE}")) -> ${URL}"
+    else
+      echo "[agy-web] STOPPED"
+    fi
+    ;;
+  logs)
+    tail -n 60 -f "${LOG_FILE}"
+    ;;
+  *)
+    echo "Usage: agy-web [start|stop|restart|status|logs] [--no-browser|-n]"
+    exit 1
+    ;;
+esac

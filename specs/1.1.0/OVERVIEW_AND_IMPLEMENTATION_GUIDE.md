@@ -181,13 +181,13 @@ sequenceDiagram
   - Verify `server.py` injects stored API keys into `proc_env` and enforces `PROTECTED_ENV_NAMES`.
   - **Verification Gate**:
     ```bash
-    grep -q 'PROTECTED_ENV_NAMES' ~/.agy-ui/server.py || grep -q 'PROTECTED_ENV_NAMES' /data/data/ai.agy.app/files/usr/share/agy-ui/server.py
+    grep -q 'PROTECTED_ENV_NAMES' agy-ui/server.py
     ```
 - [x] **AC-3.3: LLM Context Inventory Manifest Synchronization**
   - Verify `~/.gemini/config/rules/api_keys_manifest.md` is maintained without exposing raw secrets.
   - **Verification Gate**:
     ```bash
-    grep -q 'api_keys_manifest.md' ~/.agy-ui/server.py || grep -q 'api_keys_manifest.md' /data/data/ai.agy.app/files/usr/share/agy-ui/server.py
+    grep -q 'api_keys_manifest.md' agy-ui/server.py
     ```
 
 ### Phase 4: Skills Discovery, Authoring & AI Workflows
@@ -195,7 +195,7 @@ sequenceDiagram
   - Verify `server.py` scans Global (`~/.gemini/config/skills/`), Workspace, and Builtin skills.
   - **Verification Gate**:
     ```bash
-    grep -q 'discover_skills' ~/.agy-ui/server.py || grep -q 'discover_skills' /data/data/ai.agy.app/files/usr/share/agy-ui/server.py
+    grep -q 'discover_skills' agy-ui/server.py
     ```
 - [x] **AC-4.2: Zero-Dependency Frontmatter Validation Engine**
   - Verify frontmatter validator enforces lowercase kebab `name` and minimum 20-character `description` without requiring `yaml`.
@@ -221,9 +221,8 @@ sequenceDiagram
   - Verify `server.py` dispatches conversational sessions for `Create with AI` and `Edit with AI`.
   - **Verification Gate**:
     ```bash
-    grep -q 'create_skill_prompt' ~/.agy-ui/server.py || \
-    grep -q 'edit_skill_prompt' ~/.agy-ui/server.py || \
-    grep -q 'create_skill_prompt' /data/data/ai.agy.app/files/usr/share/agy-ui/server.py
+    grep -q 'create_skill_prompt' agy-ui/server.py || \
+    grep -q 'edit_skill_prompt' agy-ui/server.py
     ```
 
 ### Phase 5: Model Context Protocol (MCP) Server Integration
@@ -231,7 +230,7 @@ sequenceDiagram
   - Verify `server.py` invokes `agy mcp add` with explicit `--transport http` or `--transport stdio`.
   - **Verification Gate**:
     ```bash
-    grep -q '\-\-transport' ~/.agy-ui/server.py || grep -q '\-\-transport' /data/data/ai.agy.app/files/usr/share/agy-ui/server.py
+    grep -q '\-\-transport' agy-ui/server.py
     ```
 - [x] **AC-5.2: Streamable HTTP Header Auth & 0600 Config Permissions**
   - Verify `mcp_config.json` exists with `0600` permissions and valid JSON structure.
@@ -255,27 +254,27 @@ sequenceDiagram
   - Verify `#btnOpenSettings` exists in `index.html` top bar and drawer.
   - **Verification Gate**:
     ```bash
-    grep -q 'btnOpenSettings' ~/.agy-ui/index.html || grep -q 'btnOpenSettings' /data/data/ai.agy.app/files/usr/share/agy-ui/index.html
+    grep -q 'btnOpenSettings' agy-ui/index.html
     ```
 - [x] **AC-6.2: Settings Hub Root Menu & Sub-View Containers**
   - Verify sub-view containers exist for Prompts, SSH, API Keys, Skills, MCP, and Updates.
   - **Verification Gate**:
     ```bash
     for v in viewPrompts viewSSH viewApiKeys viewSkills viewMCP viewUpdates; do
-      grep -q "id=\"$v\"" ~/.agy-ui/index.html || grep -q "id=\"$v\"" /data/data/ai.agy.app/files/usr/share/agy-ui/index.html || exit 1
+      grep -q "id=\"$v\"" agy-ui/index.html || exit 1
     done
     ```
 - [x] **AC-6.3: Vector Iconography Standards**
   - Verify all new icons use Font Awesome Free SVGs and zero emojis exist in settings code.
   - **Verification Gate**:
     ```bash
-    ! grep -P "[\x{1F300}-\x{1F9FF}]" ~/.agy-ui/index.html | grep -q 'view'
+    ! grep -P "[\x{1F300}-\x{1F9FF}]" agy-ui/index.html | grep -q 'view'
     ```
 - [x] **AC-6.4: On-Demand "Check for Updates" in Settings Hub**
   - Verify Settings Hub contains on-demand update trigger `#btnCheckUpdates` and disables automatic background startup checks.
   - **Verification Gate**:
     ```bash
-    grep -q 'btnCheckUpdates' ~/.agy-ui/index.html || grep -q 'btnCheckUpdates' /data/data/ai.agy.app/files/usr/share/agy-ui/index.html
+    grep -q 'btnCheckUpdates' agy-ui/index.html
     ```
 
 ### Phase 7: Packaging, Build Verification & Acceptance Gate
