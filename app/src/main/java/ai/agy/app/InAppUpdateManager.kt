@@ -54,10 +54,32 @@ object InAppUpdateManager {
         val destFile = File(context.cacheDir, "update.apk")
         if (destFile.exists()) destFile.delete()
 
-        // 1. Download APK with progress tracking
-        val connection = URL(apkDownloadUrl).openConnection()
+        // 1. Download APK with progress tracking and redirect resolution
+        var currentUrl = apkDownloadUrl
+        var connection: java.net.HttpURLConnection
+        var redirectCount = 0
+        while (true) {
+            val u = URL(currentUrl)
+            connection = u.openConnection() as java.net.HttpURLConnection
+            connection.instanceFollowRedirects = true
+            connection.connectTimeout = 10000
+            connection.readTimeout = 15000
+            connection.setRequestProperty("User-Agent", "AntigravityStudio")
+            connection.connect()
+            val code = connection.responseCode
+            if (code == java.net.HttpURLConnection.HTTP_MOVED_PERM || code == java.net.HttpURLConnection.HTTP_MOVED_TEMP || code == 307 || code == 308) {
+                val loc = connection.getHeaderField("Location")
+                if (!loc.isNullOrBlank() && redirectCount < 5) {
+                    currentUrl = loc
+                    redirectCount++
+                    continue
+                }
+            }
+            break
+        }
+
         val totalLength = connection.contentLength
-        connection.getInputStream().use { input ->
+        connection.inputStream.use { input ->
             destFile.outputStream().use { output ->
                 val buffer = ByteArray(8192)
                 var bytesRead: Int
@@ -70,6 +92,10 @@ object InAppUpdateManager {
                     }
                 }
             }
+        }
+
+        if (destFile.length() < 100000) {
+            throw java.io.IOException("Downloaded APK file is incomplete or invalid (${destFile.length()} bytes)")
         }
 
         // 2. Commit PackageInstaller Session
@@ -208,27 +234,8 @@ object InAppUpdateManager {
                     return@withContext
                 }
 
-                // Check 24-hour throttling to prevent repeated prompts on every app start (bypassed if force is true)
-                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                val lastAttemptedTag = prefs.getString(KEY_LAST_ATTEMPTED_TAG, "")
-                val lastAttemptedTime = prefs.getLong(KEY_LAST_ATTEMPTED_TIME, 0L)
-                val now = System.currentTimeMillis()
-
-                if (!force && lastAttemptedTag == rawTagName && (now - lastAttemptedTime) < 24 * 3600 * 1000L) {
-                    android.util.Log.d(TAG, "Update for $rawTagName already attempted recently; throttling")
-                    return@withContext
-                }
-
                 if (downloadUrl != null) {
-                    android.util.Log.i(TAG, "New version detected ($rawTagName / code $remoteVersionCode > $currentVersion / code $currentCode). Starting download...")
-                    prefs.edit()
-                        .putString(KEY_LAST_ATTEMPTED_TAG, rawTagName)
-                        .putLong(KEY_LAST_ATTEMPTED_TIME, now)
-                        .apply()
-
-                    downloadAndInstall(context, downloadUrl) { progress ->
-                        android.util.Log.i(TAG, "Download progress: $progress%")
-                    }
+                    android.util.Log.i(TAG, "New version detected ($rawTagName / code $remoteVersionCode > $currentVersion / code $currentCode). Awaiting explicit user confirmation in UI.")
                 }
             }
         } catch (e: Exception) {

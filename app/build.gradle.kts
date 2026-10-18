@@ -17,10 +17,10 @@ val versionProps = Properties().apply {
 
 // 2. Resolve version parameters with CLI override support (-P) and safe fallbacks
 val resolvedVersionCode: Int = (project.findProperty("versionCode") as? String)?.toIntOrNull()
-    ?: versionProps.getProperty("VERSION_CODE", "8").toInt()
+    ?: versionProps.getProperty("VERSION_CODE", "9").toInt()
 
 val resolvedVersionName: String = (project.findProperty("versionName") as? String)
-    ?: versionProps.getProperty("VERSION_NAME", "1.1.1")
+    ?: versionProps.getProperty("VERSION_NAME", "1.1.2")
 
 val resolvedAgyVersion: String = (project.findProperty("agyVersion") as? String)
     ?: versionProps.getProperty("AGY_VERSION", "1.4.2")

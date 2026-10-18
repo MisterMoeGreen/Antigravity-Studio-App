@@ -2413,7 +2413,7 @@
     <div class="drawer-footer" id="drawerFooter">
       <div class="drawer-footer-row">
         <span>App Version</span>
-        <span class="drawer-version-val" id="appVersionText">v1.0.3</span>
+        <span class="drawer-version-val" id="appVersionText">v1.1.2</span>
       </div>
       <div class="drawer-footer-row">
         <span>AGY Runtime</span>
@@ -2772,7 +2772,7 @@
           </div>
           <div>
             <div class="updates-app-title">Antigravity Studio</div>
-            <div class="updates-app-version" id="updatesInstalledVersionText">Installed: v1.1.1 (Build 8)</div>
+            <div class="updates-app-version" id="updatesInstalledVersionText">Installed: v1.1.2 (Build 9)</div>
             <div class="card-meta-text" style="margin-top:2px;">Runtime Engine: Antigravity CLI (glibc)</div>
           </div>
         </div>
@@ -2796,7 +2796,7 @@
         <!-- Status: Up-to-Date -->
         <div class="updates-state-card" id="updatesStatusUpToDate" style="display:none;color:var(--accent-emerald);">
           <svg class="fa-icon" viewBox="0 0 448 512" style="width:24px;height:24px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M438.6 105.4c12.5 12.5 12.5 32.8 0 45.3l-256 256c-12.5 12.5-32.8 12.5-45.3 0l-128-128c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0L160 338.7 393.4 105.4c12.5-12.5 32.8-12.5 45.3 0z"/></svg>
-          <div id="updatesUpToDateMessage">Antigravity Studio is up to date (v1.1.1).</div>
+          <div id="updatesUpToDateMessage">Antigravity Studio is up to date (v1.1.2).</div>
         </div>
 
         <!-- Status: Update Available -->
@@ -2805,14 +2805,15 @@
             <svg class="fa-icon" viewBox="0 0 512 512" style="width:16px;height:16px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M288 32c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 242.7-73.4-73.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3l128 128c12.5 12.5 32.8 12.5 45.3 0l128-128c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L288 274.7 288 32zM64 352c-35.3 0-64 28.7-64 64l0 32c0 35.3 28.7 64 64 64l384 0c35.3 0 64-28.7 64-64l0-32c0-35.3-28.7-64-64-64l-64 0c-17.7 0-32 14.3-32 32s14.3 32 32 32l64 0 0 32L64 448l0-32 64 0c17.7 0 32-14.3 32-32s-14.3-32-32-32L64 352z"/></svg>
             <span id="updateRemoteTag">New Version Available</span>
           </div>
+          <div id="updateVersionComparison" style="font-size:12px;color:var(--text-secondary);margin:4px 0 8px;"></div>
           <div class="directives-box" id="updateChangelogBox" style="max-height:160px;">Release notes loading...</div>
           <button class="updates-check-btn" id="btnInstallUpdate">
             Download & Install Update
           </button>
-          <div id="updateProgressContainer" style="display:none;">
-            <div class="prompt-footer-row">
-              <span>Downloading...</span>
-              <span id="updateProgressText">0%</span>
+          <div id="updateProgressContainer" style="display:none;margin-top:10px;">
+            <div class="prompt-footer-row" style="margin-bottom:4px;">
+              <span id="updateProgressStatusText" style="font-size:12px;color:var(--text-secondary);">Downloading...</span>
+              <span id="updateProgressText" style="font-size:12px;font-weight:600;color:var(--accent-primary);">0%</span>
             </div>
             <div class="updates-progress-bar">
               <div class="updates-progress-fill" id="updateProgressBar"></div>
@@ -3652,8 +3653,10 @@
             setRuntimeStatus(msg.is_running ? 'running' : 'idle', msg.is_running ? 'Running' : 'Ready');
             if (msg.system_info) {
               if (msg.system_info.app_version) {
+                state.appVersion = msg.system_info.app_version;
                 const elApp = document.getElementById('appVersionText');
                 if (elApp) elApp.textContent = msg.system_info.app_version;
+                if (updatesInstalledVersionText) updatesInstalledVersionText.textContent = `Installed: ${msg.system_info.app_version}`;
               }
               if (msg.system_info.agy_version) {
                 const elAgy = document.getElementById('agyVersionText');
@@ -6231,9 +6234,11 @@
       const updatesStatusAvailable = document.getElementById('updatesStatusAvailable');
       const updatesUpToDateMessage = document.getElementById('updatesUpToDateMessage');
       const updateRemoteTag = document.getElementById('updateRemoteTag');
+      const updateVersionComparison = document.getElementById('updateVersionComparison');
       const updateChangelogBox = document.getElementById('updateChangelogBox');
       const btnInstallUpdate = document.getElementById('btnInstallUpdate');
       const updateProgressContainer = document.getElementById('updateProgressContainer');
+      const updateProgressStatusText = document.getElementById('updateProgressStatusText');
       const updateProgressText = document.getElementById('updateProgressText');
       const updateProgressBar = document.getElementById('updateProgressBar');
       const updatesInstalledVersionText = document.getElementById('updatesInstalledVersionText');
@@ -6241,7 +6246,7 @@
       let currentUpdateDownloadUrl = null;
 
       function initUpdatesView() {
-        const installedVer = state.appVersion || 'v1.1.1 (Build 8)';
+        const installedVer = state.appVersion || 'v1.1.2 (Build 9)';
         if (updatesInstalledVersionText) {
           updatesInstalledVersionText.textContent = `Installed: ${installedVer}`;
         }
@@ -6249,33 +6254,53 @@
 
       if (btnCheckUpdates) {
         btnCheckUpdates.addEventListener('click', () => {
+          btnCheckUpdates.disabled = true;
+          btnCheckUpdates.innerHTML = `<svg class="fa-icon fa-spin" viewBox="0 0 512 512" style="width:14px;height:14px;margin-right:6px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M48.5 224L40 224c-13.3 0-24-10.7-24-24L16 72c0-9.7 5.8-18.5 14.8-22.2s19.3-1.7 26.2 5.2L98.6 96.6c87.6-86.5 228.7-86.2 315.8 1c87.5 87.5 87.5 229.3 0 316.8s-229.3 87.5-316.8 0c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0c62.5 62.5 163.8 62.5 226.3 0s62.5-163.8 0-226.3c-62.2-62.2-162.7-62.5-225.3-1L185 183c6.9 6.9 8.9 17.2 5.2 26.2s-12.5 14.8-22.2 14.8L48.5 224z"/></svg>Checking for Updates...`;
           if (updatesStatusIdle) updatesStatusIdle.style.display = 'none';
           if (updatesStatusUpToDate) updatesStatusUpToDate.style.display = 'none';
           if (updatesStatusAvailable) updatesStatusAvailable.style.display = 'none';
           if (updatesStatusChecking) updatesStatusChecking.style.display = 'flex';
 
           sendWs({ type: 'check_for_updates', force: true });
-          if (window.AndroidApp && typeof window.AndroidApp.triggerUpdateCheck === 'function') {
-            try {
-              window.AndroidApp.triggerUpdateCheck(true);
-            } catch (_) {}
-          }
         });
       }
 
       function handleUpdateResult(msg) {
+        if (btnCheckUpdates) {
+          btnCheckUpdates.disabled = false;
+          btnCheckUpdates.innerHTML = `<svg class="fa-icon" viewBox="0 0 512 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352a144 144 0 1 0 0-288 144 144 0 1 0 0 288z"/></svg>Check for Updates`;
+        }
         if (updatesStatusChecking) updatesStatusChecking.style.display = 'none';
 
-        if (msg.has_update) {
+        if (msg.status === 'error') {
+          showToast(`Update check failed: ${msg.message || 'Network error'}`);
+          if (updatesStatusIdle) updatesStatusIdle.style.display = 'block';
+          return;
+        }
+
+        const hasUpdate = (msg.has_update === true) || (msg.up_to_date === false);
+        const curVer = msg.current_version || (state.appVersion ? state.appVersion.split(' ')[0] : 'v1.1.2');
+        const latestVer = msg.latest_version || curVer;
+
+        if (hasUpdate) {
           currentUpdateDownloadUrl = msg.download_url;
           if (updatesStatusAvailable) updatesStatusAvailable.style.display = 'flex';
-          if (updateRemoteTag) updateRemoteTag.textContent = `New Version Available: ${msg.latest_version}`;
+          if (updateRemoteTag) updateRemoteTag.textContent = `New Version Available: ${latestVer}`;
+          if (updateVersionComparison) {
+            updateVersionComparison.innerHTML = `<div style="font-size:12px;color:var(--text-secondary);margin-bottom:2px;">Current installed: <strong style="font-family:var(--font-mono);color:var(--text-primary);">${curVer}</strong> &nbsp;➔&nbsp; Newest available: <strong style="font-family:var(--font-mono);color:var(--accent-primary);">${latestVer}</strong></div>`;
+          }
           if (updateChangelogBox) updateChangelogBox.textContent = msg.changelog || 'Bug fixes, performance improvements, and model alignment updates.';
+          if (btnInstallUpdate) {
+            btnInstallUpdate.disabled = false;
+            btnInstallUpdate.style.display = 'block';
+            btnInstallUpdate.innerHTML = `<svg class="fa-icon" viewBox="0 0 512 512" style="width:14px;height:14px;margin-right:6px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M288 32c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 242.7-73.4-73.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3l128 128c12.5 12.5 32.8 12.5 45.3 0l128-128c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L288 274.7 288 32zM64 352c-35.3 0-64 28.7-64 64l0 32c0 35.3 28.7 64 64 64l384 0c35.3 0 64-28.7 64-64l0-32c0-35.3-28.7-64-64-64l-64 0c-17.7 0-32 14.3-32 32s14.3 32 32 32l64 0 0 32L64 448l0-32 64 0c17.7 0 32-14.3 32-32s-14.3-32-32-32L64 352z"/></svg>Download & Install Update`;
+          }
+          if (updateProgressContainer) updateProgressContainer.style.display = 'none';
         } else {
           if (updatesStatusUpToDate) {
             updatesStatusUpToDate.style.display = 'flex';
             if (updatesUpToDateMessage) {
-              updatesUpToDateMessage.textContent = `Antigravity Studio is up to date (${msg.current_version || 'v1.1.1'}).`;
+              updatesUpToDateMessage.innerHTML = `Antigravity Studio is up to date (<strong style="font-family:var(--font-mono);">${curVer}</strong>).<br><span style="font-size:12px;color:var(--text-secondary);margin-top:2px;display:inline-block;">Latest release is ${latestVer}</span>`;
             }
           }
         }
@@ -6283,21 +6308,46 @@
 
       if (btnInstallUpdate) {
         btnInstallUpdate.addEventListener('click', () => {
-          if (window.AndroidApp && typeof window.AndroidApp.installUpdate === 'function' && currentUpdateDownloadUrl) {
-            if (updateProgressContainer) updateProgressContainer.style.display = 'block';
-            window.AndroidApp.installUpdate(currentUpdateDownloadUrl);
-          } else if (currentUpdateDownloadUrl) {
-            window.open(currentUpdateDownloadUrl, '_blank');
-          } else {
+          if (!currentUpdateDownloadUrl) {
             showToast('No download package available for this update.');
+            return;
+          }
+          btnInstallUpdate.disabled = true;
+          btnInstallUpdate.innerHTML = `<svg class="fa-icon fa-spin" viewBox="0 0 512 512" style="width:14px;height:14px;margin-right:6px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M48.5 224L40 224c-13.3 0-24-10.7-24-24L16 72c0-9.7 5.8-18.5 14.8-22.2s19.3-1.7 26.2 5.2L98.6 96.6c87.6-86.5 228.7-86.2 315.8 1c87.5 87.5 87.5 229.3 0 316.8s-229.3 87.5-316.8 0c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0c62.5 62.5 163.8 62.5 226.3 0s62.5-163.8 0-226.3c-62.2-62.2-162.7-62.5-225.3-1L185 183c6.9 6.9 8.9 17.2 5.2 26.2s-12.5 14.8-22.2 14.8L48.5 224z"/></svg>Downloading Update...`;
+          if (updateProgressContainer) updateProgressContainer.style.display = 'block';
+          if (updateProgressStatusText) updateProgressStatusText.textContent = 'Downloading APK update package...';
+          if (updateProgressText) updateProgressText.textContent = '0%';
+          if (updateProgressBar) updateProgressBar.style.width = '0%';
+
+          if (window.AndroidApp && typeof window.AndroidApp.installUpdate === 'function') {
+            window.AndroidApp.installUpdate(currentUpdateDownloadUrl);
+          } else {
+            window.open(currentUpdateDownloadUrl, '_blank');
           }
         });
       }
 
       // Native progress receiver
       window.onUpdateProgress = function(progress) {
+        if (updateProgressContainer) updateProgressContainer.style.display = 'block';
         if (updateProgressText) updateProgressText.textContent = `${progress}%`;
         if (updateProgressBar) updateProgressBar.style.width = `${progress}%`;
+        if (progress >= 100) {
+          if (updateProgressStatusText) updateProgressStatusText.textContent = 'Launching Package Installer...';
+          if (btnInstallUpdate) {
+            btnInstallUpdate.innerHTML = `<svg class="fa-icon fa-spin" viewBox="0 0 512 512" style="width:14px;height:14px;margin-right:6px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M48.5 224L40 224c-13.3 0-24-10.7-24-24L16 72c0-9.7 5.8-18.5 14.8-22.2s19.3-1.7 26.2 5.2L98.6 96.6c87.6-86.5 228.7-86.2 315.8 1c87.5 87.5 87.5 229.3 0 316.8s-229.3 87.5-316.8 0c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0c62.5 62.5 163.8 62.5 226.3 0s62.5-163.8 0-226.3c-62.2-62.2-162.7-62.5-225.3-1L185 183c6.9 6.9 8.9 17.2 5.2 26.2s-12.5 14.8-22.2 14.8L48.5 224z"/></svg>Installing Package...`;
+          }
+        }
+      };
+
+      // Native error receiver
+      window.onUpdateError = function(errMsg) {
+        showToast(`Update failed: ${errMsg || 'Download error'}`);
+        if (updateProgressStatusText) updateProgressStatusText.textContent = `Failed: ${errMsg || 'Download error'}`;
+        if (btnInstallUpdate) {
+          btnInstallUpdate.disabled = false;
+          btnInstallUpdate.innerHTML = `<svg class="fa-icon" viewBox="0 0 512 512" style="width:14px;height:14px;margin-right:6px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M288 32c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 242.7-73.4-73.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3l128 128c12.5 12.5 32.8 12.5 45.3 0l128-128c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L288 274.7 288 32zM64 352c-35.3 0-64 28.7-64 64l0 32c0 35.3 28.7 64 64 64l384 0c35.3 0 64-28.7 64-64l0-32c0-35.3-28.7-64-64-64l-64 0c-17.7 0-32 14.3-32 32s14.3 32 32 32l64 0 0 32L64 448l0-32 64 0c17.7 0 32-14.3 32-32s-14.3-32-32-32L64 352z"/></svg>Retry Download & Install`;
+        }
       };
 
       // Standard Android Back Gesture Dispatcher

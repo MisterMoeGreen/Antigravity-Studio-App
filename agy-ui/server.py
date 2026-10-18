@@ -230,8 +230,8 @@ def get_agy_version() -> str:
 
     return _cached_agy_version or "1.4.2"
 
-APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.0.3")
-APP_BUILD = os.environ.get("AGY_APP_VERSION_CODE", "5")
+APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.1.2")
+APP_BUILD = os.environ.get("AGY_APP_VERSION_CODE", "9")
 AGY_VERSION = get_agy_version()
 
 logging.basicConfig(
@@ -893,7 +893,7 @@ async def probe_single_mcp_server(name: str) -> dict[str, Any]:
         def _do_http() -> dict[str, Any]:
             import ssl
             t0 = time.time()
-            headers = {"User-Agent": "AntigravityStudio/1.1.1", **raw_headers}
+            headers = {"User-Agent": "AntigravityStudio/1.1.2", **raw_headers}
             req = urllib.request.Request(url, headers=headers)
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
@@ -1039,13 +1039,12 @@ async def delete_mcp_server(name: str) -> dict[str, Any]:
     return {"status": "ok", "name": name}
 
 
-# 6. On-Demand Update Checks
 async def check_github_updates() -> dict[str, Any]:
-    installed_version = os.environ.get("AGY_APP_VERSION", "1.1.1")
-    installed_code = int(os.environ.get("AGY_APP_VERSION_CODE", "8"))
+    installed_version = os.environ.get("AGY_APP_VERSION", "1.1.2")
+    installed_code = int(os.environ.get("AGY_APP_VERSION_CODE", "9"))
     url = "https://api.github.com/repos/MisterMoeGreen/Antigravity-Studio-App/releases/latest"
 
-    cmd = ["curl", "-sSL", "-H", "User-Agent: AntigravityStudio", url]
+    cmd = ["curl", "-sSL", "-H", "User-Agent: AntigravityStudio/1.1.2", url]
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
@@ -1081,27 +1080,33 @@ async def check_github_updates() -> dict[str, Any]:
         elif aname.endswith(".apk") and not download_url:
             download_url = asset.get("browser_download_url")
 
-    up_to_date = True
+    has_update = False
     if remote_code and remote_code > installed_code:
-        up_to_date = False
-    elif tag_name and tag_name != installed_version:
+        has_update = True
+    elif tag_name and tag_name != installed_version.lstrip("v"):
         try:
             r_parts = [int(p) for p in tag_name.split("-")[0].split(".")]
-            l_parts = [int(p) for p in installed_version.split("-")[0].split(".")]
+            l_parts = [int(p) for p in installed_version.lstrip("v").split("-")[0].split(".")]
             max_len = max(len(r_parts), len(l_parts))
             r_parts += [0] * (max_len - len(r_parts))
             l_parts += [0] * (max_len - len(l_parts))
             if r_parts > l_parts:
-                up_to_date = False
+                has_update = True
         except Exception:
-            pass
+            if tag_name != installed_version.lstrip("v"):
+                has_update = True
+
+    up_to_date = not has_update
+    clean_latest = ("v" + tag_name) if not tag_name.startswith("v") else tag_name
+    clean_current = ("v" + installed_version.lstrip("v"))
 
     return {
         "status": "ok",
+        "has_update": has_update,
         "up_to_date": up_to_date,
-        "current_version": installed_version,
+        "current_version": clean_current,
         "current_code": installed_code,
-        "latest_version": tag_name,
+        "latest_version": clean_latest,
         "latest_code": remote_code,
         "download_url": download_url,
         "changelog": body,

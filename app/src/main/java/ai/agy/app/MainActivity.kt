@@ -162,9 +162,17 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun installUpdate(apkUrl: String) {
             lifecycleScope.launch(Dispatchers.IO) {
-                InAppUpdateManager.downloadAndInstall(this@MainActivity, apkUrl) { progress ->
+                try {
+                    InAppUpdateManager.downloadAndInstall(this@MainActivity, apkUrl) { progress ->
+                        runOnUiThread {
+                            webView.evaluateJavascript("window.onUpdateProgress && window.onUpdateProgress($progress);", null)
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("AgyMainActivity", "Failed to download and install update", e)
+                    val errMsg = org.json.JSONObject.quote(e.message ?: "Update download failed")
                     runOnUiThread {
-                        webView.evaluateJavascript("window.onUpdateProgress && window.onUpdateProgress($progress);", null)
+                        webView.evaluateJavascript("window.onUpdateError && window.onUpdateError($errMsg);", null)
                     }
                 }
             }
