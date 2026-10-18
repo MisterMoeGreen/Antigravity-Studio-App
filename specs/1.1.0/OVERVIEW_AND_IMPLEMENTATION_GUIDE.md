@@ -15,12 +15,12 @@ This implementation guide coordinates the six technical specifications in [`spec
 
 ```
 specs/1.1.0/
-├── 01-system-prompts.md      # Mobile touch directives (no terminal), SELinux interpreter rules & user instructions
+├── 01-system-prompts.md      # Mobile touch directives (no terminal), SELinux interpreter rules & App UI navigation guide
 ├── 02-ssh-and-credentials.md # OpenSSH binary staging, non-interactive ~/.ssh/config, GIT_SSH_COMMAND & key export
 ├── 03-api-keys-and-env.md    # Protected api_keys.json, system env denylist, proc_env injection & api_keys_manifest.md
 ├── 04-skills-management.md   # Skills crawler, zero-dependency frontmatter validator, path containment & AI handoff
 ├── 05-mcp-management.md      # Built-in agy mcp CLI wrappers, fast mcp_config.json listing, HTTP auth & Stdio sandbox env
-└── 06-hub-and-views-ui.md    # Settings Hub SPA view stack, animations, cards, modals & touch UX
+└── 06-hub-and-views-ui.md    # Settings Hub SPA view stack, animations, cards, modals, touch UX & on-demand update checks
 ```
 
 Execution tracking and step-by-step verification entries are recorded in:
@@ -45,20 +45,22 @@ sequenceDiagram
     Act->>Hub: Slides in Settings Hub Menu
     
     rect rgb(20, 25, 35)
-        Note over User,Hub: Credential & Prompt Setup
+        Note over User,Hub: Credential, Prompt & Update Setup
         User->>Hub: Adds API Key (GITHUB_TOKEN) & Generates SSH Key (ed25519)
         Hub->>Srv: Saves to api_keys.json (0600) & invokes ssh-keygen
         Srv->>Srv: Generates ~/.ssh/config (0600) with BatchMode yes & IdentityFile
         Srv->>Srv: Syncs ~/.gemini/config/rules/api_keys_manifest.md (0600)
         User->>Hub: Saves User Custom Prompt
         Hub->>Srv: Saves to ~/.gemini/config/rules/user_instructions.md (0600)
+        User->>Hub: Taps "Check for Updates" -> on-demand GitHub query & status
     end
 
     rect rgb(25, 30, 45)
         Note over User,Agy: Agentic Turn Execution
-        User->>Act: Prompts Agent: "Clone repo, search issues, use tools"
+        User->>Act: Prompts Agent: "How do I connect an MCP? Or clone this repo"
         Srv->>Srv: Injects api_keys.json & GIT_SSH_COMMAND into proc_env
-        Srv->>Agy: Spawns agy (discovers GEMINI.md, user_instructions.md & api_keys_manifest.md)
+        Srv->>Agy: Spawns agy (discovers GEMINI.md with App UI Navigation Map)
+        Note over Agy: LLM instructs user: "Go to Settings [⚙] → MCP Servers..."
         Agy->>OpenSSH: Git invokes ssh -F ~/.ssh/config (resolves custom keys without TTY prompt)
         Agy->>MCP: Discovers & calls tools via ~/.gemini/config/mcp_config.json
         Agy-->>Srv: Streams results & tokens over NDJSON (scrubbed with redact_secrets_from_text)
@@ -79,6 +81,8 @@ sequenceDiagram
 | **M-05** | **Zero-Dependency Skills Parser & Path Traversal** | **HIGH** | Frontmatter parser strictly verifies YAML boundary fences, lowercase kebab `name:`, and 20-char `description:` without requiring external `PyYAML`; `resolve_safe_skill_dir()` restricts CRUD strictly to child directories. |
 | **M-06** | **MCP Transports & UI Freezing** | **HIGH** | Explicitly passes `--transport http` vs `--transport stdio` in `agy mcp add`; `mcp_config.json` is read directly in Python (`< 1ms`) with masked headers/env for fast UI rendering, while `agy mcp list` runs asynchronously with an 8s timeout. |
 | **M-07** | **Mobile UI Clutter** | **HIGH** | Settings Hub uses a stacked single-page application (SPA) architecture with horizontal slide transitions, isolating complex editors from the chat view. |
+| **M-08** | **On-Demand Update Checks** | **MEDIUM** | Removes automatic startup background update prompts; adds explicit "Check for Updates" button in Settings Hub with interactive state badges and one-tap install. |
+| **M-09** | **App UI Navigation Awareness** | **HIGH** | Teaches the model the structure of the Antigravity Studio interface so it can instruct users where to configure MCP servers, SSH keys, or API tokens rather than suggesting command-line instructions. |
 
 ---
 
@@ -102,12 +106,12 @@ sequenceDiagram
     ```bash
     test -f ~/.gemini/config/GEMINI.md && grep -q 'Mobile Environment Directives' ~/.gemini/config/GEMINI.md
     ```
-- [ ] **AC-1.2: No-Terminal & Execution Directives Verification**
-  - Verify `GEMINI.md` contains strict rules against asking users to run terminal commands, enforces explicit script interpreters (`bash`, `python3`), and includes prompt-injection isolation guards.
+- [ ] **AC-1.2: No-Terminal, Execution & App UI Navigation Directives Verification**
+  - Verify `GEMINI.md` contains strict rules against asking users to run terminal commands, enforces explicit script interpreters (`bash`, `python3`), includes prompt-injection isolation guards, and provides accurate navigation guidance for Settings Hub (API Keys, SSH Keys, MCP Servers, Skills, and Updates).
   - **Verification Gate**:
     ```bash
     grep -q 'NEVER instruct or ask the user to run terminal commands' ~/.gemini/config/GEMINI.md && \
-    grep -q 'SELinux Execution' ~/.gemini/config/GEMINI.md
+    grep -q 'App UI & Settings Hub Navigation Guide' ~/.gemini/config/GEMINI.md
     ```
 - [ ] **AC-1.3: User Prompt Storage & Persistence**
   - Verify user custom instructions persist at `~/.gemini/config/rules/user_instructions.md` with `0600` permissions.
@@ -253,10 +257,10 @@ sequenceDiagram
     grep -q 'btnOpenSettings' /data/data/ai.agy.app/files/usr/share/agy-ui/index.html
     ```
 - [ ] **AC-6.2: Settings Hub Root Menu & Sub-View Containers**
-  - Verify sub-view containers exist for Prompts, SSH, API Keys, Skills, and MCP.
+  - Verify sub-view containers exist for Prompts, SSH, API Keys, Skills, MCP, and Updates.
   - **Verification Gate**:
     ```bash
-    for v in viewPrompts viewSSH viewApiKeys viewSkills viewMCP; do
+    for v in viewPrompts viewSSH viewApiKeys viewSkills viewMCP viewUpdates; do
       grep -q "id=\"$v\"" /data/data/ai.agy.app/files/usr/share/agy-ui/index.html || exit 1
     done
     ```
@@ -265,6 +269,12 @@ sequenceDiagram
   - **Verification Gate**:
     ```bash
     ! grep -P "[\x{1F300}-\x{1F9FF}]" /data/data/ai.agy.app/files/usr/share/agy-ui/index.html | grep -q 'view'
+    ```
+- [ ] **AC-6.4: On-Demand "Check for Updates" in Settings Hub**
+  - Verify Settings Hub contains on-demand update trigger `#btnCheckUpdates` and disables automatic background startup checks.
+  - **Verification Gate**:
+    ```bash
+    grep -q 'btnCheckUpdates' /data/data/ai.agy.app/files/usr/share/agy-ui/index.html
     ```
 
 ### Phase 7: Packaging, Build Verification & Acceptance Gate

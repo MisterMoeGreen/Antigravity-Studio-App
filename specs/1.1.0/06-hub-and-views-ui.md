@@ -8,6 +8,7 @@ To maintain a professional, distraction-free IDE experience, Antigravity Studio 
 1. The **Chat Viewport** remains clean and optimized for touch interactions.
 2. A single entry point opens the **Settings & Agent Hub**.
 3. Each capability runs in a **Dedicated Full-Page Sub-View** with native-feeling horizontal slide transitions, sticky headers, and full vertical scrolling.
+4. **On-Demand Update Checks**: Instead of automatically checking for updates on app startup and interrupting the user, the Settings Hub includes an on-demand **"Check for Updates"** control, giving the user full agency over updates.
 
 ---
 
@@ -26,12 +27,14 @@ stateDiagram-v2
         MenuList --> APIKeysView: Tap "API Keys"
         MenuList --> SkillsView: Tap "Skills"
         MenuList --> MCPView: Tap "MCP Servers"
+        MenuList --> UpdatesView: Tap "Check for Updates"
         
         PromptsView --> MenuList: Tap [← Back]
         SSHView --> MenuList: Tap [← Back]
         APIKeysView --> MenuList: Tap [← Back]
         SkillsView --> MenuList: Tap [← Back]
         MCPView --> MenuList: Tap [← Back]
+        UpdatesView --> MenuList: Tap [← Back]
     }
 
     SkillsView --> MainChat: Tap "✨ Create with AI" or "✨ Edit with AI"
@@ -72,7 +75,7 @@ Every sub-view inherits a standardized mobile frame:
 ### B. System Prompts View
 * **Header**: `[← Back]` | `System Prompts` | `[Save]` (active on dirty edits).
 * **Segmented Tabs**:
-  * `[ App Directives (Read-Only) ]` — Shows the built-in mobile rules.
+  * `[ App Directives (Read-Only) ]` — Shows the built-in mobile rules, sandbox paths, and App UI guide.
   * `[ User Custom Prompt ]` — User's personal prompt.
 * **Editor Controls**: Sub-tabs for `[ Edit (Markdown) ]` and `[ Preview ]`.
 * **Footer**: Live character count and estimated token consumption.
@@ -139,6 +142,32 @@ Every sub-view inherits a standardized mobile frame:
 
 ---
 
+### G. Check for Updates View (On-Demand System Update)
+
+Rather than checking for and prompting updates automatically on app startup, the Settings Hub includes an on-demand update inspection card.
+
+* **Header**: `[← Back]` | `Software Updates` | *(no action)*.
+* **Current Version Card**:
+  * App Name & Logo.
+  * Installed Version: `v1.1.0 (Build 5)`.
+  * Runtime Engine: `Antigravity CLI (glibc)`.
+* **Action Row**:
+  * Button: `[🔍 Check for Updates]` (`#btnCheckUpdates`).
+* **Interactive State Displays**:
+  1. **Idle**: *"Your app is managed manually. Tap Check for Updates to query latest releases."*
+  2. **Checking**: Spinner icon with text *"Querying GitHub releases for updates..."*.
+  3. **Up-to-Date**: Green check badge with text *"Antigravity Studio is up to date (v1.1.0)."*.
+  4. **Update Available**:
+     - Accent notification card displaying `New Version: vX.Y.Z`.
+     - Changelog snippet / Release notes.
+     - Button: `[⬇️ Download & Install Update]` (`#btnInstallUpdate`).
+     - Live progress bar (`0% - 100%`) streaming progress via Android `PackageInstaller`.
+* **Android Native Integration**:
+  - `MainActivity.kt`: Disables the automatic startup coroutine `InAppUpdateManager.checkForUpdates()`.
+  - Exposes an explicit `@JavascriptInterface fun triggerUpdateCheck(force: Boolean)` on `AndroidAppInterface` (or via WebSocket `{"type": "check_for_updates", "force": true}`) so user taps immediately trigger a fresh check bypassing 24-hour throttling.
+
+---
+
 ## 5. Mobile Ergonomics & Visual Standards
 
 1. **Touch Targets**: All buttons, cards, and toggles adhere to a minimum 44x44px touch target area.
@@ -162,3 +191,5 @@ Every sub-view inherits a standardized mobile frame:
   - Verify skills list filters across Global/Workspace scopes and rendered preview opens cleanly.
 - [ ] **AC-6.6: AI Handoff Transitions**
   - Verify `✨ Create with AI`, `✨ Edit with AI`, and `✨ Setup with AI` seamlessly return to chat and initiate active turns.
+- [ ] **AC-6.7: On-Demand "Check for Updates" in Settings Hub**
+  - Verify Settings Hub contains on-demand "Check for Updates" control, disables automatic background startup popups, reports accurate version state, and initiates download upon user confirmation.

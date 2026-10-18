@@ -4,12 +4,12 @@
 > **Autonomous Agent Handoff Protocol**: Any agent picking up this task MUST read this header first. Do not proceed until `LAST_COMPLETED_CRITERION` verification is confirmed and start immediately on `NEXT_PENDING_CRITERION`.
 
 - **Current Phase**: Phase 1 (Basic System Prompts & Mobile Alignment)
-- **Last Completed Criterion**: None (Specifications formalized)
+- **Last Completed Criterion**: None (Specifications formalized & hardened)
 - **Next Pending Criterion**: `AC-1.1` (Default App Prompt Packaging & Seeding)
 - **Build Status**: READY_FOR_IMPLEMENTATION
 - **Active Branch**: `v1.1.0`
 - **Active Blockers / Deviations**: None
-- **Last Updated**: 2026-10-18T00:30:00Z
+- **Last Updated**: 2026-10-18T10:45:00Z
 
 ---
 
@@ -18,32 +18,33 @@
 
 ### Phase 1: Basic System Prompts & Mobile Alignment
 - [ ] AC-1.1: Default App Prompt Packaging & Seeding
-- [ ] AC-1.2: No-Terminal Directives Verification
+- [ ] AC-1.2: No-Terminal, Execution & App UI Navigation Directives Verification
 - [ ] AC-1.3: User Prompt Storage & Persistence
 
 ### Phase 2: OpenSSH Toolchain Staging & SSH Key Management
-- [ ] AC-2.1: OpenSSH Binaries Staged in `jniLibs`
+- [ ] AC-2.1: OpenSSH Binaries Staged in `jniLibs` & Alignment
 - [ ] AC-2.2: Bootstrapper SSH Symlink Assembly
 - [ ] AC-2.3: In-App SSH Key Generation & Permissions
 
 ### Phase 3: API Key & Process Environment Management
 - [ ] AC-3.1: Protected Storage (`api_keys.json`)
-- [ ] AC-3.2: Process Environment Variable Injection
-- [ ] AC-3.3: LLM Context Inventory Notice
+- [ ] AC-3.2: Process Environment Variable Injection & Denylist
+- [ ] AC-3.3: LLM Context Inventory Manifest Synchronization
 
 ### Phase 4: Skills Discovery, Authoring & AI Workflows
 - [ ] AC-4.1: Skill Discovery Registry
-- [ ] AC-4.2: Frontmatter Validation Engine
+- [ ] AC-4.2: Zero-Dependency Frontmatter Validation Engine
 - [ ] AC-4.3: AI Creation & Editing Turn Handlers
 
 ### Phase 5: Model Context Protocol (MCP) Server Integration
-- [ ] AC-5.1: Native `agy mcp` Command Integration
-- [ ] AC-5.2: Streamable HTTP Header Auth
+- [ ] AC-5.1: Native `agy mcp` Command Integration with Explicit Transports
+- [ ] AC-5.2: Streamable HTTP Header Auth & 0600 Config Permissions
 
 ### Phase 6: Mobile Settings Hub & SPA Sub-View Architecture
 - [ ] AC-6.1: Top Bar & Drawer Settings Entry Points
 - [ ] AC-6.2: Settings Hub Root Menu & Sub-View Containers
 - [ ] AC-6.3: Vector Iconography Standards
+- [ ] AC-6.4: On-Demand "Check for Updates" in Settings Hub
 
 ### Phase 7: Packaging, Build Verification & Acceptance Gate
 - [ ] AC-7.1: Gradle Compilation & Version Bump
@@ -67,10 +68,6 @@
   - `specs/1.1.0/06-hub-and-views-ui.md` (top bar gear entry, SPA stacked sub-view architecture, mobile touch ergonomics, Font Awesome SVGs)
   - `specs/1.1.0/OVERVIEW_AND_IMPLEMENTATION_GUIDE.md` (master coordination guide, architecture sequence diagram, command-verified ACs)
   - `specs/1.1.0/IMPLEMENTATION_LOG.md` (quick-resume state header, AC checklist, audit trail)
-- **Handoff Notes**:
-  - All specifications are in place in the `specs/1.1.0/` directory.
-  - No git commits have been executed per user instruction.
-  - Ready for Phase 1 execution upon user prompt.
 
 ### Milestone v1.1.0-ARGON-AUDIT — Architectural Hardening & Argon Review Integration
 - **Status**: COMPLETED
@@ -84,6 +81,14 @@
   - `specs/1.1.0/04-skills-management.md` (zero-dependency frontmatter parser fallback, unified 20-character description requirement, resolve_safe_skill_dir path traversal protection, Android sandbox helper script rules)
   - `specs/1.1.0/05-mcp-management.md` (explicit transport flags in agy mcp add, decoupled fast listing with secret masking, async health probe, 0600 permissions, Stdio sandbox env injection, and no-Node/npx warning)
   - `specs/1.1.0/OVERVIEW_AND_IMPLEMENTATION_GUIDE.md` (updated mitigations table, AC-4.2 zero-dependency gate, 0600 assertions for AC-1.3 and AC-5.2)
+
+### Milestone v1.1.0-USER-SPEC-ADDITIONS — On-Demand Updates & App UI Navigation Guidance
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-18T10:45:00Z
+- **Branch**: `v1.1.0`
+- **Scope & Additions**:
+  - **On-Demand Update Inspection**: Added Section 4.G to `specs/1.1.0/06-hub-and-views-ui.md` and AC-6.4 to `OVERVIEW_AND_IMPLEMENTATION_GUIDE.md` defining an explicit "Check for Updates" control in Settings Hub, removing automatic background startup checks in `MainActivity.kt`, and providing live status feedback and one-tap install.
+  - **App UI & Navigation Map in System Prompt**: Added Section 6 to `default_app_prompt.md` in `specs/1.1.0/01-system-prompts.md`, equipping the model with an authoritative map of Settings Hub (API Keys, SSH Keys, MCP Servers, Skills, Workspaces, and Updates) so it instructs users where to navigate rather than suggesting shell commands.
 - **Handoff Notes**:
-  - All Argon review findings have been completely implemented into the specifications.
-  - No code files or git commits have been modified yet, awaiting user direction on next implementation steps.
+  - Both additions are fully integrated across specifications, guides, and criteria checklists.
+  - Ready for Phase 1 implementation.
