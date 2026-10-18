@@ -281,22 +281,8 @@ def atomic_write_secure(target_path: str, content: str, mode: int = 0o600) -> in
     return len(encoded)
 
 
-# 1. System Prompts & User Instructions
+# 1. Custom Instructions & User Prompts
 def get_user_prompt_data() -> dict[str, Any]:
-    default_prompt = ""
-    if DEFAULT_APP_PROMPT_FILE.exists():
-        try:
-            default_prompt = DEFAULT_APP_PROMPT_FILE.read_text(encoding="utf-8")
-        except Exception as exc:
-            logger.warning("Could not read GEMINI.md: %s", exc)
-    if not default_prompt:
-        app_prompt_asset = APP_DIR / "default_app_prompt.md"
-        if app_prompt_asset.exists():
-            try:
-                default_prompt = app_prompt_asset.read_text(encoding="utf-8")
-            except Exception:
-                pass
-
     content = ""
     updated_at = 0
     if USER_INSTRUCTIONS_FILE.exists():
@@ -307,7 +293,7 @@ def get_user_prompt_data() -> dict[str, Any]:
             logger.warning("Could not read user_instructions.md: %s", exc)
 
     return {
-        "default_prompt": default_prompt,
+        "user_prompt": content,
         "content": content,
         "updated_at": updated_at,
         "max_bytes": 24000,
@@ -919,7 +905,7 @@ async def delete_mcp_server(name: str) -> dict[str, Any]:
 # 6. On-Demand Update Checks
 async def check_github_updates() -> dict[str, Any]:
     installed_version = os.environ.get("AGY_APP_VERSION", "1.1.0")
-    installed_code = int(os.environ.get("AGY_APP_VERSION_CODE", "6"))
+    installed_code = int(os.environ.get("AGY_APP_VERSION_CODE", "7"))
     url = "https://api.github.com/repos/MisterMoeGreen/Antigravity-Studio-App/releases/latest"
 
     cmd = ["curl", "-sSL", "-H", "User-Agent: AntigravityStudio", url]
@@ -965,11 +951,13 @@ async def check_github_updates() -> dict[str, Any]:
         try:
             r_parts = [int(p) for p in tag_name.split("-")[0].split(".")]
             l_parts = [int(p) for p in installed_version.split("-")[0].split(".")]
+            max_len = max(len(r_parts), len(l_parts))
+            r_parts += [0] * (max_len - len(r_parts))
+            l_parts += [0] * (max_len - len(l_parts))
             if r_parts > l_parts:
                 up_to_date = False
         except Exception:
-            if tag_name != installed_version:
-                up_to_date = False
+            pass
 
     return {
         "status": "ok",
@@ -3479,20 +3467,20 @@ class AgyWebServer:
             asyncio.create_task(self.refresh_models())
             return
 
-        # System Prompts
-        if mtype == "get_user_prompt":
+        # Custom Instructions
+        if mtype in ("get_user_prompt", "get_prompts"):
             p_data = get_user_prompt_data()
             await websocket.send(json.dumps({"type": "user_prompt_data", **p_data}))
             return
 
-        if mtype == "save_user_prompt":
-            content = str(data.get("content") or "")
+        if mtype in ("save_user_prompt", "save_prompts"):
+            content = str(data.get("content") or data.get("user_prompt") or "")
             try:
                 res = save_user_prompt_data(content)
                 await websocket.send(json.dumps({"type": "user_prompt_saved", **res}))
                 await self.broadcast({
                     "type": "system_card",
-                    "title": "System Prompt Saved",
+                    "title": "Custom Instructions Saved",
                     "markdown": f"Custom user instructions saved ({res['bytes']} bytes).",
                     "level": "info",
                 })

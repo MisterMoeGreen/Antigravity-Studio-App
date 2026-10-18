@@ -1626,11 +1626,12 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 20px;
+      padding: calc(20px + var(--safe-top)) 20px calc(20px + var(--safe-bottom)) 20px;
       background: rgba(4, 7, 14, 0.72);
       backdrop-filter: blur(4px);
       -webkit-backdrop-filter: blur(4px);
       animation: modalFadeIn 0.15s ease-out;
+      box-sizing: border-box;
     }
     @keyframes modalFadeIn {
       from { opacity: 0; }
@@ -1869,15 +1870,16 @@
       transform: translateX(-30%);
     }
     .subview-header {
-      height: 56px;
+      min-height: calc(56px + var(--safe-top));
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 14px;
+      padding: calc(8px + var(--safe-top)) 14px 10px;
       border-bottom: 1px solid var(--border-subtle);
       background: var(--bg-surface);
       flex-shrink: 0;
       gap: 10px;
+      box-sizing: border-box;
     }
     .subview-title {
       font-weight: 600;
@@ -1920,10 +1922,11 @@
       flex: 1;
       overflow-y: auto;
       -webkit-overflow-scrolling: touch;
-      padding: 14px;
+      padding: 14px 14px calc(24px + var(--safe-bottom)) 14px;
       display: flex;
       flex-direction: column;
       gap: 12px;
+      box-sizing: border-box;
     }
     .settings-menu-group {
       display: flex;
@@ -2058,7 +2061,7 @@
       white-space: pre-wrap;
       word-break: break-word;
     }
-    .prompt-textarea {
+    .settings-prompt-textarea {
       width: 100%;
       min-height: 260px;
       background: var(--bg-surface);
@@ -2073,7 +2076,7 @@
       box-sizing: border-box;
       outline: none;
     }
-    .prompt-textarea:focus {
+    .settings-prompt-textarea:focus {
       border-color: var(--accent-primary);
     }
     .prompt-preview {
@@ -2594,14 +2597,14 @@
           Configure mobile system prompts, developer SSH keys, API credentials, custom skills, and MCP servers.
         </div>
         <div class="settings-menu-group">
-          <!-- System Prompts -->
+          <!-- Custom Instructions -->
           <div class="settings-menu-item" data-target="viewPrompts">
             <div class="settings-menu-icon">
               <svg class="fa-icon" viewBox="0 0 384 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M64 0C28.7 0 0 28.7 0 64L0 448c0 35.3 28.7 64 64 64l256 0c35.3 0 64-28.7 64-64l0-288-128 0c-17.7 0-32-14.3-32-32L224 0 64 0zM256 0l0 128 128 0L256 0zM112 256l160 0c8.8 0 16 7.2 16 16s-7.2 16-16 16l-160 0c-8.8 0-16-7.2-16-16s7.2-16 16-16zm0 64l160 0c8.8 0 16 7.2 16 16s-7.2 16-16 16l-160 0c-8.8 0-16-7.2-16-16s7.2-16 16-16z"/></svg>
             </div>
             <div class="settings-menu-info">
-              <div class="settings-menu-title">System Prompts</div>
-              <div class="settings-menu-desc">App directives & user instructions</div>
+              <div class="settings-menu-title">Custom Instructions</div>
+              <div class="settings-menu-desc">User prompt instructions</div>
             </div>
             <svg class="settings-menu-chevron fa-icon" viewBox="0 0 320 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg>
           </div>
@@ -2669,37 +2672,28 @@
       </div>
     </div>
 
-    <!-- View 1: System Prompts -->
+    <!-- View 1: Custom Instructions -->
     <div class="settings-subview" id="viewPrompts">
       <div class="subview-header">
         <button class="icon-btn subview-back-btn" data-back="viewPrompts" title="Back to menu">
           <svg class="fa-icon" viewBox="0 0 448 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M9.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.2 288 416 288c17.7 0 32-14.3 32-32s-14.3-32-32-32l-306.7 0L214.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg>
         </button>
-        <div class="subview-title">System Prompts</div>
+        <div class="subview-title">Custom Instructions</div>
         <button class="subview-action-btn primary" id="btnSavePrompts">Save</button>
       </div>
       <div class="subview-body">
-        <div class="prompts-tab-strip">
-          <button class="prompts-tab-btn active" id="tabBtnDirectives">App Directives</button>
-          <button class="prompts-tab-btn" id="tabBtnUserPrompt">User Prompt</button>
+        <div class="settings-info-banner">
+          Custom persistent instructions for the agent (persisted in ~/.gemini/config/rules/user_instructions.md).
         </div>
 
-        <!-- App Directives Tab -->
-        <div id="promptsDirectivesSection" style="display:flex;flex-direction:column;gap:8px;">
-          <div class="settings-info-banner">
-            Read-only mobile system prompt directives configured at build-time. Includes SELinux interpreter rules and UI navigation mappings.
-          </div>
-          <div class="directives-box" id="directivesContent">Loading directives...</div>
-        </div>
-
-        <!-- User Prompt Tab -->
-        <div id="promptsUserSection" style="display:none;flex-direction:column;gap:10px;">
+        <!-- User Prompt Section -->
+        <div id="promptsUserSection" style="display:flex;flex-direction:column;gap:10px;">
           <div class="prompts-tab-strip" style="max-width:200px;">
             <button class="prompts-tab-btn active" id="tabBtnPromptEdit">Edit</button>
             <button class="prompts-tab-btn" id="tabBtnPromptPreview">Preview</button>
           </div>
           <div id="promptEditorContainer">
-            <textarea class="prompt-textarea" id="txtUserPrompt" placeholder="Add custom agent instructions (persisted in ~/.gemini/config/rules/user_instructions.md)..."></textarea>
+            <textarea class="settings-prompt-textarea" id="txtUserPrompt" placeholder="Add custom agent instructions (persisted in ~/.gemini/config/rules/user_instructions.md)..."></textarea>
           </div>
           <div id="promptPreviewContainer" style="display:none;">
             <div class="prompt-preview" id="userPromptPreview"></div>
@@ -2798,7 +2792,7 @@
           </div>
           <div>
             <div class="updates-app-title">Antigravity Studio</div>
-            <div class="updates-app-version" id="updatesInstalledVersionText">Installed: v1.1.0 (Build 5)</div>
+            <div class="updates-app-version" id="updatesInstalledVersionText">Installed: v1.1.0 (Build 7)</div>
             <div class="card-meta-text" style="margin-top:2px;">Runtime Engine: Antigravity CLI (glibc)</div>
           </div>
         </div>
@@ -2953,7 +2947,7 @@
           </div>
         </div>
         <label style="font-size:11px;color:var(--text-secondary);margin-top:4px;">SKILL.md Markdown Content (YAML Frontmatter required):</label>
-        <textarea id="txtSkillContent" class="prompt-textarea" style="min-height:280px;"></textarea>
+        <textarea id="txtSkillContent" class="settings-prompt-textarea" style="min-height:280px;"></textarea>
       </div>
       <div class="modal-footer">
         <button class="modal-btn secondary" id="btnCancelSkillEdit">Cancel</button>
@@ -3016,7 +3010,7 @@
             <label style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Endpoint URL:</label>
             <input type="url" id="inputMCPUrl" class="search-input" placeholder="https://api.example.com/mcp" />
             <label style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Headers (JSON object or header:value):</label>
-            <textarea id="txtMCPHeaders" class="prompt-textarea" style="min-height:80px;" placeholder='{"Authorization": "Bearer $TOKEN"}'></textarea>
+            <textarea id="txtMCPHeaders" class="settings-prompt-textarea" style="min-height:80px;" placeholder='{"Authorization": "Bearer $TOKEN"}'></textarea>
           </div>
           <div id="mcpStdioFields" style="display:none;">
             <label style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Command (must be executable interpreter):</label>
@@ -3024,7 +3018,7 @@
             <label style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Arguments (comma or space separated):</label>
             <input type="text" id="inputMCPArgs" class="search-input" placeholder="/data/data/.../script.py" />
             <label style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Environment Variables (JSON object):</label>
-            <textarea id="txtMCPEnv" class="prompt-textarea" style="min-height:80px;" placeholder='{"API_KEY": "..."}'></textarea>
+            <textarea id="txtMCPEnv" class="settings-prompt-textarea" style="min-height:80px;" placeholder='{"API_KEY": "..."}'></textarea>
           </div>
         </div>
 
@@ -3036,7 +3030,7 @@
           <label style="font-size:12px;color:var(--text-secondary);">Service / Tool Name:</label>
           <input type="text" id="inputAIMCPName" class="search-input" placeholder="e.g. Brave Search MCP or Context7" />
           <label style="font-size:12px;color:var(--text-secondary);">Requirements / Details:</label>
-          <textarea id="txtAIMCPDetails" class="prompt-textarea" style="min-height:100px;" placeholder="Specify needed credentials or endpoint URLs..."></textarea>
+          <textarea id="txtAIMCPDetails" class="settings-prompt-textarea" style="min-height:100px;" placeholder="Specify needed credentials or endpoint URLs..."></textarea>
         </div>
       </div>
       <div class="modal-footer">
@@ -3828,10 +3822,12 @@
           
           // Phase 6 Server Events
           case 'user_prompt_data':
+          case 'prompts_data':
             handleUserPromptData(msg);
             break;
 
           case 'user_prompt_saved':
+          case 'prompts_saved':
             showToast('Custom instructions saved');
             break;
 
@@ -5219,7 +5215,7 @@
         settingsHub.setAttribute('aria-hidden', 'false');
         navigateSettingsView('viewSettingsMenu');
         // Initial data sync
-        sendWs({ type: 'get_prompts' });
+        sendWs({ type: 'get_user_prompt' });
         sendWs({ type: 'list_ssh_keys' });
         sendWs({ type: 'list_api_keys' });
         sendWs({ type: 'list_skills' });
@@ -5266,7 +5262,7 @@
 
         // Specific loader per view
         if (targetId === 'viewPrompts') {
-          sendWs({ type: 'get_prompts' });
+          sendWs({ type: 'get_user_prompt' });
         } else if (targetId === 'viewSSH') {
           sendWs({ type: 'list_ssh_keys' });
         } else if (targetId === 'viewApiKeys') {
@@ -5316,13 +5312,9 @@
       });
 
       // ---------------------------------------------------------------------
-      // System Prompts Logic
+      // Custom Instructions Logic
       // ---------------------------------------------------------------------
-      const tabBtnDirectives = document.getElementById('tabBtnDirectives');
-      const tabBtnUserPrompt = document.getElementById('tabBtnUserPrompt');
-      const promptsDirectivesSection = document.getElementById('promptsDirectivesSection');
       const promptsUserSection = document.getElementById('promptsUserSection');
-      const directivesContent = document.getElementById('directivesContent');
       const txtUserPrompt = document.getElementById('txtUserPrompt');
       const btnSavePrompts = document.getElementById('btnSavePrompts');
       const tabBtnPromptEdit = document.getElementById('tabBtnPromptEdit');
@@ -5332,21 +5324,6 @@
       const userPromptPreview = document.getElementById('userPromptPreview');
       const promptCharCount = document.getElementById('promptCharCount');
       const promptTokenEstimate = document.getElementById('promptTokenEstimate');
-
-      if (tabBtnDirectives && tabBtnUserPrompt) {
-        tabBtnDirectives.addEventListener('click', () => {
-          tabBtnDirectives.classList.add('active');
-          tabBtnUserPrompt.classList.remove('active');
-          promptsDirectivesSection.style.display = 'flex';
-          promptsUserSection.style.display = 'none';
-        });
-        tabBtnUserPrompt.addEventListener('click', () => {
-          tabBtnUserPrompt.classList.add('active');
-          tabBtnDirectives.classList.remove('active');
-          promptsDirectivesSection.style.display = 'none';
-          promptsUserSection.style.display = 'flex';
-        });
-      }
 
       if (tabBtnPromptEdit && tabBtnPromptPreview) {
         tabBtnPromptEdit.addEventListener('click', () => {
@@ -5380,7 +5357,7 @@
         btnSavePrompts.addEventListener('click', () => {
           const val = txtUserPrompt ? txtUserPrompt.value : '';
           sendWs({
-            type: 'save_prompts',
+            type: 'save_user_prompt',
             user_prompt: val,
             content: val
           });
@@ -5388,11 +5365,9 @@
       }
 
       function handleUserPromptData(msg) {
-        if (directivesContent && msg.default_prompt) {
-          directivesContent.textContent = msg.default_prompt;
-        }
-        if (txtUserPrompt && msg.user_prompt !== undefined) {
-          txtUserPrompt.value = msg.user_prompt;
+        if (txtUserPrompt) {
+          const val = msg.user_prompt !== undefined ? msg.user_prompt : (msg.content !== undefined ? msg.content : '');
+          txtUserPrompt.value = val;
           updatePromptCounters();
         }
       }
@@ -6151,6 +6126,57 @@
       window.onUpdateProgress = function(progress) {
         if (updateProgressText) updateProgressText.textContent = `${progress}%`;
         if (updateProgressBar) updateProgressBar.style.width = `${progress}%`;
+      };
+
+      // Standard Android Back Gesture Dispatcher
+      window.handleAndroidBack = function() {
+        // 1. Dismiss any open modal dialogs
+        const modals = Array.from(document.querySelectorAll('.modal-dialog'));
+        for (let i = modals.length - 1; i >= 0; i--) {
+          const m = modals[i];
+          if (m.style.display !== 'none' && m.style.display !== '') {
+            m.style.display = 'none';
+            return true;
+          }
+        }
+
+        // 2. Dismiss any open bottom sheets
+        const openSheets = Array.from(document.querySelectorAll('.bottom-sheet.open'));
+        if (openSheets.length > 0) {
+          openSheets.forEach(sheet => sheet.classList.remove('open'));
+          const actionBd = document.getElementById('actionBackdrop');
+          if (actionBd) actionBd.classList.remove('open');
+          const bd = document.getElementById('backdrop');
+          const drawer = document.getElementById('sessionDrawer');
+          if (bd && (!drawer || !drawer.classList.contains('open'))) {
+            bd.classList.remove('open');
+          }
+          return true;
+        }
+
+        // 3. Settings Hub & Sub-Views
+        const hub = document.getElementById('settingsHub');
+        if (hub && hub.classList.contains('open')) {
+          if (typeof currentSettingsView !== 'undefined' && currentSettingsView && currentSettingsView !== 'viewSettingsMenu') {
+            goBackSettingsView(currentSettingsView);
+            return true;
+          } else {
+            closeSettingsHub();
+            return true;
+          }
+        }
+
+        // 4. Session Drawer
+        const drawer = document.getElementById('sessionDrawer');
+        if (drawer && drawer.classList.contains('open')) {
+          drawer.classList.remove('open');
+          const bd = document.getElementById('backdrop');
+          if (bd) bd.classList.remove('open');
+          return true;
+        }
+
+        // 5. Default back handling (propagate to system)
+        return false;
       };
 
       connectWebSocket();
