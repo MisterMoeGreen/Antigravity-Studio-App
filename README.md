@@ -141,7 +141,12 @@ AgyStudio/
 │   │   ├── assets/
 │   │   │   └── usr-data.tar.zst      # Compressed runtime assets (Python, certs, web UI)
 │   │   └── res/                      # Vector launcher icons, styles, and XML configs
-│   └── build.gradle.kts              # Application build config (SDK 35, legacy packaging)
+├── agy-ui/                           # Web frontend & async Python server source
+│   ├── index.html                    # Mobile SPA chat & Settings Hub UI
+│   ├── server.py                     # Async process orchestrator & API server
+│   ├── default_app_prompt.md         # Mobile system directives & UI navigation
+│   ├── manifest.json                 # PWA standalone application manifest
+│   └── sw.js                         # Service Worker offline asset cache
 ├── scripts/
 │   ├── build_shim.sh                 # Compiles and strips libagy_shim.so
 │   └── prepare_binaries.sh           # Stages 16KB-aligned ELF binaries & packages assets
