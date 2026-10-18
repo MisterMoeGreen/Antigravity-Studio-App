@@ -101,13 +101,13 @@ sequenceDiagram
 ## 5. Command-Verified Acceptance Criteria Checklist
 
 ### Phase 1: Single-Source Versioning & Deterministic Keystore
-- [ ] **AC-1.1: `version.properties` Creation & Schema Validation**
+- [x] **AC-1.1: `version.properties` Creation & Schema Validation**
   - Verify that `version.properties` exists at repository root with `VERSION_CODE`, `VERSION_NAME`, `AGY_VERSION`, and `AGY_SHA256`.
   - **Verification Gate**:
     ```bash
     test -f version.properties && grep -q '^VERSION_CODE=[0-9]\+' version.properties && grep -q '^VERSION_NAME=[0-9]\+\.[0-9]\+\.[0-9]\+' version.properties && grep -q '^AGY_VERSION=[0-9]\+\.[0-9]\+\.[0-9]\+' version.properties
     ```
-- [ ] **AC-1.2: Gradle Dynamic Version Loading & Deterministic Signing**
+- [x] **AC-1.2: Gradle Dynamic Version Loading & Deterministic Signing**
   - Verify that `app/build.gradle.kts` dynamically reads `version.properties`, supports `-P` flags, and configures `releasePersistent` keystore.
   - **Verification Gate**:
     ```bash
@@ -115,13 +115,13 @@ sequenceDiagram
     ```
 
 ### Phase 2: Binary Self-Update Shielding & VFS Locking
-- [ ] **AC-2.1: Virtualization Shim Filesystem Protection**
+- [x] **AC-2.1: Virtualization Shim Filesystem Protection**
   - Verify that `app/src/main/cpp/agy_shim.c` implements `unlink`, `unlinkat`, `rename`, `renameat`, `renameat2`, and `openat` hooks checking protected directories and returning `-EROFS`.
   - **Verification Gate**:
     ```bash
     grep -q "renameat2" app/src/main/cpp/agy_shim.c && grep -q "is_protected_target" app/src/main/cpp/agy_shim.c && grep -q "EROFS" app/src/main/cpp/agy_shim.c
     ```
-- [ ] **AC-2.2: VFS `0500` Directory Mode Lock & Environment Injection**
+- [x] **AC-2.2: VFS `0500` Directory Mode Lock & Environment Injection**
   - Verify that `AgyForegroundService.kt` sets `usr/bin` permissions to `0500` after symlinking, creates `~/.local/bin`, and injects `AGY_DISABLE_AUTO_UPDATE` and `AGY_APP_VERSION_CODE`.
   - **Verification Gate**:
     ```bash
@@ -129,13 +129,13 @@ sequenceDiagram
     ```
 
 ### Phase 3: Cloud CI/CD Automation Engine
-- [ ] **AC-3.1: GitHub Actions Workflow Definition**
+- [x] **AC-3.1: GitHub Actions Workflow Definition**
   - Verify that `.github/workflows/auto-sync-agy.yml` includes bi-weekly schedule, `workflow_dispatch`, `--page-size 16384` for `patchelf`, and `release-metadata.json` creation.
   - **Verification Gate**:
     ```bash
     test -f .github/workflows/auto-sync-agy.yml && grep -q "page-size 16384" .github/workflows/auto-sync-agy.yml && grep -q "release-metadata.json" .github/workflows/auto-sync-agy.yml
     ```
-- [ ] **AC-3.2: Gradlew Script Integrity**
+- [x] **AC-3.2: Gradlew Script Integrity**
   - Verify that `./gradlew --version` executes cleanly.
   - **Verification Gate**:
     ```bash
@@ -143,13 +143,13 @@ sequenceDiagram
     ```
 
 ### Phase 4: In-App Update, Symlink Recovery & Loop Elimination
-- [ ] **AC-4.1: Android 14/15 Compliant Update Intent & Permissions**
+- [x] **AC-4.1: Android 14/15 Compliant Update Intent & Permissions**
   - Verify that `AndroidManifest.xml` includes `UPDATE_PACKAGES_WITHOUT_USER_ACTION`, `MY_PACKAGE_REPLACED` receiver, and `InAppUpdateManager.kt` uses explicit `FLAG_MUTABLE` PendingIntent.
   - **Verification Gate**:
     ```bash
     grep -q "UPDATE_PACKAGES_WITHOUT_USER_ACTION" app/src/main/AndroidManifest.xml && grep -q "MY_PACKAGE_REPLACED" app/src/main/AndroidManifest.xml
     ```
-- [ ] **AC-4.2: Semantic & Integer Version Comparison**
+- [x] **AC-4.2: Semantic & Integer Version Comparison**
   - Verify integer version comparison in update checking logic.
   - **Verification Gate**:
     ```bash
