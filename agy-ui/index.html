@@ -2858,6 +2858,19 @@
             <svg class="settings-menu-chevron fa-icon" viewBox="0 0 320 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg>
           </div>
 
+          <!-- Package Manager -->
+          <div class="settings-menu-item" id="btnOpenSettingsPackages" data-target="viewPackages">
+            <div class="settings-menu-icon">
+              <svg class="fa-icon" viewBox="0 0 448 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M50.7 58.5L0 160H208V32H93.7C75.5 32 58.9 42.4 50.7 58.5zM240 160H448L397.3 58.5C389.1 42.4 372.5 32 354.3 32H240V160zm208 32H0v224c0 35.3 28.7 64 64 64h320c35.3 0 64-28.7 64-64V192z"/></svg>
+            </div>
+            <div class="settings-menu-info">
+              <div class="settings-menu-title">Package Manager</div>
+              <div class="settings-menu-desc">Alpine Linux container packages & runtimes</div>
+            </div>
+            <span class="settings-menu-badge" id="packagesMenuBadge" style="display:none;font-size:11px;padding:2px 8px;border-radius:12px;background:var(--bg-tertiary);color:var(--text-secondary);margin-right:8px;"></span>
+            <svg class="settings-menu-chevron fa-icon" viewBox="0 0 320 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg>
+          </div>
+
           <!-- Software Updates -->
           <div class="settings-menu-item" data-target="viewUpdates">
             <div class="settings-menu-icon">
@@ -3040,6 +3053,40 @@
               <div class="updates-progress-fill" id="updateProgressBar"></div>
             </div>
           </div>
+      </div>
+    </div>
+
+    <!-- View: Package Manager -->
+    <div class="settings-subview" id="viewPackages">
+      <div class="subview-header">
+        <button class="icon-btn subview-back-btn" data-back="viewPackages" title="Back to menu">
+          <svg class="fa-icon" viewBox="0 0 448 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M9.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.2 288 416 288c17.7 0 32-14.3 32-32s-14.3-32-32-32l-306.7 0L214.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg>
+        </button>
+        <div class="subview-title">Package Manager</div>
+        <button class="icon-btn" id="btnOpenInstallPackageTop" title="Install Package">
+          <svg class="fa-icon" viewBox="0 0 448 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M256 80c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 144L48 224c-17.7 0-32 14.3-32 32s14.3 32 32 32l144 0 0 144c0 17.7 14.3 32 32 32s32-14.3 32-32l0-144 144 0c17.7 0 32-14.3 32-32s-14.3-32-32-32l-144 0 0-144z"/></svg>
+        </button>
+      </div>
+      <div class="subview-body" style="padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));">
+        <div class="settings-info-banner" id="packagesStorageSummary">
+          Container Storage: <span id="packagesTotalSize">0.0 MB</span> &bull; <span id="packagesCount">0</span> Packages
+        </div>
+
+        <div style="display:flex;gap:8px;margin-bottom:12px;">
+          <button class="subview-action-btn" id="btnUpdateAllPackages" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;">
+            <svg class="fa-icon" viewBox="0 0 512 512" style="width:14px;height:14px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M105.1 202.6c7.7-21.8 20.2-42.3 37.8-59.8c62.5-62.5 163.8-62.5 226.3 0L386.3 160 352 160c-17.7 0-32 14.3-32 32s14.3 32 32 32l112 0c17.7 0 32-14.3 32-32l0-112c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 35.2L414.4 68C336.3-10.1 209.7-10.1 131.6 68C109.6 90 94.1 115.8 84.4 143.2c-5.8 16.4 2.9 34.4 19.3 40.2s34.4-2.9 40.2-19.3zM406.9 309.4c-7.7 21.8-20.2 42.3-37.8 59.8c-62.5 62.5-163.8 62.5-226.3 0l-17.1-17.1L160 352c17.7 0 32-14.3 32-32s-14.3-32-32-32l-112 0c-17.7 0-32 14.3-32 32l0 112c0 17.7 14.3 32 32 32s32-14.3 32-32l0-35.2L68 444C146.1 522.1 272.7 522.1 350.8 444c22-22 37.5-47.8 47.2-75.2c5.8-16.4-2.9-34.4-19.3-40.2s-34.4 2.9-40.2 19.3z"/></svg>
+            Update All
+          </button>
+          <button class="subview-action-btn primary" id="btnOpenInstallPackageModal" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;">
+            <svg class="fa-icon" viewBox="0 0 448 512" style="width:14px;height:14px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M256 80c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 144L48 224c-17.7 0-32 14.3-32 32s14.3 32 32 32l144 0 0 144c0 17.7 14.3 32 32 32s32-14.3 32-32l0-144 144 0c17.7 0 32-14.3 32-32s-14.3-32-32-32l-144 0 0-144z"/></svg>
+            Install Package
+          </button>
+        </div>
+
+        <div style="font-size:11px;font-weight:700;color:var(--text-tertiary);letter-spacing:0.5px;margin-bottom:8px;">USER INSTALLED PACKAGES</div>
+        <div id="packagesListContainer" style="display:flex;flex-direction:column;gap:8px;"></div>
+        <div id="packagesEmptyState" class="settings-empty-card" style="display:none;padding:24px 16px;text-align:center;color:var(--text-secondary);font-size:13px;line-height:1.5;">
+          No additional packages installed. Tap [+ Install Package] to add compilers and runtimes.
         </div>
       </div>
     </div>
@@ -3247,6 +3294,39 @@
     </div>
   </div>
 
+  <!-- Modal: Install Package (v1.3.0) -->
+  <div class="modal-dialog" id="modalInstallPackage" style="display:none;">
+    <div class="modal-card" style="padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));">
+      <div class="modal-header">
+        <div class="modal-title">Install Package</div>
+        <button class="icon-btn modal-close-btn" id="btnCloseInstallPackageModal" style="width:28px;height:28px;">
+          <svg class="fa-icon" viewBox="0 0 384 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M342.6 150.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L192 210.7 86.6 105.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L146.7 256 41.4 361.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192 301.3 297.4 406.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L237.3 256 342.6 150.6z"/></svg>
+        </button>
+      </div>
+      <div class="modal-body" style="gap:10px;">
+        <label style="font-size:12px;color:var(--text-secondary);">What package do you want to install?</label>
+        <input type="text" id="inputPackageName" class="search-input" placeholder="e.g. nodejs, rust, openjdk21, ffmpeg, clang..." />
+
+        <label style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Quick Presets:</label>
+        <div class="preset-chips-container" id="packagePresetChips">
+          <span class="preset-chip" data-pkg="nodejs npm">Node.js</span>
+          <span class="preset-chip" data-pkg="python3 py3-pip">Python 3</span>
+          <span class="preset-chip" data-pkg="openjdk21-jre-headless">OpenJDK 21</span>
+          <span class="preset-chip" data-pkg="rust cargo">Rust</span>
+          <span class="preset-chip" data-pkg="build-base">C/C++ (GCC)</span>
+          <span class="preset-chip" data-pkg="go">Go</span>
+          <span class="preset-chip" data-pkg="clang lld musl-dev">Clang</span>
+          <span class="preset-chip" data-pkg="php83 php83-cli">PHP</span>
+          <span class="preset-chip" data-pkg="ffmpeg">FFmpeg</span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="modal-btn secondary" id="btnCancelInstallPackage">Cancel</button>
+        <button class="modal-btn primary" id="btnConfirmInstallPackage">Install Package</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Interactive Decision Modal (v1.2.0) -->
   <div class="modal-dialog question-modal-dialog" id="modalAskQuestion" style="display:none;">
     <div class="bottom-sheet-content question-sheet">
@@ -3345,6 +3425,7 @@
         'arrow-up': ['0 0 384 512', 'M214.6 41.4c-12.5-12.5-32.8-12.5-45.3 0l-160 160c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L160 141.2 160 448c0 17.7 14.3 32 32 32s32-14.3 32-32l0-306.7L329.4 246.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3l-160-160z'],
         'arrows-rotate': ['0 0 512 512', 'M105.1 202.6c7.7-21.8 20.2-42.3 37.8-59.8c62.5-62.5 163.8-62.5 226.3 0L386.3 160 352 160c-17.7 0-32 14.3-32 32s14.3 32 32 32l112 0c17.7 0 32-14.3 32-32l0-112c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 35.2L414.4 68C336.3-10.1 209.7-10.1 131.6 68C109.6 90 94.1 115.8 84.4 143.2c-5.8 16.4 2.9 34.4 19.3 40.2s34.4-2.9 40.2-19.3zM406.9 309.4c-7.7 21.8-20.2 42.3-37.8 59.8c-62.5 62.5-163.8 62.5-226.3 0l-17.1-17.1L160 352c17.7 0 32-14.3 32-32s-14.3-32-32-32l-112 0c-17.7 0-32 14.3-32 32l0 112c0 17.7 14.3 32 32 32s32-14.3 32-32l0-35.2L68 444C146.1 522.1 272.7 522.1 350.8 444c22-22 37.5-47.8 47.2-75.2c5.8-16.4-2.9-34.4-19.3-40.2s-34.4 2.9-40.2 19.3z'],
         'spinner': ['0 0 512 512', 'M304 48a48 48 0 1 0 -96 0 48 48 0 1 0 96 0zm0 416a48 48 0 1 0 -96 0 48 48 0 1 0 96 0zM48 304a48 48 0 1 0 0-96 48 48 0 1 0 0 96zm464-48a48 48 0 1 0 -96 0 48 48 0 1 0 96 0zM142.9 437A48 48 0 1 0 75 369.1 48 48 0 1 0 142.9 437zm0-294.2A48 48 0 1 0 75 75a48 48 0 1 0 67.9 67.9zM369.1 437A48 48 0 1 0 437 369.1 48 48 0 1 0 369.1 437z'],
+        'box': ['0 0 448 512', 'M50.7 58.5L0 160H208V32H93.7C75.5 32 58.9 42.4 50.7 58.5zM240 160H448L397.3 58.5C389.1 42.4 372.5 32 354.3 32H240V160zm208 32H0v224c0 35.3 28.7 64 64 64h320c35.3 0 64-28.7 64-64V192z'],
       };
       function faIcon(name, extraClass = '', style = '') {
         const item = FA_PATHS[name];
@@ -4195,6 +4276,24 @@
 
           case 'mcp_health_result':
             showToast(`MCP server "${msg.name}": ${msg.status || (msg.is_healthy ? 'Online' : 'Offline')}`);
+            break;
+
+          case 'packages_data':
+            if (typeof renderPackages === 'function') {
+              renderPackages(msg);
+            }
+            break;
+
+          case 'package_mutation_status':
+            if (typeof handlePackageMutationStatus === 'function') {
+              handlePackageMutationStatus(msg);
+            }
+            break;
+
+          case 'package_mutation_result':
+            if (typeof handlePackageMutationResult === 'function') {
+              handlePackageMutationResult(msg);
+            }
             break;
 
           case 'update_check_result':
@@ -5500,7 +5599,7 @@
       const btnCloseSettingsHub = document.getElementById('btnCloseSettingsHub');
 
       let currentSettingsView = 'viewSettingsMenu';
-      const settingsViews = ['viewSettingsMenu', 'viewPrompts', 'viewSSH', 'viewApiKeys', 'viewSkills', 'viewMCP', 'viewUpdates'];
+      const settingsViews = ['viewSettingsMenu', 'viewPrompts', 'viewSSH', 'viewApiKeys', 'viewSkills', 'viewMCP', 'viewPackages', 'viewUpdates'];
 
       function openSettingsHub() {
         if (!settingsHub) return;
@@ -5513,6 +5612,7 @@
         sendWs({ type: 'list_api_keys' });
         sendWs({ type: 'list_skills' });
         sendWs({ type: 'list_mcp_servers' });
+        sendWs({ type: 'get_packages' });
       }
 
       function closeSettingsHub() {
@@ -5564,6 +5664,8 @@
           sendWs({ type: 'list_skills' });
         } else if (targetId === 'viewMCP') {
           sendWs({ type: 'list_mcp_servers' });
+        } else if (targetId === 'viewPackages') {
+          sendWs({ type: 'get_packages' });
         } else if (targetId === 'viewUpdates') {
           initUpdatesView();
         }
@@ -6494,6 +6596,204 @@
             applyMCPCardHealth(card, st, msg);
           }
         });
+      }
+
+      // ---------------------------------------------------------------------
+      // Package Manager Logic (v1.3.0)
+      // ---------------------------------------------------------------------
+      const packagesListContainer = document.getElementById('packagesListContainer');
+      const packagesEmptyState = document.getElementById('packagesEmptyState');
+      const packagesTotalSize = document.getElementById('packagesTotalSize');
+      const packagesCount = document.getElementById('packagesCount');
+      const packagesMenuBadge = document.getElementById('packagesMenuBadge');
+      const btnUpdateAllPackages = document.getElementById('btnUpdateAllPackages');
+      const btnOpenInstallPackageModal = document.getElementById('btnOpenInstallPackageModal');
+      const btnOpenInstallPackageTop = document.getElementById('btnOpenInstallPackageTop');
+      const modalInstallPackage = document.getElementById('modalInstallPackage');
+      const btnCloseInstallPackageModal = document.getElementById('btnCloseInstallPackageModal');
+      const btnCancelInstallPackage = document.getElementById('btnCancelInstallPackage');
+      const btnConfirmInstallPackage = document.getElementById('btnConfirmInstallPackage');
+      const inputPackageName = document.getElementById('inputPackageName');
+      const packagePresetChips = document.getElementById('packagePresetChips');
+
+      function openInstallPackageModal() {
+        if (!modalInstallPackage) return;
+        if (inputPackageName) {
+          inputPackageName.value = '';
+        }
+        modalInstallPackage.style.display = 'flex';
+        backdrop.classList.add('visible');
+        setTimeout(() => {
+          if (inputPackageName) inputPackageName.focus();
+        }, 100);
+      }
+
+      function closeInstallPackageModal() {
+        if (!modalInstallPackage) return;
+        modalInstallPackage.style.display = 'none';
+        backdrop.classList.remove('visible');
+      }
+
+      if (btnOpenInstallPackageModal) {
+        btnOpenInstallPackageModal.addEventListener('click', openInstallPackageModal);
+      }
+      if (btnOpenInstallPackageTop) {
+        btnOpenInstallPackageTop.addEventListener('click', openInstallPackageModal);
+      }
+      if (btnCloseInstallPackageModal) {
+        btnCloseInstallPackageModal.addEventListener('click', closeInstallPackageModal);
+      }
+      if (btnCancelInstallPackage) {
+        btnCancelInstallPackage.addEventListener('click', closeInstallPackageModal);
+      }
+
+      if (packagePresetChips) {
+        packagePresetChips.querySelectorAll('.preset-chip').forEach(chip => {
+          chip.addEventListener('click', () => {
+            const pkg = chip.getAttribute('data-pkg');
+            if (pkg && inputPackageName) {
+              inputPackageName.value = pkg;
+              inputPackageName.focus();
+            }
+          });
+        });
+      }
+
+      if (btnConfirmInstallPackage) {
+        btnConfirmInstallPackage.addEventListener('click', () => {
+          const val = inputPackageName ? inputPackageName.value.trim() : '';
+          if (!val) {
+            showToast('Please enter a package name');
+            return;
+          }
+          closeInstallPackageModal();
+          closeSettingsHub();
+          sendWs({ type: 'install_package_prompt', package_query: val });
+        });
+      }
+
+      if (btnUpdateAllPackages) {
+        btnUpdateAllPackages.addEventListener('click', () => {
+          btnUpdateAllPackages.disabled = true;
+          btnUpdateAllPackages.innerHTML = `${faIcon('spinner', 'fa-spin', 'width:14px;height:14px;')} Updating...`;
+          sendWs({ type: 'upgrade_all_packages' });
+        });
+      }
+
+      function renderPackages(data) {
+        if (btnUpdateAllPackages) {
+          btnUpdateAllPackages.disabled = false;
+          btnUpdateAllPackages.innerHTML = `${faIcon('arrows-rotate', '', 'width:14px;height:14px;')} Update All`;
+        }
+
+        const pkgs = (data && data.packages) || [];
+        const totalMb = (data && data.total_size_mb) !== undefined ? data.total_size_mb : 0.0;
+
+        if (packagesTotalSize) packagesTotalSize.textContent = `${totalMb} MB`;
+        if (packagesCount) packagesCount.textContent = `${pkgs.length}`;
+
+        if (packagesMenuBadge) {
+          if (pkgs.length > 0) {
+            packagesMenuBadge.style.display = 'inline-block';
+            packagesMenuBadge.textContent = `${pkgs.length} pkgs • ${totalMb} MB`;
+          } else {
+            packagesMenuBadge.style.display = 'none';
+          }
+        }
+
+        if (!packagesListContainer) return;
+        packagesListContainer.innerHTML = '';
+
+        if (pkgs.length === 0) {
+          if (packagesEmptyState) packagesEmptyState.style.display = 'block';
+          packagesListContainer.style.display = 'none';
+          return;
+        }
+
+        if (packagesEmptyState) packagesEmptyState.style.display = 'none';
+        packagesListContainer.style.display = 'flex';
+
+        pkgs.forEach(pkg => {
+          const card = document.createElement('div');
+          card.className = 'settings-card';
+          card.style.cssText = 'padding:12px;background:var(--bg-secondary);border:1px solid var(--border-subtle);border-radius:10px;display:flex;flex-direction:column;gap:6px;';
+
+          const topRow = document.createElement('div');
+          topRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;';
+
+          const nameEl = document.createElement('div');
+          nameEl.style.cssText = 'font-weight:700;font-size:14px;color:var(--text-primary);';
+          nameEl.textContent = pkg.name;
+
+          const metaBadge = document.createElement('span');
+          metaBadge.style.cssText = 'font-size:11px;padding:2px 8px;border-radius:12px;background:var(--bg-tertiary);color:var(--text-secondary);font-family:var(--font-mono);';
+          metaBadge.textContent = `v${pkg.version} • ${pkg.size_mb} MB`;
+
+          topRow.appendChild(nameEl);
+          topRow.appendChild(metaBadge);
+
+          const descEl = document.createElement('div');
+          descEl.style.cssText = 'font-size:12px;color:var(--text-secondary);line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;';
+          descEl.textContent = pkg.description || 'No package description available.';
+
+          const actionsRow = document.createElement('div');
+          actionsRow.style.cssText = 'display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:4px;';
+
+          const updateBtn = document.createElement('button');
+          updateBtn.className = 'subview-action-btn';
+          updateBtn.style.cssText = 'padding:4px 10px;font-size:12px;display:flex;align-items:center;gap:4px;';
+          updateBtn.innerHTML = `${faIcon('arrows-rotate', '', 'width:12px;height:12px;')} Update`;
+          updateBtn.addEventListener('click', () => {
+            updateBtn.disabled = true;
+            updateBtn.innerHTML = `${faIcon('spinner', 'fa-spin', 'width:12px;height:12px;')} Updating...`;
+            sendWs({ type: 'upgrade_package', name: pkg.name });
+          });
+
+          const deleteBtn = document.createElement('button');
+          deleteBtn.className = 'subview-action-btn danger';
+          deleteBtn.style.cssText = 'padding:4px 10px;font-size:12px;display:flex;align-items:center;gap:4px;color:#ef4444;';
+          deleteBtn.innerHTML = `${faIcon('trash-can', '', 'width:12px;height:12px;')} Delete`;
+          deleteBtn.addEventListener('click', () => {
+            if (confirm(`Remove package "${pkg.name}" from container?`)) {
+              deleteBtn.disabled = true;
+              deleteBtn.innerHTML = `${faIcon('spinner', 'fa-spin', 'width:12px;height:12px;')} Deleting...`;
+              sendWs({ type: 'delete_package', name: pkg.name });
+            }
+          });
+
+          actionsRow.appendChild(updateBtn);
+          actionsRow.appendChild(deleteBtn);
+
+          card.appendChild(topRow);
+          card.appendChild(descEl);
+          card.appendChild(actionsRow);
+
+          packagesListContainer.appendChild(card);
+        });
+      }
+
+      function handlePackageMutationStatus(data) {
+        const action = data.action;
+        const pkg = data.package;
+        if (action === 'delete') {
+          showToast(`Removing ${pkg}...`);
+        } else if (action === 'upgrade') {
+          showToast(`Upgrading ${pkg}...`);
+        } else if (action === 'upgrade_all') {
+          showToast('Upgrading all container packages...');
+        }
+      }
+
+      function handlePackageMutationResult(data) {
+        if (btnUpdateAllPackages) {
+          btnUpdateAllPackages.disabled = false;
+          btnUpdateAllPackages.innerHTML = `${faIcon('arrows-rotate', '', 'width:14px;height:14px;')} Update All`;
+        }
+        if (data.success) {
+          showToast(data.message || 'Package operation succeeded');
+        } else {
+          showToast(data.message || 'Package operation failed', 'error');
+        }
       }
 
       // ---------------------------------------------------------------------

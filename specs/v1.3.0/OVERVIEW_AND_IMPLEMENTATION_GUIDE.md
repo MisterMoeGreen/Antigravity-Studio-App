@@ -239,7 +239,7 @@ sequenceDiagram
     ```
 
 ### Phase 6: On-Device Package Manager UI & AI Disambiguation
-- [ ] **AC-6.1: Fast Alpine Package DB Parser & API Endpoint**
+- [x] **AC-6.1: Fast Alpine Package DB Parser & API Endpoint**
   - Verify `server.py` implements `get_installed_packages()` by directly reading `/etc/apk/world` and `/lib/apk/db/installed`, correctly calculating size in MB, rolling up meta-packages, and filtering protected base packages.
   - **Verification Gate**:
     ```bash
@@ -253,7 +253,7 @@ sequenceDiagram
     '
     ```
 
-- [ ] **AC-6.2: Package Mutation Handlers (`delete`, `upgrade`, `upgrade_all`)**
+- [x] **AC-6.2: Package Mutation Handlers (`delete`, `upgrade`, `upgrade_all`)**
   - Verify WebSocket message routing for `delete_package`, `upgrade_package`, and `upgrade_all_packages` executes `apk` directly with `asyncio.create_subprocess_exec` using `--wait 30`.
   - **Verification Gate**:
     ```bash
@@ -262,7 +262,7 @@ sequenceDiagram
     grep -q 'upgrade_all_packages' agy-ui/server.py
     ```
 
-- [ ] **AC-6.3: Package Manager SPA Sub-View in `index.html`**
+- [x] **AC-6.3: Package Manager SPA Sub-View in `index.html`**
   - Verify `#viewPackages`, `#btnOpenSettingsPackages`, `#btnUpdateAllPackages`, and package card template exist with Font Awesome vector SVGs.
   - **Verification Gate**:
     ```bash
@@ -271,7 +271,7 @@ sequenceDiagram
     grep -q 'btnUpdateAllPackages' agy-ui/index.html
     ```
 
-- [ ] **AC-6.4: Install Package Modal Sheet & Touch Ergonomics**
+- [x] **AC-6.4: Install Package Modal Sheet & Touch Ergonomics**
   - Verify `#modalInstallPackage`, `#inputPackageName`, `#btnConfirmInstallPackage`, preset chips, and safe-area paddings are defined.
   - **Verification Gate**:
     ```bash
@@ -280,7 +280,7 @@ sequenceDiagram
     grep -q 'btnConfirmInstallPackage' agy-ui/index.html
     ```
 
-- [ ] **AC-6.5: AI Turn Handoff & Disambiguation Prompt**
+- [x] **AC-6.5: AI Turn Handoff & Disambiguation Prompt**
   - Verify `server.py` handles `install_package_prompt` by creating an interactive turn with the package disambiguation prompt referencing `ask_question`.
   - **Verification Gate**:
     ```bash
@@ -288,7 +288,7 @@ sequenceDiagram
     grep -q 'ask_question' agy-ui/server.py
     ```
 
-- [ ] **AC-6.6: Package Name Validation, Protected Package Guard & Lock Serialization**
+- [x] **AC-6.6: Package Name Validation, Protected Package Guard & Lock Serialization**
   - Verify `server.py` enforces regex validation (`APK_PKG_NAME_RE`), blocks deletion of `PROTECTED_PACKAGES`, serializes mutations with `asyncio.Lock()`, executes via `argv` arrays without shell interpolation, and strips `/etc/apk/world` constraints.
   - **Verification Gate**:
     ```bash

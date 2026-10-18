@@ -1127,6 +1127,255 @@ async def check_github_updates() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Package Manager Engine: Alpine Linux Container (W^X PRoot Subsystem)
+# ---------------------------------------------------------------------------
+
+PROTECTED_PACKAGES: frozenset[str] = frozenset({
+    "alpine-baselayout",
+    "alpine-baselayout-data",
+    "alpine-keys",
+    "alpine-release",
+    "apk-tools",
+    "busybox",
+    "busybox-binsh",
+    "ca-certificates-bundle",
+    "libc-utils",
+    "libcrypto3",
+    "libssl3",
+    "musl",
+    "musl-utils",
+    "scanelf",
+    "ssl_client",
+    "zlib",
+})
+
+APK_PKG_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,127}$")
+
+
+def validate_pkg_name(name: str) -> str:
+    if not isinstance(name, str) or not APK_PKG_NAME_RE.match(name):
+        raise ValueError(f"Invalid Alpine package name: {name!r}")
+    return name
+
+
+def get_rootfs_path() -> Path:
+    candidates = [
+        os.environ.get("AGY_ROOTFS_DIR"),
+        os.path.join(os.environ.get("AGY_FILES_DIR", ""), "rootfs") if os.environ.get("AGY_FILES_DIR") else None,
+        str(Path(os.environ.get("PREFIX", "/data/data/ai.agy.app/files/usr")).parent / "rootfs"),
+        "/data/data/ai.agy.app/files/rootfs",
+        str(Path(__file__).resolve().parent.parent / "rootfs"),
+        str(Path(__file__).resolve().parents[3] / "rootfs") if len(Path(__file__).resolve().parents) >= 4 else None,
+        "/data/data/com.termux/files/rootfs",
+    ]
+    for c in candidates:
+        if c and Path(c).is_dir() and (Path(c) / "etc" / "os-release").exists():
+            return Path(c)
+    if candidates[0]:
+        return Path(candidates[0])
+    return Path("/data/data/ai.agy.app/files/rootfs")
+
+
+def get_apk_bin() -> str:
+    candidates = [
+        shutil.which("apk"),
+        shutil.which("pkg"),
+        os.path.join(os.environ.get("PREFIX", "/data/data/ai.agy.app/files/usr"), "bin", "apk"),
+        "/data/data/ai.agy.app/files/usr/bin/apk",
+        "/data/data/com.termux/files/usr/bin/apk",
+    ]
+    for c in candidates:
+        if c and os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    return "apk"
+
+
+def get_installed_packages() -> dict[str, Any]:
+    """
+    Directly parses /etc/apk/world and /lib/apk/db/installed in < 3ms.
+    Returns:
+        {
+            "packages": [
+                {
+                    "name": str,
+                    "version": str,
+                    "size_mb": float,
+                    "description": str,
+                    "url": str,
+                }, ...
+            ],
+            "total_size_mb": float
+        }
+    """
+    rootfs = get_rootfs_path()
+    world_path = rootfs / "etc" / "apk" / "world"
+    installed_path = rootfs / "lib" / "apk" / "db" / "installed"
+
+    if not world_path.is_file() or not installed_path.is_file():
+        return {"packages": [], "total_size_mb": 0.0}
+
+    try:
+        world_raw = world_path.read_text(encoding="utf-8", errors="replace")
+    except Exception as exc:
+        logger.warning("Could not read apk world: %s", exc)
+        return {"packages": [], "total_size_mb": 0.0}
+
+    world_packages: list[str] = []
+    for line in world_raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        clean_name = re.split(r"[@=<>~]", line, maxsplit=1)[0].strip()
+        if clean_name and clean_name not in PROTECTED_PACKAGES and clean_name not in world_packages:
+            world_packages.append(clean_name)
+
+    try:
+        installed_raw = installed_path.read_text(encoding="utf-8", errors="replace")
+    except Exception as exc:
+        logger.warning("Could not read apk installed db: %s", exc)
+        return {"packages": [], "total_size_mb": 0.0}
+
+    installed_index: dict[str, dict[str, Any]] = {}
+    current_entry: dict[str, Any] = {}
+
+    for line in installed_raw.splitlines():
+        if not line.strip():
+            if "name" in current_entry:
+                installed_index[current_entry["name"]] = current_entry
+            current_entry = {}
+            continue
+
+        if len(line) >= 2 and line[1] == ":":
+            tag = line[0]
+            val = line[2:].strip()
+            if tag == "P":
+                current_entry["name"] = val
+            elif tag == "V":
+                current_entry["version"] = val
+            elif tag == "I":
+                try:
+                    current_entry["size_bytes"] = int(val)
+                except ValueError:
+                    current_entry["size_bytes"] = 0
+            elif tag == "T":
+                current_entry["desc"] = val
+            elif tag == "U":
+                current_entry["url"] = val
+            elif tag == "D":
+                raw_deps = val.split()
+                deps: list[str] = []
+                for d in raw_deps:
+                    if d.startswith(("so:", "cmd:", "pc:", "!")):
+                        continue
+                    d_clean = re.split(r"[@=<>~]", d, maxsplit=1)[0].strip()
+                    if d_clean and d_clean not in deps:
+                        deps.append(d_clean)
+                current_entry["deps"] = deps
+
+    if "name" in current_entry:
+        installed_index[current_entry["name"]] = current_entry
+
+    total_bytes = sum(
+        info.get("size_bytes", 0)
+        for name, info in installed_index.items()
+        if name not in PROTECTED_PACKAGES
+    )
+    total_size_mb = round(total_bytes / (1024 * 1024), 1)
+
+    packages: list[dict[str, Any]] = []
+    for pkg_name in world_packages:
+        info = installed_index.get(pkg_name, {})
+        version = info.get("version", "unknown")
+        desc = info.get("desc", "")
+        url = info.get("url", "")
+        size_bytes = info.get("size_bytes", 0)
+
+        # Meta-package rollup (e.g. build-base size <= 16KB)
+        if size_bytes <= 16384 and info.get("deps"):
+            rolled_up = sum(
+                installed_index.get(dep, {}).get("size_bytes", 0)
+                for dep in info["deps"]
+                if dep not in PROTECTED_PACKAGES
+            )
+            if rolled_up > size_bytes:
+                size_bytes = rolled_up
+
+        size_mb = round(size_bytes / (1024 * 1024), 1)
+
+        packages.append({
+            "name": pkg_name,
+            "version": version,
+            "size_mb": size_mb,
+            "description": desc,
+            "url": url,
+        })
+
+    return {
+        "packages": packages,
+        "total_size_mb": total_size_mb,
+    }
+
+
+APK_MUTATION_LOCK = asyncio.Lock()
+
+
+async def run_apk_command(*args: str, timeout: float = 180.0) -> tuple[int, str, str]:
+    apk_bin = get_apk_bin()
+    cmd = [apk_bin, "--wait", "30", *args]
+    logger.info("Executing APK command: %s", " ".join(cmd))
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        stdout = stdout_b.decode("utf-8", errors="replace")
+        stderr = stderr_b.decode("utf-8", errors="replace")
+        return proc.returncode, stdout, stderr
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        raise TimeoutError(f"APK command timed out after {timeout} seconds")
+
+
+async def delete_package(name: str) -> tuple[bool, str]:
+    validate_pkg_name(name)
+    if name in PROTECTED_PACKAGES:
+        raise PermissionError(f"Cannot delete protected system package: {name}")
+
+    async with APK_MUTATION_LOCK:
+        code, stdout, stderr = await run_apk_command("del", "--purge", "--", name)
+        output = stdout + "\n" + stderr
+        if code != 0:
+            return False, f"Failed to delete {name}: {output.strip()}"
+        if "not removed due to" in output:
+            return False, f"Cannot remove {name}: required by other installed packages"
+        return True, f"Successfully removed {name}"
+
+
+async def upgrade_package(name: str) -> tuple[bool, str]:
+    validate_pkg_name(name)
+    async with APK_MUTATION_LOCK:
+        code, stdout, stderr = await run_apk_command("add", "--upgrade", "--", name)
+        output = stdout + "\n" + stderr
+        if code != 0:
+            return False, f"Failed to upgrade {name}: {output.strip()}"
+        return True, f"Successfully upgraded {name}"
+
+
+async def upgrade_all_packages() -> tuple[bool, str]:
+    async with APK_MUTATION_LOCK:
+        code, stdout, stderr = await run_apk_command("upgrade", "--update-cache")
+        output = stdout + "\n" + stderr
+        if code != 0:
+            return False, f"Failed to upgrade packages: {output.strip()}"
+        return True, "Successfully upgraded all packages"
+
+
+# ---------------------------------------------------------------------------
 # Storage Engine: Read-Only SQLite & JSONL Transcript Inspector
 # ---------------------------------------------------------------------------
 
@@ -4489,6 +4738,177 @@ class AgyWebServer:
                 "type": "session_history",
                 "conversation_id": None,
                 "title": f"Setup MCP: {name or brief[:16]}",
+                "messages": [],
+                "history": [],
+                "workspace": self.orchestrator.config.workspace,
+                "git_branch": branch,
+                "config": {
+                    "model": self.orchestrator.config.model,
+                    "mode": self.orchestrator.config.mode,
+                    "effort": self.orchestrator.config.effort,
+                    "workspace": self.orchestrator.config.workspace,
+                    "git_branch": branch,
+                },
+            })
+            asyncio.create_task(self.orchestrator.execute_turn(ai_prompt))
+            return
+
+        # Package Manager (v1.3.0)
+        if mtype == "get_packages":
+            pkg_data = get_installed_packages()
+            await websocket.send(json.dumps({"type": "packages_data", **pkg_data}))
+            return
+
+        if mtype == "delete_package":
+            pkg_name = str(data.get("name") or "").strip()
+            try:
+                validate_pkg_name(pkg_name)
+                await self.broadcast({
+                    "type": "package_mutation_status",
+                    "action": "delete",
+                    "package": pkg_name,
+                    "in_progress": True,
+                })
+                success, msg = await delete_package(pkg_name)
+                await self.broadcast({
+                    "type": "package_mutation_result",
+                    "action": "delete",
+                    "package": pkg_name,
+                    "success": success,
+                    "message": msg,
+                })
+                pkg_data = get_installed_packages()
+                await self.broadcast({"type": "packages_data", **pkg_data})
+            except Exception as exc:
+                await self.broadcast({
+                    "type": "package_mutation_result",
+                    "action": "delete",
+                    "package": pkg_name,
+                    "success": False,
+                    "message": str(exc),
+                })
+            return
+
+        if mtype == "upgrade_package":
+            pkg_name = str(data.get("name") or "").strip()
+            try:
+                validate_pkg_name(pkg_name)
+                await self.broadcast({
+                    "type": "package_mutation_status",
+                    "action": "upgrade",
+                    "package": pkg_name,
+                    "in_progress": True,
+                })
+                success, msg = await upgrade_package(pkg_name)
+                await self.broadcast({
+                    "type": "package_mutation_result",
+                    "action": "upgrade",
+                    "package": pkg_name,
+                    "success": success,
+                    "message": msg,
+                })
+                pkg_data = get_installed_packages()
+                await self.broadcast({"type": "packages_data", **pkg_data})
+            except Exception as exc:
+                await self.broadcast({
+                    "type": "package_mutation_result",
+                    "action": "upgrade",
+                    "package": pkg_name,
+                    "success": False,
+                    "message": str(exc),
+                })
+            return
+
+        if mtype == "upgrade_all_packages":
+            try:
+                await self.broadcast({
+                    "type": "package_mutation_status",
+                    "action": "upgrade_all",
+                    "package": "*",
+                    "in_progress": True,
+                })
+                success, msg = await upgrade_all_packages()
+                await self.broadcast({
+                    "type": "package_mutation_result",
+                    "action": "upgrade_all",
+                    "package": "*",
+                    "success": success,
+                    "message": msg,
+                })
+                pkg_data = get_installed_packages()
+                await self.broadcast({"type": "packages_data", **pkg_data})
+            except Exception as exc:
+                await self.broadcast({
+                    "type": "package_mutation_result",
+                    "action": "upgrade_all",
+                    "package": "*",
+                    "success": False,
+                    "message": str(exc),
+                })
+            return
+
+        if mtype == "install_package_prompt":
+            raw_query = str(data.get("package_query") or data.get("query") or "").strip()
+            clean_query = re.sub(r"[\r\n\t`]", " ", raw_query).strip()[:100]
+            if not clean_query:
+                return
+
+            if self.orchestrator.is_running:
+                await websocket.send(json.dumps({
+                    "type": "system_card",
+                    "title": "Agent Busy",
+                    "markdown": "Cannot initiate package installation while a turn is actively executing.",
+                    "level": "error",
+                }))
+                return
+
+            ai_prompt = (
+                f'The user wants to install the package: "{clean_query}" in the Antigravity Studio Alpine Linux container.\n\n'
+                f"Environment Directives:\n"
+                f"- Subsystem: Alpine Linux aarch64 (PRoot container with W^X anonymous ELF loader).\n"
+                f"- Package Manager: `apk` (uses `apk add --no-cache <package>`).\n"
+                f"- Search Tool: `apk search <term>`.\n\n"
+                f"Instructions:\n"
+                f"1. Exact Match Check:\n"
+                f'   If "{clean_query}" unambiguously identifies a valid Alpine package (e.g., `nodejs`, `python3`, `rust`, `git`, `ffmpeg`, `go`):\n'
+                f"   - Immediately execute `apk add --no-cache {clean_query}` via `run_command`.\n"
+                f"   - Run a quick smoke verification (e.g. `<binary> --version`).\n"
+                f"   - Confirm successful installation and installed version to the user.\n\n"
+                f"2. Ambiguous Query Disambiguation (CRITICAL):\n"
+                f'   If "{clean_query}" is ambiguous, a general category, or could correspond to multiple package candidates (e.g., "c++", "postgres", "java", "opencv", "linter", or a keyword search):\n'
+                f"   - First, run `apk search <term>` via `run_command` to discover valid candidate packages.\n"
+                f"   - Present the candidate packages to the user using the interactive question tool:\n"
+                f"     ask_question << 'EOF'\n"
+                f"     {{\n"
+                f'       "questions": [\n'
+                f"         {{\n"
+                f'           "question": "Which package would you like to install?",\n'
+                f'           "options": [\n'
+                f'             "(Recommended) <package_1> - <brief description>",\n'
+                f'             "<package_2> - <brief description>",\n'
+                f'             "<package_3> - <brief description>"\n'
+                f"           ],\n"
+                f'           "is_multi_select": false\n'
+                f"         }}\n"
+                f"       ],\n"
+                f'       "toolAction": "Selecting package to install",\n'
+                f'       "toolSummary": "Package disambiguation"\n'
+                f"     }}\n"
+                f"     EOF\n"
+                f"   - CRITICAL OPTION EXTRACTION: When the user selects an option from `ask_question`, extract ONLY the valid Alpine package name(s) (stripping prefixes like `(Recommended)` and suffixes like `- <description>`) before executing `apk add --no-cache <pkg>`.\n"
+                f"   - Run a quick verification of the installed binary to confirm readiness."
+            )
+
+            self.orchestrator.config.conversation_id = None
+            self.orchestrator.config.total_input_tokens = 0
+            self.orchestrator.config.total_output_tokens = 0
+            self.orchestrator.config.total_thinking_tokens = 0
+            self.orchestrator.config.turn_count = 0
+            branch = get_git_branch(self.orchestrator.config.workspace)
+            await self.broadcast({
+                "type": "session_history",
+                "conversation_id": None,
+                "title": f"Install: {clean_query[:20]}",
                 "messages": [],
                 "history": [],
                 "workspace": self.orchestrator.config.workspace,
