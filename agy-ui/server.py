@@ -893,7 +893,7 @@ async def probe_single_mcp_server(name: str) -> dict[str, Any]:
         def _do_http() -> dict[str, Any]:
             import ssl
             t0 = time.time()
-            headers = {"User-Agent": "AntigravityStudio/1.1.0", **raw_headers}
+            headers = {"User-Agent": "AntigravityStudio/1.1.1", **raw_headers}
             req = urllib.request.Request(url, headers=headers)
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
@@ -931,9 +931,9 @@ async def probe_single_mcp_server(name: str) -> dict[str, Any]:
             if first_arg.endswith((".py", ".sh", ".js")) or "/" in first_arg:
                 p = Path(first_arg).expanduser()
                 if not p.is_file():
-                    return {"status": "error", "name": name, "message": f"Script not found: '{first_arg}'"}
-                return {"status": "connected", "name": name, "message": f"Verified: '{command} {first_arg}'"}
-        return {"status": "connected", "name": name, "message": f"Executable verified: '{command}'"}
+                    return {"status": "error", "name": name, "message": f"Script not found: {Path(first_arg).name}"}
+                return {"status": "connected", "name": name, "message": f"Verified: {command} {Path(first_arg).name}"}
+        return {"status": "connected", "name": name, "message": f"Verified: {command}"}
 
 
 async def probe_mcp_health() -> dict[str, dict[str, str]]:
@@ -1017,22 +1017,32 @@ async def toggle_mcp_server(name: str, enabled: bool) -> dict[str, Any]:
 
 
 async def delete_mcp_server(name: str) -> dict[str, Any]:
-    cmd = [str(AGY_BIN), "mcp", "remove", name]
-    proc = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
-    _, stderr = await asyncio.wait_for(proc.communicate(), timeout=10.0)
-    if proc.returncode != 0:
-        raise RuntimeError(f"agy mcp remove failed: {stderr.decode('utf-8', 'replace')}")
+    try:
+        cmd = [str(AGY_BIN), "mcp", "remove", name]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=8.0)
+    except Exception as exc:
+        logger.warning("agy mcp remove warning for %s: %s", name, exc)
+
+    # Ensure removal directly from MCP_CONFIG_FILE
     if MCP_CONFIG_FILE.exists():
-        os.chmod(str(MCP_CONFIG_FILE), 0o600)
+        try:
+            data = json.loads(MCP_CONFIG_FILE.read_text(encoding="utf-8"))
+            if "mcpServers" in data and name in data["mcpServers"]:
+                del data["mcpServers"][name]
+                atomic_write_secure(str(MCP_CONFIG_FILE), json.dumps(data, indent=2) + "\n", mode=0o600)
+        except Exception as exc:
+            logger.warning("Failed pruning %s from %s: %s", name, MCP_CONFIG_FILE, exc)
+
     return {"status": "ok", "name": name}
 
 
 # 6. On-Demand Update Checks
 async def check_github_updates() -> dict[str, Any]:
-    installed_version = os.environ.get("AGY_APP_VERSION", "1.1.0")
-    installed_code = int(os.environ.get("AGY_APP_VERSION_CODE", "7"))
+    installed_version = os.environ.get("AGY_APP_VERSION", "1.1.1")
+    installed_code = int(os.environ.get("AGY_APP_VERSION_CODE", "8"))
     url = "https://api.github.com/repos/MisterMoeGreen/Antigravity-Studio-App/releases/latest"
 
     cmd = ["curl", "-sSL", "-H", "User-Agent: AntigravityStudio", url]
@@ -1288,6 +1298,10 @@ class AntigravityStorageEngine:
                         "UPDATE conversation_summaries SET title = ? WHERE conversation_id = ?",
                         (clean_title, cid),
                     )
+                    try:
+                        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    except Exception:
+                        pass
                 conn.close()
             except Exception as exc:
                 logger.warning("Failed updating title in conversation_summaries.db: %s", exc)
@@ -1395,21 +1409,111 @@ class AntigravityStorageEngine:
 
         return True
 
+    def _prune_conversation_from_proto_stores(self, cid: str) -> None:
+        """Prunes conversation record from protobuf summaries stores (jetbox_summaries_proto.pb, agyhub_summaries_proto.pb).
+        This is essential because agy CLI background reconciliation reads these proto files on startup
+        and restores any deleted sessions back into conversation_summaries.db.
+        """
+        for filename in ("jetbox_summaries_proto.pb", "agyhub_summaries_proto.pb"):
+            pb_path = GEMINI_DIR / filename
+            if not pb_path.exists():
+                continue
+            try:
+                data = pb_path.read_bytes()
+                cid_bytes = cid.encode("ascii")
+                if cid_bytes not in data:
+                    continue
+
+                def _rv(stream: io.BytesIO) -> Optional[int]:
+                    res, shift = 0, 0
+                    while True:
+                        b = stream.read(1)
+                        if not b:
+                            return None
+                        byte = b[0]
+                        res |= (byte & 0x7F) << shift
+                        if not (byte & 0x80):
+                            return res
+                        shift += 7
+
+                def _encode_varint(val: int) -> bytes:
+                    res = bytearray()
+                    while val > 0x7F:
+                        res.append((val & 0x7F) | 0x80)
+                        val >>= 7
+                    res.append(val & 0x7F)
+                    return bytes(res)
+
+                s = io.BytesIO(data)
+                new_data = bytearray()
+                pruned = False
+                while s.tell() < len(data):
+                    tag = _rv(s)
+                    if tag is None:
+                        break
+                    wire = tag & 0x7
+                    if wire == 2:
+                        length = _rv(s)
+                        if length is None:
+                            break
+                        rec_content = s.read(length)
+                        # Inspect first subfield for conversation ID
+                        sub = io.BytesIO(rec_content)
+                        sub_tag = _rv(sub)
+                        if sub_tag is not None and (sub_tag >> 3) == 1 and (sub_tag & 0x7) == 2:
+                            sub_len = _rv(sub)
+                            sub_cid = sub.read(sub_len).decode("ascii", "replace") if sub_len else ""
+                            if sub_cid == cid or cid_bytes in rec_content:
+                                pruned = True
+                                continue
+                        elif cid_bytes in rec_content:
+                            pruned = True
+                            continue
+
+                        new_data.extend(_encode_varint(tag))
+                        new_data.extend(_encode_varint(length))
+                        new_data.extend(rec_content)
+                    elif wire == 0:
+                        val = _rv(s)
+                        if val is None:
+                            break
+                        new_data.extend(_encode_varint(tag))
+                        new_data.extend(_encode_varint(val))
+                    else:
+                        break
+
+                if pruned:
+                    pb_path.write_bytes(bytes(new_data))
+                    logger.info("Pruned session %s from %s", cid, filename)
+            except Exception as exc:
+                logger.warning("Failed pruning %s from %s: %s", cid, filename, exc)
+
     def delete_conversation(self, conversation_id: str) -> bool:
         cid = conversation_id.strip()
         if not cid:
             return False
         try:
+            # 1. Remove from SQLite conversation_summaries.db and truncate WAL journal
             if SUMMARIES_DB.exists():
-                conn = sqlite3.connect(SUMMARIES_DB, timeout=5.0)
-                with conn:
-                    conn.execute(
-                        "DELETE FROM conversation_summaries WHERE conversation_id = ?",
-                        (cid,),
-                    )
-                conn.close()
+                try:
+                    conn = sqlite3.connect(SUMMARIES_DB, timeout=5.0)
+                    with conn:
+                        conn.execute(
+                            "DELETE FROM conversation_summaries WHERE conversation_id = ?",
+                            (cid,),
+                        )
+                        try:
+                            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                        except Exception:
+                            pass
+                    conn.close()
+                except Exception as exc:
+                    logger.warning("Failed deleting %s from conversation_summaries.db: %s", cid, exc)
 
-            # Remove conversation sqlite db
+            # 2. Prune from protobuf summaries store so agy reconciliation won't resurrect it
+            self._prune_conversation_from_proto_stores(cid)
+
+            # 3. Remove conversation sqlite db
             conv_db = CONVERSATIONS_DIR / f"{cid}.db"
             for ext in ("", "-wal", "-shm"):
                 p = Path(f"{conv_db}{ext}")
@@ -1419,12 +1523,12 @@ class AntigravityStorageEngine:
                     except Exception:
                         pass
 
-            # Remove brain directory (logs, transcripts, scratch)
+            # 4. Remove brain directory (logs, transcripts, scratch)
             brain_path = BRAIN_DIR / cid
             if brain_path.exists() and brain_path.is_dir():
                 shutil.rmtree(brain_path, ignore_errors=True)
 
-            # Remove annotations pbtxt
+            # 5. Remove annotations pbtxt
             pbtxt_path = ANNOTATIONS_DIR / f"{cid}.pbtxt"
             if pbtxt_path.exists():
                 try:
@@ -1432,7 +1536,7 @@ class AntigravityStorageEngine:
                 except Exception:
                     pass
 
-            # Remove presence lock if exists
+            # 6. Remove presence lock if exists
             lock_path = GEMINI_DIR / "presence" / f"{cid}.lock"
             if lock_path.exists():
                 try:
@@ -1440,7 +1544,7 @@ class AntigravityStorageEngine:
                 except Exception:
                     pass
 
-            # Remove from metadata cache if exists
+            # 7. Remove from metadata cache if exists
             if CONV_METADATA_JSON.exists():
                 try:
                     meta_dict = json.loads(CONV_METADATA_JSON.read_text(encoding="utf-8"))
@@ -1454,7 +1558,41 @@ class AntigravityStorageEngine:
                 except Exception:
                     pass
 
-            logger.info("Deleted conversation %s and associated storage files", cid)
+            # 8. Remove from cache/last_conversations.json
+            last_conv_file = CACHE_DIR / "last_conversations.json"
+            if last_conv_file.exists():
+                try:
+                    last_convs = json.loads(last_conv_file.read_text(encoding="utf-8"))
+                    if isinstance(last_convs, dict):
+                        filtered = {k: v for k, v in last_convs.items() if v != cid}
+                        if len(filtered) != len(last_convs):
+                            last_conv_file.write_text(json.dumps(filtered, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
+
+            # 9. Remove from app_settings.json (session_workspaces)
+            try:
+                settings = load_app_settings()
+                sw = settings.get("session_workspaces", {})
+                if cid in sw:
+                    del sw[cid]
+                    settings["session_workspaces"] = sw
+                    save_app_settings(settings)
+            except Exception:
+                pass
+
+            # 10. Prune from history.jsonl
+            history_file = GEMINI_DIR / "history.jsonl"
+            if history_file.exists():
+                try:
+                    lines = history_file.read_text(encoding="utf-8", errors="replace").splitlines()
+                    new_lines = [l for l in lines if f'"{cid}"' not in l]
+                    if len(new_lines) != len(lines):
+                        history_file.write_text("\n".join(new_lines) + ("\n" if new_lines else ""), encoding="utf-8")
+                except Exception:
+                    pass
+
+            logger.info("Deleted conversation %s permanently from all stores", cid)
             return True
         except Exception as exc:
             logger.exception("Failed to delete conversation %s: %s", cid, exc)

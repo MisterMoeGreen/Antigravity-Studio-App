@@ -2772,7 +2772,7 @@
           </div>
           <div>
             <div class="updates-app-title">Antigravity Studio</div>
-            <div class="updates-app-version" id="updatesInstalledVersionText">Installed: v1.1.0 (Build 7)</div>
+            <div class="updates-app-version" id="updatesInstalledVersionText">Installed: v1.1.1 (Build 8)</div>
             <div class="card-meta-text" style="margin-top:2px;">Runtime Engine: Antigravity CLI (glibc)</div>
           </div>
         </div>
@@ -2796,7 +2796,7 @@
         <!-- Status: Up-to-Date -->
         <div class="updates-state-card" id="updatesStatusUpToDate" style="display:none;color:var(--accent-emerald);">
           <svg class="fa-icon" viewBox="0 0 448 512" style="width:24px;height:24px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M438.6 105.4c12.5 12.5 12.5 32.8 0 45.3l-256 256c-12.5 12.5-32.8 12.5-45.3 0l-128-128c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0L160 338.7 393.4 105.4c12.5-12.5 32.8-12.5 45.3 0z"/></svg>
-          <div id="updatesUpToDateMessage">Antigravity Studio is up to date (v1.1.0).</div>
+          <div id="updatesUpToDateMessage">Antigravity Studio is up to date (v1.1.1).</div>
         </div>
 
         <!-- Status: Update Available -->
@@ -3864,15 +3864,15 @@
             if (msg.name && msg.name !== 'all') {
               const ok = msg.ok || msg.status === 'connected' || msg.status === 'ready';
               if (ok) {
-                showToast(`✓ ${msg.name}: ${msg.message || 'Connected'}`);
+                showToast(`✓ ${msg.name}: Online`);
               } else {
-                showToast(`✗ ${msg.name}: ${msg.message || 'Health check failed'}`);
+                showToast(`✗ ${msg.name}: Offline`);
               }
               if (typeof updateSingleMCPHealth === 'function') {
                 updateSingleMCPHealth(msg.name, msg.status, msg.message);
               }
             } else if (msg.name === 'all') {
-              showToast(msg.message || 'MCP health probe completed');
+              showToast('MCP health probe completed');
             }
             break;
 
@@ -4680,6 +4680,7 @@
             sessionTitle.textContent = 'Antigravity Studio';
             renderEmptyWelcome();
           }
+          showToast('Session deleted');
         }
         closeModals();
       });
@@ -6240,7 +6241,7 @@
       let currentUpdateDownloadUrl = null;
 
       function initUpdatesView() {
-        const installedVer = state.appVersion || 'v1.1.0 (Build 5)';
+        const installedVer = state.appVersion || 'v1.1.1 (Build 8)';
         if (updatesInstalledVersionText) {
           updatesInstalledVersionText.textContent = `Installed: ${installedVer}`;
         }
@@ -6274,7 +6275,7 @@
           if (updatesStatusUpToDate) {
             updatesStatusUpToDate.style.display = 'flex';
             if (updatesUpToDateMessage) {
-              updatesUpToDateMessage.textContent = `Antigravity Studio is up to date (${msg.current_version || 'v1.1.0'}).`;
+              updatesUpToDateMessage.textContent = `Antigravity Studio is up to date (${msg.current_version || 'v1.1.1'}).`;
             }
           }
         }

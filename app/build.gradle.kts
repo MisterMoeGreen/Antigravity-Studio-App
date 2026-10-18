@@ -17,10 +17,10 @@ val versionProps = Properties().apply {
 
 // 2. Resolve version parameters with CLI override support (-P) and safe fallbacks
 val resolvedVersionCode: Int = (project.findProperty("versionCode") as? String)?.toIntOrNull()
-    ?: versionProps.getProperty("VERSION_CODE", "7").toInt()
+    ?: versionProps.getProperty("VERSION_CODE", "8").toInt()
 
 val resolvedVersionName: String = (project.findProperty("versionName") as? String)
-    ?: versionProps.getProperty("VERSION_NAME", "1.1.0")
+    ?: versionProps.getProperty("VERSION_NAME", "1.1.1")
 
 val resolvedAgyVersion: String = (project.findProperty("agyVersion") as? String)
     ?: versionProps.getProperty("AGY_VERSION", "1.4.2")
@@ -37,7 +37,7 @@ android {
         minSdk = 28
         targetSdk = 35
         versionCode = resolvedVersionCode
-        versionName = "1.1.0"
+        versionName = resolvedVersionName
 
         // Inject BuildConfig constants for runtime access in Kotlin
         buildConfigField("String", "AGY_RUNTIME_VERSION", "\"$resolvedAgyVersion\"")
