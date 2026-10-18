@@ -3814,6 +3814,10 @@ class AgyWebServer:
 
         if mtype == "setup_mcp_prompt":
             brief = str(data.get("brief") or "").strip()
+            name = str(data.get("name") or "").strip()
+            details = str(data.get("details") or "").strip()
+            if not brief and (name or details):
+                brief = f"{name}: {details}".strip(": ") if details else name
             active_keys = list(load_api_keys_store().get("keys", {}).keys())
             keys_hint = ", ".join(f"`{k}`" for k in active_keys) if active_keys else "none configured yet"
 
@@ -3822,8 +3826,8 @@ class AgyWebServer:
                 f"Description: {brief}\n\n"
                 f"Environment Context:\n"
                 f"- Config path: ~/.gemini/config/mcp_config.json (must have 0600 permissions).\n"
-                f"- CLI tool: `agy mcp` (run `agy mcp --help` and `agy mcp add --help` to inspect exact flags). Always pass `--transport http` for remote URLs or `--transport stdio` for local commands.\n"
-                f"- Available local runtimes for Stdio MCP servers: `python3` (Python 3.14), `bash`, `curl`, `git`, `busybox`. Note that `node`/`npx` and `docker` are NOT pre-installed in this Android sandbox; prefer Streamable HTTP (`--transport http`) or Python-based (`python3`) MCP servers.\n"
+                f"- CLI tool: `agy mcp` (run `agy mcp --help` and `agy mcp add --help` to inspect exact flags). Always pass `--type http` for remote URLs or `--type stdio` for local commands.\n"
+                f"- Available local runtimes for Stdio MCP servers: `python3` (Python 3.14), `bash`, `curl`, `git`, `busybox`. Note that `node`/`npx` and `docker` are NOT pre-installed in this Android sandbox; prefer Streamable HTTP (`--type http`) or Python-based (`python3`) MCP servers.\n"
                 f"- Pre-configured environment API keys available: {keys_hint}.\n\n"
                 f"Please configure this server, verify ~/.gemini/config/mcp_config.json is valid JSON with 0600 permissions, and test readiness with `agy mcp list`."
             )
