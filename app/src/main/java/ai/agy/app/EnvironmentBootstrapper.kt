@@ -32,7 +32,24 @@ object EnvironmentBootstrapper {
         "ssh-keygen" to "libssh_keygen.so",
         "ask_question" to "libask_question.so",
         "proot" to "libproot.so",
-        "agy-sh" to "libagy_sh.so"
+        "agy-sh" to "libagy_sh.so",
+        "apk" to "libagy_sh.so",
+        "pkg" to "libagy_sh.so",
+        "node" to "libagy_sh.so",
+        "nodejs" to "libagy_sh.so",
+        "npm" to "libagy_sh.so",
+        "npx" to "libagy_sh.so",
+        "cargo" to "libagy_sh.so",
+        "rustc" to "libagy_sh.so",
+        "gcc" to "libagy_sh.so",
+        "g++" to "libagy_sh.so",
+        "clang" to "libagy_sh.so",
+        "clang++" to "libagy_sh.so",
+        "make" to "libagy_sh.so",
+        "php" to "libagy_sh.so",
+        "go" to "libagy_sh.so",
+        "java" to "libagy_sh.so",
+        "javac" to "libagy_sh.so"
     )
 
     private val GIT_CORE_SYMLINKS = mapOf(
@@ -246,14 +263,22 @@ object EnvironmentBootstrapper {
             createOrUpdateSymlink(File(homeDir, ".gemini/GEMINI.md"), geminiMd.absolutePath)
         } catch (_: Exception) {}
 
-        // 6. Seed ask-question builtin skill (isolated from user-editable skills)
+        // 6. Seed all builtin skills (isolated from user-editable skills)
         try {
-            val askQuestionSkillSrc = File(usrDir, "share/agy-ui/skills/ask-question/SKILL.md")
-            val builtinSkillDir = File(homeDir, ".gemini/antigravity-cli/builtin/skills/ask-question")
-            val builtinSkillMd = File(builtinSkillDir, "SKILL.md")
-            if (askQuestionSkillSrc.exists() && (!builtinSkillMd.exists() || askQuestionSkillSrc.lastModified() > builtinSkillMd.lastModified())) {
-                builtinSkillDir.mkdirs()
-                askQuestionSkillSrc.copyTo(builtinSkillMd, overwrite = true)
+            val skillsSourceDir = File(usrDir, "share/agy-ui/skills")
+            val builtinSkillsDir = File(homeDir, ".gemini/antigravity-cli/builtin/skills")
+            if (skillsSourceDir.isDirectory) {
+                skillsSourceDir.listFiles()?.forEach { skillDir ->
+                    if (skillDir.isDirectory) {
+                        val srcSkillMd = File(skillDir, "SKILL.md")
+                        val destSkillDir = File(builtinSkillsDir, skillDir.name)
+                        val destSkillMd = File(destSkillDir, "SKILL.md")
+                        if (srcSkillMd.exists() && (!destSkillMd.exists() || srcSkillMd.lastModified() > destSkillMd.lastModified())) {
+                            destSkillDir.mkdirs()
+                            srcSkillMd.copyTo(destSkillMd, overwrite = true)
+                        }
+                    }
+                }
             }
             val legacySkillDir = File(homeDir, ".gemini/config/skills/ask-question")
             if (legacySkillDir.exists()) {

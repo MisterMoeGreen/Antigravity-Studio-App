@@ -23,7 +23,7 @@ However, the user experience was constrained by the fixed set of pre-compiled bi
 
 ## 2. Specification Index & Architecture Map
 
-This implementation guide coordinates the five technical specifications in [`specs/v1.3.0/`](.):
+This implementation guide coordinates the six technical specifications in [`specs/v1.3.0/`](.):
 
 ```
 specs/v1.3.0/
@@ -32,6 +32,7 @@ specs/v1.3.0/
 ├── 03-rootfs-distribution-and-bootstrapper.md # Alpine minirootfs, ld-musl patch & update persistence
 ├── 04-host-container-bridge-and-shebang.md    # libagy_sh.so bridge, 1:1 path preservation & env propagation
 ├── 05-toolchain-verification-and-concurrency.md # Acceptance test matrix (Node, Java, Rust, PHP, C++)
+├── 06-package-manager-ui.md               # Settings Hub package UI, fast DB parser & AI disambiguation
 ├── OVERVIEW_AND_IMPLEMENTATION_GUIDE.md   # Master coordination guide, Argon audit & AC checklist
 └── IMPLEMENTATION_LOG.md                  # Quick-resume state header & step execution ledger
 ```
@@ -236,3 +237,54 @@ sequenceDiagram
     bash ./gradlew assembleRelease && \
     test -f app/build/outputs/apk/release/app-release.apk
     ```
+
+### Phase 6: On-Device Package Manager UI & AI Disambiguation
+- [ ] **AC-6.1: Fast Alpine Package DB Parser & API Endpoint**
+  - Verify `server.py` implements `get_installed_packages()` by directly reading `/etc/apk/world` and `/lib/apk/db/installed`, correctly calculating size in MB and filtering base packages.
+  - **Verification Gate**:
+    ```bash
+    python3 -c '
+    import sys; sys.path.insert(0, "agy-ui")
+    from server import get_installed_packages
+    res = get_installed_packages()
+    assert "packages" in res and "total_size_mb" in res
+    assert isinstance(res["packages"], list)
+    print("AC-6.1 PASSED")
+    '
+    ```
+
+- [ ] **AC-6.2: Package Mutation Handlers (`delete`, `upgrade`, `upgrade_all`)**
+  - Verify WebSocket message routing for `delete_package`, `upgrade_package`, and `upgrade_all_packages` executes `apk` via `usr/bin/agy-sh`.
+  - **Verification Gate**:
+    ```bash
+    grep -q 'delete_package' agy-ui/server.py && \
+    grep -q 'upgrade_package' agy-ui/server.py && \
+    grep -q 'upgrade_all_packages' agy-ui/server.py
+    ```
+
+- [ ] **AC-6.3: Package Manager SPA Sub-View in `index.html`**
+  - Verify `#viewPackages`, `#btnOpenSettingsPackages`, `#btnUpdateAllPackages`, and package card template exist with Font Awesome vector SVGs.
+  - **Verification Gate**:
+    ```bash
+    grep -q 'id="viewPackages"' agy-ui/index.html && \
+    grep -q 'btnOpenSettingsPackages' agy-ui/index.html && \
+    grep -q 'btnUpdateAllPackages' agy-ui/index.html
+    ```
+
+- [ ] **AC-6.4: Install Package Modal Sheet & Touch Ergonomics**
+  - Verify `#modalInstallPackage`, `#inputPackageName`, `#btnConfirmInstallPackage`, and preset chips are defined with mobile safe-area paddings.
+  - **Verification Gate**:
+    ```bash
+    grep -q 'id="modalInstallPackage"' agy-ui/index.html && \
+    grep -q 'inputPackageName' agy-ui/index.html && \
+    grep -q 'btnConfirmInstallPackage' agy-ui/index.html
+    ```
+
+- [ ] **AC-6.5: AI Turn Handoff & Disambiguation Prompt**
+  - Verify `server.py` handles `install_package_prompt` by creating a new session with the package disambiguation prompt referencing `ask_question`.
+  - **Verification Gate**:
+    ```bash
+    grep -q 'install_package_prompt' agy-ui/server.py && \
+    grep -q 'ask_question' agy-ui/server.py
+    ```
+

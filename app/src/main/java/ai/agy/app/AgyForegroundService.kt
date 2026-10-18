@@ -306,7 +306,24 @@ class AgyForegroundService : Service() {
             "ssh-keygen" to "libssh_keygen.so",
             "ask_question" to "libask_question.so",
             "proot" to "libproot.so",
-            "agy-sh" to "libagy_sh.so"
+            "agy-sh" to "libagy_sh.so",
+            "apk" to "libagy_sh.so",
+            "pkg" to "libagy_sh.so",
+            "node" to "libagy_sh.so",
+            "nodejs" to "libagy_sh.so",
+            "npm" to "libagy_sh.so",
+            "npx" to "libagy_sh.so",
+            "cargo" to "libagy_sh.so",
+            "rustc" to "libagy_sh.so",
+            "gcc" to "libagy_sh.so",
+            "g++" to "libagy_sh.so",
+            "clang" to "libagy_sh.so",
+            "clang++" to "libagy_sh.so",
+            "make" to "libagy_sh.so",
+            "php" to "libagy_sh.so",
+            "go" to "libagy_sh.so",
+            "java" to "libagy_sh.so",
+            "javac" to "libagy_sh.so"
         )
 
         for ((binName, soName) in symlinkMap) {

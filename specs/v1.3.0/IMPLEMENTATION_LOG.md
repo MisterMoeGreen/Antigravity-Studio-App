@@ -3,13 +3,13 @@
 ## 1. Quick-Resume State Header
 > **Autonomous Agent Handoff Protocol**: Any agent picking up this task MUST read this header first. Do not proceed until `LAST_COMPLETED_CRITERION` verification is confirmed and start immediately on `NEXT_PENDING_CRITERION`.
 
-- **Current Phase**: COMPLETED
+- **Current Phase**: Phase 6 (On-Device Package Manager UI & AI Disambiguation)
 - **Last Completed Criterion**: `AC-5.4` + `PROMPT-FIX` (Agent Directives Alignment & Dynamic Package Awareness)
-- **Next Pending Criterion**: None (All Acceptance Criteria & Alignment Audits Fully Verified)
-- **Build Status**: RELEASE_APK_VERIFIED
+- **Next Pending Criterion**: `AC-6.1` (Fast Alpine Package DB Parser & API Endpoint)
+- **Build Status**: RELEASE_APK_VERIFIED (v1.3.0 Code 12)
 - **Active Branch**: `v1.3.0`
 - **Active Blockers / Deviations**: None
-- **Last Updated**: 2026-10-18T21:05:00Z
+- **Last Updated**: 2026-10-18T21:30:00Z
 
 ---
 
@@ -37,6 +37,13 @@
 - [x] AC-5.2: Java OpenJDK 21 Execution Gate Inside W^X Container
 - [x] AC-5.3: Native C Compilation & Anonymous ELF Execution Gate
 - [x] AC-5.4: Version Bump to v1.3.0 & 16 KB Aligned Release APK Verification
+
+### Phase 6: On-Device Package Manager UI & AI Disambiguation
+- [ ] AC-6.1: Fast Alpine Package DB Parser & API Endpoint
+- [ ] AC-6.2: Package Mutation Handlers (`delete`, `upgrade`, `upgrade_all`)
+- [ ] AC-6.3: Package Manager SPA Sub-View in `index.html`
+- [ ] AC-6.4: Install Package Modal Sheet & Touch Ergonomics
+- [ ] AC-6.5: AI Turn Handoff & Disambiguation Prompt
 
 ---
 
@@ -163,5 +170,28 @@
   - `app/src/main/java/ai/agy/app/EnvironmentBootstrapper.kt`: Enforced `outFile.setWritable(true, false)` on extracted files and directories in `extractZstdTarAsset`.
   - `version.properties`: Bumped `VERSION_CODE=12` to ensure the release APK is recognized as a clean update by Android package manager.
   - `~/.gemini/config/GEMINI.md` and `~/.gemini/GEMINI.md`: Synchronized active directives in local environment.
+
+### Milestone v1.3.0-PHASE-6-SPEC — On-Device Package Manager UI Specification
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-18T21:30:00Z
+- **Branch**: `v1.3.0`
+- **Files Created / Updated**:
+  - `specs/v1.3.0/06-package-manager-ui.md`: Formulated technical specification covering Settings Hub Package Manager menu entry, full-page sub-view layout (`#viewPackages`), fast Alpine DB parsing (`/etc/apk/world` & `/lib/apk/db/installed` in < 3ms), mutation actions (`apk del`, `apk add --upgrade`, `apk update && apk upgrade`), `#modalInstallPackage` touch sheet with developer presets, and automated AI session handoff with candidate disambiguation via v1.2.0 `ask_question`.
+  - `specs/v1.3.0/OVERVIEW_AND_IMPLEMENTATION_GUIDE.md`: Updated specification index and appended Acceptance Criteria `AC-6.1` through `AC-6.5`.
+  - `specs/v1.3.0/IMPLEMENTATION_LOG.md`: Updated quick-resume state header and appended Phase 6 criteria.
+
+### Milestone v1.3.0-BRIDGE-AND-SKILL — Multicall Binary Bridge, Auto-Seeded package-manager Skill & Headless Guard
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-18T21:32:00Z
+- **Branch**: `v1.3.0`
+- **Artifacts Staged**:
+  - `/storage/emulated/0/Download/AntigravityStudio-v1.3.0.apk` (Release APK v1.3.0 code 13, 104 MB, SHA-256: `93a0170b6f93ccd61b21af9fee1d6efebf70bc2adbdf2e42f64573c8592ddd4c`)
+- **Modifications**:
+  - `app/src/main/cpp/agy_sh.c`: Implemented multicall dispatch based on `argv[0]`. If invoked as `apk`, `pkg`, `node`, `npm`, `npx`, `cargo`, `gcc`, etc., dispatches directly to the container tool. Added direct command invocation (`agy-sh <cmd> [args...]`) without requiring `-c`. Added non-interactive tty guard preventing bare `agy-sh` from hanging indefinitely.
+  - `app/src/main/java/ai/agy/app/EnvironmentBootstrapper.kt` & `AgyForegroundService.kt`: Added `apk`, `pkg`, `node`, `nodejs`, `npm`, `npx`, `cargo`, `rustc`, `gcc`, `g++`, `clang`, `clang++`, `make`, `php`, `go`, `java`, `javac` pointing to `libagy_sh.so` in `BIN_SYMLINKS` and `symlinkMap`. Generalized skill seeding to auto-seed all skills from `share/agy-ui/skills/` into `.gemini/antigravity-cli/builtin/skills/`.
+  - `agy-ui/skills/package-manager/SKILL.md`: Authored built-in skill providing package recipes (Node, npm, GCC, Java, Rust, Python, PHP, Git, Go), direct execution instructions, and explicit warnings against the 4 common failure modes (no custom shell scripts in noexec `/usr/bin/`, no bare `agy-sh` in background, no false refusals, shared storage interpreter invocation).
+  - `agy-ui/default_app_prompt.md`: Updated Section 3 and 4 with direct execution instructions, `$PATH` bridge details, and anti-patterns.
+  - `version.properties`: Bumped `VERSION_CODE=13`.
+
 
 
