@@ -55,9 +55,15 @@ Antigravity Studio complies with Android’s mandatory **16 KB memory page align
 * **Hardware Telemetry Bridge**: Continuously reports battery level, charging state, and CPU temperature to the agent via `usr/tmp/android_telemetry.json`.
 * **Atomic Dynamic DNS**: Watches network changes (`Wi-Fi` $\leftrightarrow$ `Cellular`) and automatically updates `usr/etc/resolv.conf` so agent network calls never drop.
 
+### ⚙️ Native Settings Hub & Tooling Integrations
+* **API Keys Management**: Securely store and inject third-party service tokens (`GITHUB_TOKEN`, `OPENAI_API_KEY`, etc.) directly into the agent environment.
+* **Touch-First SSH Key Manager**: Generate `ED25519` and `RSA-4096` keypairs and copy public keys with one tap for Git repositories.
+* **Model Context Protocol (MCP) Hub**: Connect local Python stdio or remote HTTP MCP servers with live health probing and latency diagnostics.
+* **Custom Instructions & Skills**: Browse, edit, and create custom agent skills and persistent workspace instructions.
+
 ### 🔄 Dual-Tier In-App Updaters
 * **Tier-1 (Instant In-App OTA)**: Silently downloads and updates frontend UI assets and server scripts without requiring an app reinstall or restart.
-* **Tier-2 (APK Self-Updater)**: Connects to GitHub releases, downloads updated APKs, and seamlessly invokes Android's `PackageInstaller` session API for one-tap app upgrades.
+* **Tier-2 (APK Self-Updater)**: On-demand GitHub release queries with side-by-side version comparison (`Current` ➔ `Latest`), in-app progress tracking, and Android `PackageInstaller` session handoff.
 
 ---
 
