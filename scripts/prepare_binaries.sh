@@ -151,7 +151,8 @@ fi
 
 AGY_UI_DIR="${PROJECT_ROOT}/agy-ui"
 if [ ! -d "$AGY_UI_DIR" ]; then
-  AGY_UI_DIR="${HOME}/.agy-ui"
+  echo "Error: Required web assets directory not found at $AGY_UI_DIR" >&2
+  exit 1
 fi
 
 cp -L "${AGY_UI_DIR}/index.html" "${STAGING_DIR}/share/agy-ui/index.html"
