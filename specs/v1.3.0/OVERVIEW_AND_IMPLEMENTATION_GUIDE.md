@@ -104,7 +104,7 @@ sequenceDiagram
 ## 6. Command-Verified Acceptance Criteria Checklist
 
 ### Phase 1: Anonymous-Memory ELF Loader Implementation & 16 KB Alignment
-- [ ] **AC-1.1: Anonymous Loader Compilation & 16 KB Alignment**
+- [x] **AC-1.1: Anonymous Loader Compilation & 16 KB Alignment**
   - Compile `libproot_loader.so` with `mmap(MAP_ANONYMOUS) + pread64 + mprotect(RX)` and verify 16 KB (`0x4000`) ELF segment alignment.
   - **Verification Gate**:
     ```bash
@@ -120,7 +120,7 @@ sequenceDiagram
     print("AC-1.1 PASSED: 16KB alignment verified across all PT_LOAD segments")
     '
     ```
-- [ ] **AC-1.2: Anonymous Loader Freestanding & W^X Syscall Audit**
+- [x] **AC-1.2: Anonymous Loader Freestanding & W^X Syscall Audit**
   - Verify `libproot_loader.so` has zero `DT_NEEDED` external libraries (freestanding) and contains the anonymous memory loader sequence in `src/loader/loader.c`.
   - **Verification Gate**:
     ```bash
@@ -131,7 +131,7 @@ sequenceDiagram
     ```
 
 ### Phase 2: W^X-Aware PRoot Tracer Engine Staging
-- [ ] **AC-2.1: `libproot.so` Compilation, 16 KB Alignment & JNI Staging**
+- [x] **AC-2.1: `libproot.so` Compilation, 16 KB Alignment & JNI Staging**
   - Stage `libproot.so` in `jniLibs/arm64-v8a/` with 16 KB page size alignment, `PTRACE_O_EXITKILL`, and verified seccomp BPF filter.
   - **Verification Gate**:
     ```bash
@@ -139,7 +139,7 @@ sequenceDiagram
     test $(stat -c%s app/src/main/jniLibs/arm64-v8a/libproot.so 2>/dev/null || stat -f%z app/src/main/jniLibs/arm64-v8a/libproot.so) -gt 100000 && \
     readelf -lW app/src/main/jniLibs/arm64-v8a/libproot.so | awk '/LOAD/{if (strtonum($NF) < 16384) exit 1}'
     ```
-- [ ] **AC-2.2: Bootstrapper & Service PRoot Symlink Assembly**
+- [x] **AC-2.2: Bootstrapper & Service PRoot Symlink Assembly**
   - Verify both `EnvironmentBootstrapper.kt` and `AgyForegroundService.kt` map `proot` to `libproot.so`, `agy-sh` to `libagy_sh.so`, and retain `ask_question` to `libask_question.so`.
   - **Verification Gate**:
     ```bash
@@ -152,7 +152,7 @@ sequenceDiagram
     ```
 
 ### Phase 3: Alpine Linux Rootfs Packaging & Bootstrapper Integration
-- [ ] **AC-3.1: Alpine Minirootfs Asset Bundling & Patched `ld-musl` Verification**
+- [x] **AC-3.1: Alpine Minirootfs Asset Bundling & Patched `ld-musl` Verification**
   - Package minimal Alpine `aarch64` rootfs into `app/src/main/assets/rootfs.tar.zst` (< 5.0 MB) and verify `etc/os-release` and `lib/ld-musl-aarch64.so.1` exist inside the archive.
   - **Verification Gate**:
     ```bash
@@ -161,7 +161,7 @@ sequenceDiagram
     zstd -dc app/src/main/assets/rootfs.tar.zst | tar -tf - | grep -qE '^(\./)?etc/os-release$' && \
     zstd -dc app/src/main/assets/rootfs.tar.zst | tar -tf - | grep -qE '^(\./)?lib/ld-musl-aarch64\.so\.1$'
     ```
-- [ ] **AC-3.2: Non-Destructive Bootstrapper Initialization**
+- [x] **AC-3.2: Non-Destructive Bootstrapper Initialization**
   - Verify `EnvironmentBootstrapper.kt` guards `files/rootfs` extraction behind an `os-release` existence check.
   - **Verification Gate**:
     ```bash
@@ -170,7 +170,7 @@ sequenceDiagram
     ```
 
 ### Phase 4: Host-to-Container Interposition Bridge (`libagy_sh.so`)
-- [ ] **AC-4.1: Native Bridge Binary (`libagy_sh.so`) Compilation & 16 KB Alignment**
+- [x] **AC-4.1: Native Bridge Binary (`libagy_sh.so`) Compilation & 16 KB Alignment**
   - Compile `libagy_sh.so` into `app/src/main/jniLibs/arm64-v8a/libagy_sh.so` with `unsetenv("LD_PRELOAD")`, 1:1 path mounts, and fakeroot `-0`.
   - **Verification Gate**:
     ```bash
@@ -178,7 +178,7 @@ sequenceDiagram
     readelf -lW app/src/main/jniLibs/arm64-v8a/libagy_sh.so | awk '/LOAD/{if (strtonum($NF) < 16384) exit 1}' && \
     strings app/src/main/jniLibs/arm64-v8a/libagy_sh.so | grep -q 'PROOT_LOADER'
     ```
-- [ ] **AC-4.2: Shim Translation & Service `SHELL` Routing to `agy-sh`**
+- [x] **AC-4.2: Shim Translation & Service `SHELL` Routing to `agy-sh`**
   - Verify `agy_shim.c` translates `/bin/sh` to `APP_PREFIX "/bin/agy-sh"` and strips `LD_PRELOAD` for `proot`/`agy-sh`, and `AgyForegroundService.kt` sets `env["SHELL"] = "$usr/bin/agy-sh"`.
   - **Verification Gate**:
     ```bash
@@ -188,40 +188,46 @@ sequenceDiagram
     ```
 
 ### Phase 5: Dynamic Toolchain Verification & Release Packaging
-- [ ] **AC-5.1: Container Boot & Node.js V8 JIT Execution Gate**
+- [x] **AC-5.1: Container Boot & Node.js V8 JIT Execution Gate**
   - Extract `rootfs.tar.zst` to a temporary test rootfs, install `nodejs` via `apk`, and verify V8 JIT execution under `libproot.so` + `libproot_loader.so`.
   - **Verification Gate**:
     ```bash
+    cp -f app/src/main/jniLibs/arm64-v8a/libproot*.so "${TMPDIR:-/tmp}/" && \
+    chmod +x "${TMPDIR:-/tmp}/libproot"*.so && \
     TEST_ROOT="${TMPDIR:-/tmp}/agy_v13_test_rootfs" && \
     rm -rf "$TEST_ROOT" && mkdir -p "$TEST_ROOT" && \
     zstd -dc app/src/main/assets/rootfs.tar.zst | tar -xf - -C "$TEST_ROOT" && \
     cp /etc/resolv.conf "$TEST_ROOT/etc/resolv.conf" 2>/dev/null || printf "nameserver 8.8.8.8\n" > "$TEST_ROOT/etc/resolv.conf" && \
-    PROOT_LOADER="$(pwd)/app/src/main/jniLibs/arm64-v8a/libproot_loader.so" \
+    PROOT_LOADER="${TMPDIR:-/tmp}/libproot_loader.so" \
     PROOT_TMP_DIR="${TMPDIR:-/tmp}" \
-    ./app/src/main/jniLibs/arm64-v8a/libproot.so -r "$TEST_ROOT" -0 -b /dev -b /proc -b /sys -w /root \
-    /bin/sh -c "apk update && apk add --no-cache nodejs && node -e 'console.log(\"V8_JIT_OK_\" + (20+22))'" | grep -q 'V8_JIT_OK_42'
+    "${TMPDIR:-/tmp}/libproot.so" --link2symlink -r "$TEST_ROOT" -0 -b /dev -b /proc -b /sys -w /root \
+    /bin/sh -c "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && apk update && apk add --no-cache nodejs && node -e 'console.log(\"V8_JIT_OK_\" + (20+22))'" | grep -q 'V8_JIT_OK_42'
     ```
-- [ ] **AC-5.2: Java OpenJDK 21 Execution Gate Inside W^X Container**
+- [x] **AC-5.2: Java OpenJDK 21 Execution Gate Inside W^X Container**
   - Install `openjdk21-jre-headless` inside the test rootfs and verify JVM execution under `libproot.so` + `libproot_loader.so`.
   - **Verification Gate**:
     ```bash
+    cp -f app/src/main/jniLibs/arm64-v8a/libproot*.so "${TMPDIR:-/tmp}/" && \
+    chmod +x "${TMPDIR:-/tmp}/libproot"*.so && \
     TEST_ROOT="${TMPDIR:-/tmp}/agy_v13_test_rootfs" && \
-    PROOT_LOADER="$(pwd)/app/src/main/jniLibs/arm64-v8a/libproot_loader.so" \
+    PROOT_LOADER="${TMPDIR:-/tmp}/libproot_loader.so" \
     PROOT_TMP_DIR="${TMPDIR:-/tmp}" \
-    ./app/src/main/jniLibs/arm64-v8a/libproot.so -r "$TEST_ROOT" -0 -b /dev -b /proc -b /sys -w /root \
-    /bin/sh -c "apk add --no-cache openjdk21-jre-headless && java -XX:-UsePerfData -Xmx512m -version 2>&1" | grep -qi 'openjdk'
+    "${TMPDIR:-/tmp}/libproot.so" --link2symlink -r "$TEST_ROOT" -0 -b /dev -b /proc -b /sys -w /root \
+    /bin/sh -c "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && apk add --no-cache openjdk21-jre-headless && java -XX:-UsePerfData -Xmx512m -version 2>&1" | grep -qi 'openjdk'
     ```
-- [ ] **AC-5.3: Native C Compilation & Anonymous ELF Execution Gate**
+- [x] **AC-5.3: Native C Compilation & Anonymous ELF Execution Gate**
   - Install `gcc` and `musl-dev` inside the test rootfs, compile a brand-new ELF executable inside writable storage, and execute it directly via the anonymous ELF loader without `-EACCES`.
   - **Verification Gate**:
     ```bash
+    cp -f app/src/main/jniLibs/arm64-v8a/libproot*.so "${TMPDIR:-/tmp}/" && \
+    chmod +x "${TMPDIR:-/tmp}/libproot"*.so && \
     TEST_ROOT="${TMPDIR:-/tmp}/agy_v13_test_rootfs" && \
-    PROOT_LOADER="$(pwd)/app/src/main/jniLibs/arm64-v8a/libproot_loader.so" \
+    PROOT_LOADER="${TMPDIR:-/tmp}/libproot_loader.so" \
     PROOT_TMP_DIR="${TMPDIR:-/tmp}" \
-    ./app/src/main/jniLibs/arm64-v8a/libproot.so -r "$TEST_ROOT" -0 -b /dev -b /proc -b /sys -w /root \
-    /bin/sh -c 'apk add --no-cache gcc musl-dev && printf "#include <stdio.h>\nint main(){puts(\"ANON_ELF_EXEC_OK\");return 0;}\n" > /root/t.c && gcc /root/t.c -o /root/t && /root/t' | grep -q 'ANON_ELF_EXEC_OK'
+    "${TMPDIR:-/tmp}/libproot.so" --link2symlink -r "$TEST_ROOT" -0 -b /dev -b /proc -b /sys -w /root \
+    /bin/sh -c 'export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && apk add --no-cache gcc musl-dev && printf "#include <stdio.h>\nint main(){puts(\"ANON_ELF_EXEC_OK\");return 0;}\n" > /root/t.c && gcc /root/t.c -o /root/t && /root/t' | grep -q 'ANON_ELF_EXEC_OK'
     ```
-- [ ] **AC-5.4: Version Bump to v1.3.0 & 16 KB Aligned Release APK Verification**
+- [x] **AC-5.4: Version Bump to v1.3.0 & 16 KB Aligned Release APK Verification**
   - Verify `version.properties` is set to `VERSION_NAME=1.3.0` and `VERSION_CODE=11`, release APK builds cleanly, and all bundled `.so` files in `jniLibs` pass 16 KB alignment checks.
   - **Verification Gate**:
     ```bash

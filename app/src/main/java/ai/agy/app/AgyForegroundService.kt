@@ -142,7 +142,9 @@ class AgyForegroundService : Service() {
         env["PATH"] = "$usr/bin:$home/.local/bin:/system/bin"
         env["PYTHONUSERBASE"] = "$home/.local"
         env["TMPDIR"] = "$usr/tmp"
-        env["SHELL"] = "$usr/bin/bash"
+        env["SHELL"] = "$usr/bin/agy-sh"
+        env["PROOT_LOADER"] = "$nativeDir/libproot_loader.so"
+        env["PROOT_TMP_DIR"] = "$usr/tmp"
         env["AGY_BIN"] = "$usr/bin/agy"
         env["AGY_DISABLE_AUTO_UPDATE"] = "1"
         env["AGY_WEB_PORT"] = port.toString()
@@ -301,7 +303,10 @@ class AgyForegroundService : Service() {
             "git" to "libgit.so",
             "python3" to "libpython3_bin.so",
             "ssh" to "libssh_bin.so",
-            "ssh-keygen" to "libssh_keygen.so"
+            "ssh-keygen" to "libssh_keygen.so",
+            "ask_question" to "libask_question.so",
+            "proot" to "libproot.so",
+            "agy-sh" to "libagy_sh.so"
         )
 
         for ((binName, soName) in symlinkMap) {

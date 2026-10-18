@@ -30,7 +30,9 @@ object EnvironmentBootstrapper {
         "env" to "libbusybox.so",
         "ssh" to "libssh_bin.so",
         "ssh-keygen" to "libssh_keygen.so",
-        "ask_question" to "libask_question.so"
+        "ask_question" to "libask_question.so",
+        "proot" to "libproot.so",
+        "agy-sh" to "libagy_sh.so"
     )
 
     private val GIT_CORE_SYMLINKS = mapOf(
@@ -128,6 +130,28 @@ object EnvironmentBootstrapper {
 
         // Symlink usr/glibc/etc -> usr/etc so Glibc getaddrinfo & NSS resolve dynamically
         createOrUpdateSymlink(File(glibcDir, "etc"), etcDir.absolutePath)
+
+        // Symlink libproot_loader.so for PRoot anonymous memory loader (Spec 01)
+        createOrUpdateSymlink(File(usrLibDir, "libproot_loader.so"), "$nativeDir/libproot_loader.so")
+
+        // Extract rootfs.tar.zst on first launch, guarded by os-release existence check (Spec 03)
+        val rootfsDir = File(filesDir, "rootfs")
+        val osRelease = File(rootfsDir, "etc/os-release")
+
+        if (!osRelease.exists()) {
+            Log.i(TAG, "First boot: Extracting Alpine rootfs to ${rootfsDir.absolutePath}...")
+            rootfsDir.mkdirs()
+            extractZstdTarAsset(context, "rootfs.tar.zst", rootfsDir)
+
+            // Seed default DNS and package repository mirrors
+            File(rootfsDir, "etc/resolv.conf").writeText("nameserver 8.8.8.8\nnameserver 1.1.1.1\n")
+            File(rootfsDir, "etc/apk/repositories").writeText(
+                "http://dl-cdn.alpinelinux.org/alpine/v3.20/main\n" +
+                "http://dl-cdn.alpinelinux.org/alpine/v3.20/community\n"
+            )
+        } else {
+            Log.i(TAG, "Alpine rootfs already initialized. Skipping extract to preserve user packages.")
+        }
 
         // 3. Guarantee base networking and Git config files exist
         val nsswitch = File(etcDir, "nsswitch.conf")

@@ -28,8 +28,10 @@ static inline const char* translate_path(const char* path, char* buf, size_t buf
 
     // Shell & env redirection
     if (strcmp(path, "/bin/sh") == 0 || strcmp(path, "/system/bin/sh") == 0 ||
-        strcmp(path, "/bin/bash") == 0 || strcmp(path, "/usr/bin/bash") == 0 ||
         strcmp(path, "/usr/bin/sh") == 0) {
+        return APP_PREFIX "/bin/agy-sh";
+    }
+    if (strcmp(path, "/bin/bash") == 0 || strcmp(path, "/usr/bin/bash") == 0) {
         return APP_PREFIX "/bin/bash";
     }
     if (strcmp(path, "/usr/bin/env") == 0 || strcmp(path, "/bin/env") == 0) {
@@ -83,13 +85,19 @@ static inline const char* translate_path(const char* path, char* buf, size_t buf
     return path;
 }
 
-/* Check if target executable is the Glibc-linked agy binary */
+/* Check if target executable is Glibc binary or PRoot / agy-sh container bridge */
 static inline int is_glibc_target(const char* path) {
     if (!path) return 0;
     if (strcmp(path, "agy") == 0 || strcmp(path, "agy.va39") == 0) return 1;
+    if (strcmp(path, "proot") == 0 || strcmp(path, "agy-sh") == 0) return 1;
     size_t len = strlen(path);
     if (len >= 4 && strcmp(path + len - 4, "/agy") == 0) return 1;
+    if (len >= 6 && strcmp(path + len - 6, "/proot") == 0) return 1;
+    if (len >= 7 && strcmp(path + len - 7, "/agy-sh") == 0) return 1;
     if (len >= 10 && strcmp(path + len - 10, "/libagy.so") == 0) return 1;
+    if (len >= 11 && strcmp(path + len - 11, "/libproot.so") == 0) return 1;
+    if (len >= 12 && strcmp(path + len - 12, "/libagy_sh.so") == 0) return 1;
+    if (len >= 18 && strcmp(path + len - 18, "/libask_question.so") == 0) return 1;
     if (strstr(path, "ld-linux-aarch64") != NULL) return 1;
     return 0;
 }

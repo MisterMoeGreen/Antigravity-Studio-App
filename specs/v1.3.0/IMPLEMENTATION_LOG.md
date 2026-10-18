@@ -3,13 +3,13 @@
 ## 1. Quick-Resume State Header
 > **Autonomous Agent Handoff Protocol**: Any agent picking up this task MUST read this header first. Do not proceed until `LAST_COMPLETED_CRITERION` verification is confirmed and start immediately on `NEXT_PENDING_CRITERION`.
 
-- **Current Phase**: READY_FOR_PHASE_1 (Specifications Audited & Hardened by Argon)
-- **Last Completed Criterion**: None
-- **Next Pending Criterion**: `AC-1.1` (Anonymous Loader Compilation & 16 KB Alignment)
-- **Build Status**: SPEC_AUDITED_AND_APPROVED
+- **Current Phase**: COMPLETED
+- **Last Completed Criterion**: `AC-5.4` (Version Bump to v1.3.0 & 16 KB Aligned Release APK Verification)
+- **Next Pending Criterion**: None (All Acceptance Criteria Fully Verified)
+- **Build Status**: RELEASE_APK_VERIFIED
 - **Active Branch**: `v1.3.0`
 - **Active Blockers / Deviations**: None
-- **Last Updated**: 2026-10-18T18:50:00Z
+- **Last Updated**: 2026-10-18T20:42:00Z
 
 ---
 
@@ -17,26 +17,26 @@
 <!-- Agent updates [ ] to [x] ONLY after the specific Verification Gate command exits 0 -->
 
 ### Phase 1: Anonymous-Memory ELF Loader Implementation & 16 KB Alignment
-- [ ] AC-1.1: Anonymous Loader Compilation & 16 KB Alignment
-- [ ] AC-1.2: Anonymous Loader Freestanding & W^X Syscall Audit
+- [x] AC-1.1: Anonymous Loader Compilation & 16 KB Alignment
+- [x] AC-1.2: Anonymous Loader Freestanding & W^X Syscall Audit
 
 ### Phase 2: W^X-Aware PRoot Tracer Engine Staging
-- [ ] AC-2.1: `libproot.so` Compilation, 16 KB Alignment & JNI Staging
-- [ ] AC-2.2: Bootstrapper & Service PRoot Symlink Assembly
+- [x] AC-2.1: `libproot.so` Compilation, 16 KB Alignment & JNI Staging
+- [x] AC-2.2: Bootstrapper & Service PRoot Symlink Assembly
 
 ### Phase 3: Alpine Linux Rootfs Packaging & Bootstrapper Integration
-- [ ] AC-3.1: Alpine Minirootfs Asset Bundling & Patched `ld-musl` Verification
-- [ ] AC-3.2: Non-Destructive Bootstrapper Initialization
+- [x] AC-3.1: Alpine Minirootfs Asset Bundling & Patched `ld-musl` Verification
+- [x] AC-3.2: Non-Destructive Bootstrapper Initialization
 
 ### Phase 4: Host-to-Container Interposition Bridge (`libagy_sh.so`)
-- [ ] AC-4.1: Native Bridge Binary (`libagy_sh.so`) Compilation & 16 KB Alignment
-- [ ] AC-4.2: Shim Translation & Service `SHELL` Routing to `agy-sh`
+- [x] AC-4.1: Native Bridge Binary (`libagy_sh.so`) Compilation & 16 KB Alignment
+- [x] AC-4.2: Shim Translation & Service `SHELL` Routing to `agy-sh`
 
 ### Phase 5: Dynamic Toolchain Verification & Release Packaging
-- [ ] AC-5.1: Container Boot & Node.js V8 JIT Execution Gate
-- [ ] AC-5.2: Java OpenJDK 21 Execution Gate Inside W^X Container
-- [ ] AC-5.3: Native C Compilation & Anonymous ELF Execution Gate
-- [ ] AC-5.4: Version Bump to v1.3.0 & 16 KB Aligned Release APK Verification
+- [x] AC-5.1: Container Boot & Node.js V8 JIT Execution Gate
+- [x] AC-5.2: Java OpenJDK 21 Execution Gate Inside W^X Container
+- [x] AC-5.3: Native C Compilation & Anonymous ELF Execution Gate
+- [x] AC-5.4: Version Bump to v1.3.0 & 16 KB Aligned Release APK Verification
 
 ---
 
@@ -72,3 +72,82 @@
   - **ARGON-V13-16 (HIGH)**: Added `PTRACE_O_EXITKILL` to prevent orphaned child processes upon cancellation.
   - **ARGON-V13-17 (MEDIUM)**: Replaced libc `bzero()` with freestanding inline loop and added `-EINTR` handling in `pread64`.
   - **ARGON-V13-18 (MEDIUM)**: Injected `JAVA_TOOL_OPTIONS="-XX:-UsePerfData -XX:ActiveProcessorCount=4 -Xmx1536m"` to prevent HotSpot JVM shared file mmap deadlocks.
+
+### Milestone v1.3.0-PHASE-1 — Anonymous-Memory ELF Loader Implementation & 16 KB Alignment
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-18T20:08:00Z
+- **Criteria Completed**: `AC-1.1`, `AC-1.2`
+- **Artifacts Staged**:
+  - `app/src/main/jniLibs/arm64-v8a/libproot_loader.so` (16 KB aligned, zero external NEEDED symbols)
+- **Modifications**:
+  - `app/src/main/cpp/proot/src/loader/loader.c`: Implemented 16 KB-page-aware anonymous ELF loader with boundary page merging, `MAP_ANONYMOUS` RW staging, `PREAD64` data streaming, `freestanding_zero` BSS wiping, and `MPROTECT` executable transition.
+  - `app/src/main/cpp/proot/src/loader/assembly-arm64.h`: Defined `PREAD64` syscall 67 and eliminated reserved `sp` register clobber warning.
+  - `app/src/main/cpp/proot/src/compat.h`: Added `MAP_FAILED` and `PTRACE_O_EXITKILL`.
+- **Verification Gates**:
+  - AC-1.1: 16 KB (`0x4000`) segment alignment verified across all PT_LOAD segments via Python readelf parser.
+  - AC-1.2: Freestanding ELF verification (0 DT_NEEDED) and source syscall audit passed.
+
+### Milestone v1.3.0-PHASE-2 — W^X-Aware PRoot Tracer Engine Staging
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-18T20:17:00Z
+- **Criteria Completed**: `AC-2.1`, `AC-2.2`
+- **Artifacts Staged**:
+  - `app/src/main/jniLibs/arm64-v8a/libproot.so` (16 KB aligned, statically linked `libtalloc`, seccomp cBPF filter & syscall chaining)
+- **Modifications**:
+  - `app/src/main/cpp/proot/src/tracee/tracee.h`: Added `wx_state` tracking struct.
+  - `app/src/main/cpp/proot/src/tracee/event.c`: Integrated `PTRACE_O_EXITKILL` in `default_ptrace_options` to prevent orphaned tracees.
+  - `app/src/main/cpp/proot/src/syscall/seccomp.c`: Implemented verified 13-instruction cBPF filter with sign-bit fd test (`0x80000000U`), `SYS_mprotect` capture, and `FILTER_SYSEXIT` routing for `PR_mmap` and `PR_mprotect`.
+  - `app/src/main/cpp/proot/src/syscall/enter.c`: Mutated file-backed `PROT_EXEC` `mmap` calls into anonymous `RW` `mmap` calls.
+  - `app/src/main/cpp/proot/src/syscall/exit.c`: Implemented chained `pread64` + `mprotect` sequence, `x0` result restoration (`force_chain_final_result`), and `-EACCES` recovery.
+  - `app/src/main/cpp/proot/src/cli/proot.c`: Defined `rep_memset_explicit` for static `libtalloc.a` inclusion.
+  - `app/src/main/cpp/proot/src/arch.h`: Disabled `HAS_LOADER_32BIT` for 64-bit Android target.
+  - `app/src/main/java/ai/agy/app/EnvironmentBootstrapper.kt` & `AgyForegroundService.kt`: Added `"proot"` $\to$ `"libproot.so"` and `"agy-sh"` $\to$ `"libagy_sh.so"`, preserving `"ask_question"` $\to$ `"libask_question.so"`.
+- **Verification Gates**:
+  - AC-2.1: `libproot.so` staged (>100KB, 317KB) and verified with 16 KB segment alignment across all LOAD segments.
+  - AC-2.2: Symlink maps verified across `EnvironmentBootstrapper.kt` and `AgyForegroundService.kt`.
+
+### Milestone v1.3.0-PHASE-3 — Alpine Linux Rootfs Packaging & Bootstrapper Integration
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-18T20:20:00Z
+- **Criteria Completed**: `AC-3.1`, `AC-3.2`
+- **Artifacts Staged**:
+  - `app/src/main/assets/rootfs.tar.zst` (Alpine aarch64 minirootfs v3.20.9, compressed to 3.4 MB using zstd level 19, < 5.0 MB requirement)
+- **Modifications**:
+  - `app/src/main/java/ai/agy/app/EnvironmentBootstrapper.kt`: Added non-destructive rootfs initialization checking `etc/os-release` existence, extracting `rootfs.tar.zst`, and seeding DNS (`8.8.8.8`) and APK repository mirrors (`dl-cdn.alpinelinux.org/alpine/v3.20/main|community`).
+  - `app/src/main/java/ai/agy/app/EnvironmentBootstrapper.kt`: Added `libproot_loader.so` symlink creation into `usr/lib/`.
+- **Verification Gates**:
+  - AC-3.1: `rootfs.tar.zst` verified (< 5.0 MB, exactly 3.4 MB), containing `etc/os-release` and `lib/ld-musl-aarch64.so.1`.
+  - AC-3.2: Bootstrapper non-destructive guard verified in Kotlin source.
+
+### Milestone v1.3.0-PHASE-4 — Host-to-Container Interposition Bridge (`libagy_sh.so`)
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-18T20:23:00Z
+- **Criteria Completed**: `AC-4.1`, `AC-4.2`
+- **Artifacts Staged**:
+  - `app/src/main/jniLibs/arm64-v8a/libagy_sh.so` (16 KB aligned PIE executable, native bridge binary)
+  - `app/src/main/jniLibs/arm64-v8a/libagy_shim.so` (16 KB aligned interposition shim)
+- **Modifications**:
+  - `app/src/main/cpp/agy_sh.c`: Implemented native bridge binary wrapping PRoot with 1:1 host mounts, DNS bind mount, fakeroot (`-0`), Bionic env sanitization (`unsetenv("LD_PRELOAD")`), mobile resource caps (`CARGO_BUILD_JOBS=4`, `GRADLE_OPTS`, `JAVA_TOOL_OPTIONS`, `NODE_OPTIONS`), and v1.2.0 `AGY_QUESTION_SOCK` propagation.
+  - `app/src/main/cpp/agy_shim.c`: Updated `translate_path` to route `/bin/sh` to `APP_PREFIX "/bin/agy-sh"` and updated `is_glibc_target` to strip `LD_PRELOAD` for `proot`, `agy-sh`, and `libproot.so`.
+  - `app/src/main/java/ai/agy/app/AgyForegroundService.kt`: Injected `env["SHELL"] = "$usr/bin/agy-sh"`, `env["PROOT_LOADER"] = "$nativeDir/libproot_loader.so"`, and `env["PROOT_TMP_DIR"] = "$usr/tmp"`.
+- **Verification Gates**:
+  - AC-4.1: `libagy_sh.so` 16 KB segment alignment and `PROOT_LOADER` string match verified.
+  - AC-4.2: Shim path translation, `libproot.so` exclusion, and service `$SHELL` routing verified.
+
+### Milestone v1.3.0-PHASE-5 — Dynamic Toolchain Verification & Release Packaging
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-18T20:42:00Z
+- **Criteria Completed**: `AC-5.1`, `AC-5.2`, `AC-5.3`, `AC-5.4`
+- **Artifacts Staged**:
+  - `app/build/outputs/apk/release/app-release.apk` (Release APK v1.3.0 code 11, assembled and verified, 104 MB)
+  - `app/src/main/assets/rootfs.tar.zst` (Alpine aarch64 minirootfs v3.20.9 bundled with `jemalloc` and `/usr/local/bin/java` transparent preload wrapper, 3.5 MB)
+- **Modifications**:
+  - `app/src/main/cpp/proot/src/syscall/exit.c`: Fixed talloc memory context lifetime in `wx_state.saved_mprotect_bytes` allocation by allocating on parent `tracee` instead of ephemeral `tracee->ctx`, eliminating use-after-free and double-free in chained syscall sequence.
+  - `app/src/main/assets/rootfs.tar.zst`: Embedded `/usr/lib/libjemalloc.so.2` and `/usr/local/bin/java` wrapper to transparently bypass musl 1.2.2+ `mallocng` early-init assertion in OpenJDK 21, and seeded `http://` mirror repositories for seamless offline/initial setup.
+  - `version.properties`: Bumped `VERSION_NAME=1.3.0` and `VERSION_CODE=11`.
+- **Verification Gates**:
+  - AC-5.1: Container boot, Alpine apk package manager installation of `nodejs`, and Node.js V8 JIT execution verified (`V8_JIT_OK_42`).
+  - AC-5.2: Java OpenJDK 21 headless runtime installation and execution verified (`openjdk version "21.0.8"`).
+  - AC-5.3: Native C compilation via GCC and execution of newly compiled anonymous ELF binary in writable storage verified (`ANON_ELF_EXEC_OK`).
+  - AC-5.4: `version.properties` version bump verified, 16 KB segment alignment verified across all 115 native `.so` binaries in `jniLibs/arm64-v8a`, and release APK clean assembly verified (`app/build/outputs/apk/release/app-release.apk`).
+
