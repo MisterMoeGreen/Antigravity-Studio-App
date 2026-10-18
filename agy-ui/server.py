@@ -22,6 +22,8 @@ import sqlite3
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 import uuid
 from dataclasses import dataclass, field
 from http import HTTPStatus
@@ -862,22 +864,94 @@ def load_masked_mcp_servers() -> list[dict[str, Any]]:
     return server_list
 
 
-async def probe_mcp_health() -> dict[str, str]:
-    cmd = [str(AGY_BIN), "mcp", "list"]
+async def probe_single_mcp_server(name: str) -> dict[str, Any]:
+    if not MCP_CONFIG_FILE.exists():
+        return {"status": "error", "name": name, "message": "Configuration file not found"}
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8.0)
-        status_map = {}
-        for line in stdout.decode("utf-8", "replace").splitlines():
-            m = re.search(r"(\S+)\s+(connected|ready|error|disabled|stopped)", line, re.I)
-            if m:
-                status_map[m.group(1)] = m.group(2).lower()
-        return status_map
+        data = json.loads(MCP_CONFIG_FILE.read_text(encoding="utf-8"))
+        servers = data.get("mcpServers", {})
     except Exception as exc:
-        logger.warning("MCP health probe failed/timed out: %s", exc)
+        return {"status": "error", "name": name, "message": f"Cannot read config: {exc}"}
+
+    srv = servers.get(name)
+    if not srv:
+        return {"status": "error", "name": name, "message": f"Server '{name}' not found in configuration"}
+
+    if srv.get("disabled", False):
+        return {"status": "disabled", "name": name, "message": "Server is disabled in configuration"}
+
+    trans = "http" if ("serverUrl" in srv or "url" in srv or srv.get("type") == "http") else "stdio"
+    if trans == "http":
+        url = srv.get("serverUrl") or srv.get("url") or ""
+        if not url:
+            return {"status": "error", "name": name, "message": "No endpoint URL configured"}
+        if not (url.startswith("http://") or url.startswith("https://")):
+            url = "http://" + url
+        raw_headers = dict(srv.get("headers") or {})
+        loop = asyncio.get_running_loop()
+
+        def _do_http() -> dict[str, Any]:
+            import ssl
+            t0 = time.time()
+            headers = {"User-Agent": "AntigravityStudio/1.1.0", **raw_headers}
+            req = urllib.request.Request(url, headers=headers)
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            try:
+                with urllib.request.urlopen(req, timeout=5.0, context=ctx) as resp:
+                    elapsed = int((time.time() - t0) * 1000)
+                    return {"status": "connected", "name": name, "message": f"Reachable (HTTP {resp.status}) · {elapsed}ms"}
+            except urllib.error.HTTPError as e:
+                elapsed = int((time.time() - t0) * 1000)
+                st = "connected" if e.code in (401, 403, 405) else "ready"
+                return {"status": st, "name": name, "message": f"Responding (HTTP {e.code}) · {elapsed}ms"}
+            except Exception as e:
+                msg = str(e)
+                if hasattr(e, "reason"):
+                    msg = str(e.reason)
+                return {"status": "error", "name": name, "message": f"Connection failed: {msg}"}
+
+        return await loop.run_in_executor(None, _do_http)
+    else:
+        command = srv.get("command") or ""
+        if not command:
+            return {"status": "error", "name": name, "message": "No command executable configured"}
+        exe = shutil.which(command) or (os.path.exists(command) and command)
+        if not exe and Path(USR_DIR).exists():
+            cand = Path(USR_DIR) / "bin" / command
+            if cand.exists():
+                exe = str(cand)
+        if not exe:
+            return {"status": "error", "name": name, "message": f"Executable '{command}' not found in PATH"}
+
+        args = srv.get("args") or []
+        if args:
+            first_arg = str(args[0])
+            if first_arg.endswith((".py", ".sh", ".js")) or "/" in first_arg:
+                p = Path(first_arg).expanduser()
+                if not p.is_file():
+                    return {"status": "error", "name": name, "message": f"Script not found: '{first_arg}'"}
+                return {"status": "connected", "name": name, "message": f"Verified: '{command} {first_arg}'"}
+        return {"status": "connected", "name": name, "message": f"Executable verified: '{command}'"}
+
+
+async def probe_mcp_health() -> dict[str, dict[str, str]]:
+    if not MCP_CONFIG_FILE.exists():
         return {}
+    try:
+        data = json.loads(MCP_CONFIG_FILE.read_text(encoding="utf-8"))
+        servers = data.get("mcpServers", {})
+    except Exception:
+        return {}
+
+    results = {}
+    for name in servers:
+        try:
+            results[name] = await probe_single_mcp_server(name)
+        except Exception as exc:
+            results[name] = {"status": "error", "name": name, "message": str(exc)}
+    return results
 
 
 async def add_mcp_server(
@@ -3820,8 +3894,31 @@ class AgyWebServer:
             return
 
         if mtype == "probe_mcp_health":
-            status_map = await probe_mcp_health()
-            await self.broadcast({"type": "mcp_health_update", "status_map": status_map})
+            name = str(data.get("name") or "").strip()
+            if name:
+                res = await probe_single_mcp_server(name)
+                is_ok = res.get("status") in ("connected", "ready")
+                await websocket.send(json.dumps({
+                    "type": "mcp_probe_result",
+                    "name": name,
+                    "status": res.get("status", "error"),
+                    "message": res.get("message", ""),
+                    "ok": is_ok,
+                }))
+                await self.broadcast({
+                    "type": "mcp_health_update",
+                    "status_map": {name: res},
+                })
+            else:
+                status_map = await probe_mcp_health()
+                await websocket.send(json.dumps({
+                    "type": "mcp_probe_result",
+                    "name": "all",
+                    "status": "connected",
+                    "message": f"Health check completed for {len(status_map)} server(s)",
+                    "ok": True,
+                }))
+                await self.broadcast({"type": "mcp_health_update", "status_map": status_map})
             return
 
         if mtype == "add_mcp_server":

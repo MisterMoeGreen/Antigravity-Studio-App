@@ -701,6 +701,9 @@
     @keyframes liveSpin {
       to { transform: rotate(360deg); }
     }
+    .fa-spin {
+      animation: liveSpin 0.9s linear infinite;
+    }
     .live-progress-body {
       display: flex;
       align-items: center;
@@ -3079,6 +3082,8 @@
         'book-open': ['0 0 576 512', 'M249.6 471.5c10.8 3.8 22.4-4.1 22.4-15.5l0-377.4c0-4.2-1.6-8.4-5-11L225.7 34.1C188.8 4.6 138.6-5.4 92.5 2.1L79.7 4.2C34.4 11.6 0 50.7 0 96.6L0 452.4c0 10.7 10.3 18.5 20.7 15.6l23.1-6.4c34.7-9.6 71.4-9.6 106.1 0l79.7 22.1c6.5 1.8 13.5 1 19.9-1.2zm76.8 0c6.5 2.2 13.4 3 19.9 1.2l79.7-22.1c34.7-9.6 71.4-9.6 106.1 0l23.1 6.4c10.4 2.9 20.7-4.9 20.7-15.6l0-355.8c0-45.9-34.4-85-79.7-92.4l-12.8-2.1c-46.1-7.5-96.3 2.5-133.2 32l-41.3 33.5c-3.4 2.8-5 6.9-5 11.2l0 377.4c0 11.5 11.6 19.4 22.4 15.5z'],
         'wand-magic-sparkles': ['0 0 512 512', 'M128 0c17.7 0 32 14.3 32 32l0 32 32 0c17.7 0 32 14.3 32 32s-14.3 32-32 32l-32 0 0 32c0 17.7-14.3 32-32 32s-32-14.3-32-32l0-32-32 0c-17.7 0-32-14.3-32-32s14.3-32 32-32l32 0 0-32c0-17.7 14.3-32 32-32zM374.6 38.6c12.5-12.5 32.8-12.5 45.3 0l53.5 53.5c12.5 12.5 12.5 32.8 0 45.3l-288 288c-12.5 12.5-32.8 12.5-45.3 0l-53.5-53.5c-12.5-12.5-12.5-32.8 0-45.3l288-288zM416 384c0-17.7 14.3-32 32-32l32 0 0-32c0-17.7 14.3-32 32-32s32 14.3 32 32l0 32 32 0c17.7 0 32 14.3 32 32s-14.3 32-32 32l-32 0 0 32c0 17.7-14.3 32-32 32s-32-14.3-32-32l0-32-32 0c-17.7 0-32-14.3-32-32z'],
         'arrow-up': ['0 0 384 512', 'M214.6 41.4c-12.5-12.5-32.8-12.5-45.3 0l-160 160c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L160 141.2 160 448c0 17.7 14.3 32 32 32s32-14.3 32-32l0-306.7L329.4 246.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3l-160-160z'],
+        'arrows-rotate': ['0 0 512 512', 'M105.1 202.6c7.7-21.8 20.2-42.3 37.8-59.8c62.5-62.5 163.8-62.5 226.3 0L386.3 160 352 160c-17.7 0-32 14.3-32 32s14.3 32 32 32l112 0c17.7 0 32-14.3 32-32l0-112c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 35.2L414.4 68C336.3-10.1 209.7-10.1 131.6 68C109.6 90 94.1 115.8 84.4 143.2c-5.8 16.4 2.9 34.4 19.3 40.2s34.4-2.9 40.2-19.3zM406.9 309.4c-7.7 21.8-20.2 42.3-37.8 59.8c-62.5 62.5-163.8 62.5-226.3 0l-17.1-17.1L160 352c17.7 0 32-14.3 32-32s-14.3-32-32-32l-112 0c-17.7 0-32 14.3-32 32l0 112c0 17.7 14.3 32 32 32s32-14.3 32-32l0-35.2L68 444C146.1 522.1 272.7 522.1 350.8 444c22-22 37.5-47.8 47.2-75.2c5.8-16.4-2.9-34.4-19.3-40.2s-34.4 2.9-40.2 19.3z'],
+        'spinner': ['0 0 512 512', 'M304 48a48 48 0 1 0 -96 0 48 48 0 1 0 96 0zm0 416a48 48 0 1 0 -96 0 48 48 0 1 0 96 0zM48 304a48 48 0 1 0 0-96 48 48 0 1 0 0 96zm464-48a48 48 0 1 0 -96 0 48 48 0 1 0 96 0zM142.9 437A48 48 0 1 0 75 369.1 48 48 0 1 0 142.9 437zm0-294.2A48 48 0 1 0 75 75a48 48 0 1 0 67.9 67.9zM369.1 437A48 48 0 1 0 437 369.1 48 48 0 1 0 369.1 437z'],
       };
       function faIcon(name, extraClass = '', style = '') {
         const item = FA_PATHS[name];
@@ -3852,6 +3857,22 @@
           case 'mcp_health_update':
             if (msg.status_map && typeof updateMCPHealth === 'function') {
               updateMCPHealth(msg.status_map);
+            }
+            break;
+
+          case 'mcp_probe_result':
+            if (msg.name && msg.name !== 'all') {
+              const ok = msg.ok || msg.status === 'connected' || msg.status === 'ready';
+              if (ok) {
+                showToast(`✓ ${msg.name}: ${msg.message || 'Connected'}`);
+              } else {
+                showToast(`✗ ${msg.name}: ${msg.message || 'Health check failed'}`);
+              }
+              if (typeof updateSingleMCPHealth === 'function') {
+                updateSingleMCPHealth(msg.name, msg.status, msg.message);
+              }
+            } else if (msg.name === 'all') {
+              showToast(msg.message || 'MCP health probe completed');
             }
             break;
 
@@ -6068,6 +6089,7 @@
               </button>
             </div>
             <div class="card-meta-text">${escapeHtml(s.target || s.url || s.command || '')}</div>
+            <div class="card-health-msg" style="font-size:11px;margin-top:6px;line-height:1.4;display:none;"></div>
             <div class="card-actions-row">
               <button class="card-action-btn" data-action="probe" data-name="${escapeHtml(s.name)}">
                 ${faIcon('arrows-rotate', '', 'width:12px;height:12px;')} Probe Health
@@ -6086,9 +6108,26 @@
             });
           });
 
-          card.querySelector('[data-action="probe"]').addEventListener('click', () => {
-            showToast(`Probing ${s.name}...`);
+          const probeBtn = card.querySelector('[data-action="probe"]');
+          probeBtn.addEventListener('click', () => {
+            probeBtn.disabled = true;
+            probeBtn.setAttribute('data-orig-html', probeBtn.innerHTML);
+            probeBtn.innerHTML = `${faIcon('arrows-rotate', 'fa-spin', 'width:12px;height:12px;')} Probing...`;
+            const healthMsg = card.querySelector('.card-health-msg');
+            if (healthMsg) {
+              healthMsg.style.display = 'block';
+              healthMsg.style.color = 'var(--text-muted)';
+              healthMsg.textContent = 'Probing server health...';
+            }
+            showToast(`Probing health of ${s.name}...`);
             sendWs({ type: 'probe_mcp_health', name: s.name });
+            setTimeout(() => {
+              if (probeBtn.disabled) {
+                probeBtn.disabled = false;
+                const orig = probeBtn.getAttribute('data-orig-html');
+                if (orig) probeBtn.innerHTML = orig;
+              }
+            }, 8000);
           });
 
           card.querySelector('[data-action="delete"]').addEventListener('click', () => {
@@ -6101,32 +6140,82 @@
         });
       }
 
+      function applyMCPCardHealth(card, rawStatus, message) {
+        const st = String(rawStatus || '').toLowerCase();
+        const probeBtn = card.querySelector('[data-action="probe"]');
+        if (probeBtn) {
+          probeBtn.disabled = false;
+          probeBtn.innerHTML = `${faIcon('arrows-rotate', '', 'width:12px;height:12px;')} Probe Health`;
+        }
+
+        const dot = card.querySelector('.status-dot');
+        let healthBadge = card.querySelector('.badge-health');
+        if (!healthBadge) {
+          healthBadge = document.createElement('span');
+          healthBadge.className = 'card-badge badge-health';
+          healthBadge.style.marginLeft = '4px';
+          const titleEl = card.querySelector('.card-main-title');
+          if (titleEl) titleEl.appendChild(healthBadge);
+        }
+
+        const healthMsg = card.querySelector('.card-health-msg');
+
+        if (st === 'connected' || st === 'ready') {
+          if (dot) dot.style.background = 'var(--accent-emerald)';
+          healthBadge.textContent = (st === 'connected' ? 'ONLINE' : 'READY');
+          healthBadge.style.color = 'var(--accent-emerald)';
+          healthBadge.style.background = 'rgba(52, 211, 153, 0.15)';
+          if (healthMsg) {
+            healthMsg.style.display = 'block';
+            healthMsg.style.color = 'var(--accent-emerald)';
+            healthMsg.innerHTML = `${faIcon('check', '', 'width:11px;height:11px;')} ${escapeHtml(message || (st === 'connected' ? 'Reachable and verified' : 'Ready'))}`;
+          }
+        } else if (st === 'disabled' || st === 'stopped') {
+          if (dot) dot.style.background = 'var(--text-muted)';
+          healthBadge.textContent = 'DISABLED';
+          healthBadge.style.color = 'var(--text-muted)';
+          healthBadge.style.background = 'rgba(148, 163, 184, 0.15)';
+          if (healthMsg) {
+            healthMsg.style.display = message ? 'block' : 'none';
+            healthMsg.style.color = 'var(--text-muted)';
+            healthMsg.textContent = message || 'Server disabled in configuration';
+          }
+        } else {
+          if (dot) dot.style.background = 'var(--accent-coral)';
+          healthBadge.textContent = 'OFFLINE';
+          healthBadge.style.color = 'var(--accent-coral)';
+          healthBadge.style.background = 'rgba(248, 113, 113, 0.15)';
+          if (healthMsg) {
+            healthMsg.style.display = 'block';
+            healthMsg.style.color = 'var(--accent-coral)';
+            healthMsg.innerHTML = `${faIcon('xmark', '', 'width:11px;height:11px;')} ${escapeHtml(message || 'Health check failed')}`;
+          }
+        }
+      }
+
+      function updateSingleMCPHealth(name, status, message) {
+        if (!mcpList || !name) return;
+        mcpList.querySelectorAll('.mcp-card').forEach(card => {
+          const probeBtn = card.querySelector('[data-action="probe"]');
+          if (!probeBtn) return;
+          const sName = probeBtn.getAttribute('data-name');
+          if (sName === name) {
+            applyMCPCardHealth(card, status, message);
+          }
+        });
+      }
+
       function updateMCPHealth(statusMap) {
         if (!mcpList || !statusMap) return;
         mcpList.querySelectorAll('.mcp-card').forEach(card => {
           const probeBtn = card.querySelector('[data-action="probe"]');
           if (!probeBtn) return;
           const sName = probeBtn.getAttribute('data-name');
-          if (sName && statusMap[sName]) {
-            const st = statusMap[sName];
-            const dot = card.querySelector('.status-dot');
-            if (dot) {
-              if (st === 'connected' || st === 'ready') dot.style.background = 'var(--accent-emerald)';
-              else if (st === 'disabled' || st === 'stopped') dot.style.background = 'var(--text-muted)';
-              else dot.style.background = 'var(--accent-coral)';
-            }
-            let healthBadge = card.querySelector('.badge-health');
-            if (!healthBadge) {
-              healthBadge = document.createElement('span');
-              healthBadge.className = 'card-badge badge-health';
-              healthBadge.style.marginLeft = '4px';
-              const titleEl = card.querySelector('.card-main-title');
-              if (titleEl) titleEl.appendChild(healthBadge);
-            }
-            healthBadge.textContent = st.toUpperCase();
-            if (st === 'connected' || st === 'ready') healthBadge.style.color = 'var(--accent-emerald)';
-            else if (st === 'disabled' || st === 'stopped') healthBadge.style.color = 'var(--text-muted)';
-            else healthBadge.style.color = 'var(--accent-coral)';
+          if (sName && statusMap[sName] !== undefined) {
+            const val = statusMap[sName];
+            const st = typeof val === 'object' && val !== null ? val.status : val;
+            const msg = typeof val === 'object' && val !== null ? val.message : '';
+            applyMCPCardHealth(card, st, msg);
           }
         });
       }
