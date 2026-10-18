@@ -132,15 +132,7 @@ jobs:
                 --set-interpreter "/data/data/ai.agy.app/files/usr/glibc/lib/ld-linux-aarch64.so.1" \
                 --force-rpath --set-rpath "/data/data/ai.agy.app/files/usr/glibc/lib" \
                 app/src/main/jniLibs/arm64-v8a/libagy.so
-              python3 - "app/src/main/jniLibs/arm64-v8a/libagy.so" "ai.agy.app" <<'PYEOF'
-import sys
-path, pkg = sys.argv[1], sys.argv[2]
-old_bytes = b"/data/data/com.termux"
-new_bytes = f"/data/data/{pkg}".encode("ascii")
-with open(path, "rb") as f: data = f.read()
-if old_bytes in data:
-    with open(path, "wb") as f: f.write(data.replace(old_bytes, new_bytes))
-PYEOF
+              python3 -c "path='app/src/main/jniLibs/arm64-v8a/libagy.so'; d=open(path,'rb').read(); open(path,'wb').write(d.replace(b'/data/data/com.termux',b'/data/data/ai.agy.app'))"
               rm -f agy.tar.gz
             fi
           fi
