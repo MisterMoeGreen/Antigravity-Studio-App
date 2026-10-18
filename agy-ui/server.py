@@ -413,9 +413,11 @@ async def list_ssh_keys() -> list[dict[str, Any]]:
         keys.append({
             "name": name,
             "key_type": key_type,
+            "type": key_type,
             "fingerprint": fingerprint,
             "has_private": has_private,
             "created_at": int(pub.stat().st_mtime) if pub.exists() else 0,
+            "created": time.strftime("%Y-%m-%d", time.localtime(pub.stat().st_mtime)) if pub.exists() else "",
         })
     return keys
 
@@ -719,6 +721,7 @@ def discover_skills(workspace_dir: Optional[str] = None) -> list[dict[str, Any]]
                     meta, _ = parse_skill_frontmatter((d / "SKILL.md").read_text(encoding="utf-8"))
                     skills.append({
                         "name": meta["name"],
+                        "folder_name": d.name,
                         "description": meta["description"],
                         "scope": "global",
                         "path": str(d / "SKILL.md"),
@@ -739,6 +742,7 @@ def discover_skills(workspace_dir: Optional[str] = None) -> list[dict[str, Any]]
                         meta, _ = parse_skill_frontmatter((d / "SKILL.md").read_text(encoding="utf-8"))
                         skills.append({
                             "name": meta["name"],
+                            "folder_name": d.name,
                             "description": meta["description"],
                             "scope": "workspace",
                             "path": str(d / "SKILL.md"),
@@ -758,6 +762,7 @@ def discover_skills(workspace_dir: Optional[str] = None) -> list[dict[str, Any]]
                     if meta["name"] not in seen_names:
                         skills.append({
                             "name": meta["name"],
+                            "folder_name": d.name,
                             "description": meta["description"],
                             "scope": "builtin",
                             "path": str(d / "SKILL.md"),
@@ -826,19 +831,24 @@ def delete_skill(target_path: str, workspace_dir: Optional[str] = None) -> bool:
 
 
 # 5. Model Context Protocol (MCP) Management
-def load_masked_mcp_servers() -> dict[str, Any]:
+def load_masked_mcp_servers() -> list[dict[str, Any]]:
     if not MCP_CONFIG_FILE.exists():
         atomic_write_secure(str(MCP_CONFIG_FILE), '{"mcpServers": {}}\n', mode=0o600)
-        return {}
+        return []
     os.chmod(str(MCP_CONFIG_FILE), 0o600)
     try:
         data = json.loads(MCP_CONFIG_FILE.read_text(encoding="utf-8"))
     except Exception:
-        return {}
+        return []
     servers = data.get("mcpServers", {})
-    masked_servers = {}
-    for name, srv in servers.items():
+    server_list = []
+    for name, srv in sorted(servers.items()):
         copy_srv = dict(srv)
+        copy_srv["name"] = name
+        trans = "http" if ("serverUrl" in copy_srv or "url" in copy_srv or copy_srv.get("type") == "http") else "stdio"
+        copy_srv["transport"] = trans
+        copy_srv["target"] = copy_srv.get("serverUrl") or copy_srv.get("url") or copy_srv.get("command") or ""
+        copy_srv["enabled"] = not copy_srv.get("disabled", False)
         if "headers" in copy_srv and isinstance(copy_srv["headers"], dict):
             copy_srv["headers"] = {
                 k: mask_api_key(v) for k, v in copy_srv["headers"].items()
@@ -848,8 +858,8 @@ def load_masked_mcp_servers() -> dict[str, Any]:
                 k: mask_api_key(v) if any(x in k for x in ("KEY", "TOKEN", "SECRET", "PASSWORD")) else v
                 for k, v in copy_srv["env"].items()
             }
-        masked_servers[name] = copy_srv
-    return masked_servers
+        server_list.append(copy_srv)
+    return server_list
 
 
 async def probe_mcp_health() -> dict[str, str]:
@@ -882,7 +892,7 @@ async def add_mcp_server(
         raise ValueError("Server name must be alphanumeric with hyphens or underscores")
 
     trans = transport.lower()
-    cmd = [str(AGY_BIN), "mcp", "add", "--transport", trans, "--scope", "user"]
+    cmd = [str(AGY_BIN), "mcp", "add", "--type", trans]
 
     if trans == "http":
         if headers:
@@ -3660,17 +3670,28 @@ class AgyWebServer:
             await websocket.send(json.dumps({"type": "skills_list", "skills": skills}))
             return
 
-        if mtype == "get_skill_content":
+        if mtype in ("get_skill", "get_skill_content"):
             path_str = str(data.get("path") or "").strip()
+            for_edit = bool(data.get("for_edit", False))
+            name = str(data.get("name") or "").strip()
             try:
                 content = get_skill_content(path_str, self.orchestrator.config.workspace)
-                await websocket.send(json.dumps({"type": "skill_content", "path": path_str, "content": content}))
+                if not name and path_str:
+                    p = Path(path_str)
+                    name = p.parent.name if p.name == "SKILL.md" else p.stem
+                await websocket.send(json.dumps({
+                    "type": "skill_content",
+                    "path": path_str,
+                    "content": content,
+                    "name": name,
+                    "for_edit": for_edit
+                }))
             except Exception as exc:
                 await websocket.send(json.dumps({"type": "system_card", "title": "Skill Read Error", "markdown": str(exc), "level": "error"}))
             return
 
         if mtype == "save_skill":
-            name = str(data.get("name") or "").strip()
+            name = str(data.get("name") or data.get("folder_name") or "").strip()
             scope = str(data.get("scope") or "global").strip()
             content = str(data.get("content") or "").strip()
             try:
@@ -3712,9 +3733,9 @@ class AgyWebServer:
 
         if mtype == "create_skill_prompt":
             s_name = str(data.get("name") or "").strip()
-            s_what = str(data.get("what") or "").strip()
-            s_when = str(data.get("when") or "").strip()
-            s_scope = str(data.get("scope") or "Workspace").strip()
+            s_what = str(data.get("what") or data.get("purpose") or "").strip()
+            s_when = str(data.get("when") or data.get("trigger") or "").strip()
+            s_scope = str(data.get("scope") or "global").strip()
             target_path = f"{self.orchestrator.config.workspace}/.agents/skills/{s_name}/SKILL.md" if s_scope.lower() == "workspace" else f"{GLOBAL_SKILLS_DIR}/{s_name}/SKILL.md"
 
             ai_prompt = (
@@ -3722,23 +3743,69 @@ class AgyWebServer:
                 f"- Name: {s_name}\n"
                 f"- Purpose: {s_what}\n"
                 f"- Trigger Condition: {s_when}\n"
+                f"- Scope: {s_scope.capitalize()}\n"
                 f"- Target Path: {target_path}\n\n"
                 f"Frontmatter Requirements:\n"
                 f"- Must start with fenced YAML (`---`) with `name: {s_name}` (kebab-case) and `description` (>= 20 characters explaining what it does and when to activate it).\n"
                 f"- Android Sandbox Rule: If the skill includes helper scripts, always instruct the agent to run them via `bash <script>` or `python3 <script>`, never `./<script>` (due to Android SELinux W^X restrictions).\n\n"
                 f"Please design the complete SKILL.md. If any parameters, scripts, or edge cases are unclear, interview the user first. Once aligned, create the skill directory and write SKILL.md."
             )
+            # Reset session state for a fresh conversation
             self.orchestrator.config.conversation_id = None
+            self.orchestrator.config.total_input_tokens = 0
+            self.orchestrator.config.total_output_tokens = 0
+            self.orchestrator.config.total_thinking_tokens = 0
+            self.orchestrator.config.turn_count = 0
+            branch = get_git_branch(self.orchestrator.config.workspace)
+            await self.broadcast({
+                "type": "session_history",
+                "conversation_id": None,
+                "title": f"Skill: {s_name}",
+                "messages": [],
+                "history": [],
+                "workspace": self.orchestrator.config.workspace,
+                "git_branch": branch,
+                "config": {
+                    "model": self.orchestrator.config.model,
+                    "mode": self.orchestrator.config.mode,
+                    "effort": self.orchestrator.config.effort,
+                    "workspace": self.orchestrator.config.workspace,
+                    "git_branch": branch,
+                },
+            })
             asyncio.create_task(self.orchestrator.execute_turn(ai_prompt))
             return
 
         if mtype == "edit_skill_prompt":
             path_str = str(data.get("path") or "").strip()
+            s_name = str(data.get("name") or (Path(path_str).parent.name if Path(path_str).name == "SKILL.md" else Path(path_str).stem) or "Skill").strip()
             ai_prompt = (
                 f"The user wants to edit this skill: {path_str}.\n"
                 f"Study the existing SKILL.md and associated files in detail, then ask the user how they would like to modify it."
             )
+            # Reset session state for a fresh conversation
             self.orchestrator.config.conversation_id = None
+            self.orchestrator.config.total_input_tokens = 0
+            self.orchestrator.config.total_output_tokens = 0
+            self.orchestrator.config.total_thinking_tokens = 0
+            self.orchestrator.config.turn_count = 0
+            branch = get_git_branch(self.orchestrator.config.workspace)
+            await self.broadcast({
+                "type": "session_history",
+                "conversation_id": None,
+                "title": f"Edit: {s_name}",
+                "messages": [],
+                "history": [],
+                "workspace": self.orchestrator.config.workspace,
+                "git_branch": branch,
+                "config": {
+                    "model": self.orchestrator.config.model,
+                    "mode": self.orchestrator.config.mode,
+                    "effort": self.orchestrator.config.effort,
+                    "workspace": self.orchestrator.config.workspace,
+                    "git_branch": branch,
+                },
+            })
             asyncio.create_task(self.orchestrator.execute_turn(ai_prompt))
             return
 
@@ -3750,6 +3817,11 @@ class AgyWebServer:
                 status_map = await probe_mcp_health()
                 await self.broadcast({"type": "mcp_health_update", "status_map": status_map})
             asyncio.create_task(_probe())
+            return
+
+        if mtype == "probe_mcp_health":
+            status_map = await probe_mcp_health()
+            await self.broadcast({"type": "mcp_health_update", "status_map": status_map})
             return
 
         if mtype == "add_mcp_server":
@@ -3831,7 +3903,29 @@ class AgyWebServer:
                 f"- Pre-configured environment API keys available: {keys_hint}.\n\n"
                 f"Please configure this server, verify ~/.gemini/config/mcp_config.json is valid JSON with 0600 permissions, and test readiness with `agy mcp list`."
             )
+            # Reset session state for a fresh conversation
             self.orchestrator.config.conversation_id = None
+            self.orchestrator.config.total_input_tokens = 0
+            self.orchestrator.config.total_output_tokens = 0
+            self.orchestrator.config.total_thinking_tokens = 0
+            self.orchestrator.config.turn_count = 0
+            branch = get_git_branch(self.orchestrator.config.workspace)
+            await self.broadcast({
+                "type": "session_history",
+                "conversation_id": None,
+                "title": f"Setup MCP: {name or brief[:16]}",
+                "messages": [],
+                "history": [],
+                "workspace": self.orchestrator.config.workspace,
+                "git_branch": branch,
+                "config": {
+                    "model": self.orchestrator.config.model,
+                    "mode": self.orchestrator.config.mode,
+                    "effort": self.orchestrator.config.effort,
+                    "workspace": self.orchestrator.config.workspace,
+                    "git_branch": branch,
+                },
+            })
             asyncio.create_task(self.orchestrator.execute_turn(ai_prompt))
             return
 

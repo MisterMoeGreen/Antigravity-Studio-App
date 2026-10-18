@@ -2975,6 +2975,11 @@
       <input type="text" id="inputAISkillPurpose" class="search-input" placeholder="What should this skill accomplish?" />
       <label style="font-size:12px;color:var(--text-secondary);">Trigger Conditions:</label>
       <input type="text" id="inputAISkillTrigger" class="search-input" placeholder="When should the model activate this skill?" />
+      <label style="font-size:12px;color:var(--text-secondary);">Target Scope:</label>
+      <div class="prompts-tab-strip" style="margin-bottom:2px;">
+        <button type="button" class="prompts-tab-btn active" id="btnAISkillScopeGlobal">Global (~/.gemini/config/)</button>
+        <button type="button" class="prompts-tab-btn" id="btnAISkillScopeWorkspace">Workspace (.agents/)</button>
+      </div>
       <div style="display:flex;gap:8px;margin-top:6px;">
         <button class="modal-btn secondary" id="btnManualSkillFallback" style="flex:1;">Manual Editor</button>
         <button class="modal-btn primary" id="btnStartAISkillSession" style="flex:1;">Start AI Session</button>
@@ -3830,10 +3835,7 @@
           case 'prompts_saved':
             if (btnSavePrompts) {
               btnSavePrompts.disabled = false;
-              btnSavePrompts.textContent = 'Saved ✓';
-              setTimeout(() => {
-                if (btnSavePrompts) btnSavePrompts.textContent = 'Save';
-              }, 1600);
+              btnSavePrompts.textContent = 'Save';
             }
             showToast('Custom instructions saved');
             break;
@@ -3843,10 +3845,9 @@
             break;
 
           case 'ssh_pub_key':
-            if (msg.public_key && navigator.clipboard) {
-              navigator.clipboard.writeText(msg.public_key)
-                .then(() => showToast(`Public key "${msg.name}" copied to clipboard`))
-                .catch(() => showToast('Failed to copy public key'));
+            if (msg.public_key) {
+              copyTextToClipboard(msg.public_key);
+              showToast(`Public key "${msg.name || ''}" copied to clipboard`);
             }
             break;
 
@@ -3862,6 +3863,19 @@
           case 'ssh_key_deleted':
             showToast(`SSH key "${msg.name}" deleted`);
             sendWs({ type: 'list_ssh_keys' });
+            break;
+
+          case 'api_key_raw':
+            if (msg.value) {
+              copyTextToClipboard(msg.value);
+              showToast(`API key "${msg.name}" copied to clipboard`);
+            }
+            break;
+
+          case 'mcp_health_update':
+            if (msg.status_map && typeof updateMCPHealth === 'function') {
+              updateMCPHealth(msg.status_map);
+            }
             break;
 
           case 'api_keys_list':
@@ -5457,14 +5471,16 @@
         keys.forEach(k => {
           const card = document.createElement('div');
           card.className = 'ssh-card';
-          const typeBadge = k.type.toUpperCase().includes('ED25519')
+          const kType = (k.key_type || k.type || 'ED25519').toUpperCase();
+          const typeBadge = kType.includes('ED25519')
             ? '<span class="card-badge badge-ed25519">ED25519</span>'
-            : '<span class="card-badge badge-rsa">RSA 4096</span>';
+            : '<span class="card-badge badge-rsa">' + escapeHtml(kType) + '</span>';
+          const dateStr = k.created || (k.created_at ? new Date(k.created_at * 1000).toLocaleDateString() : '');
 
           card.innerHTML = `
             <div class="card-top-row">
               <div class="card-main-title">${escapeHtml(k.name)} ${typeBadge}</div>
-              <span style="font-size:11px;color:var(--text-muted);">${escapeHtml(k.created || '')}</span>
+              <span style="font-size:11px;color:var(--text-muted);">${escapeHtml(dateStr)}</span>
             </div>
             <div class="card-meta-text">Fingerprint: ${escapeHtml(k.fingerprint || 'N/A')}</div>
             <div class="card-actions-row">
@@ -5582,11 +5598,18 @@
             <div class="card-meta-text" style="font-size:12px;color:var(--text-primary);letter-spacing:1px;">${escapeHtml(k.masked_value || '••••')}</div>
             ${k.description ? `<div style="font-size:12px;color:var(--text-secondary);">${escapeHtml(k.description)}</div>` : ''}
             <div class="card-actions-row">
+              <button class="card-action-btn" data-action="copy" data-name="${escapeHtml(k.name)}">
+                ${faIcon('copy', '', 'width:12px;height:12px;')} Copy
+              </button>
               <button class="card-action-btn danger" data-action="delete" data-name="${escapeHtml(k.name)}">
                 ${faIcon('trash-can', '', 'width:12px;height:12px;')} Delete
               </button>
             </div>
           `;
+
+          card.querySelector('[data-action="copy"]').addEventListener('click', () => {
+            sendWs({ type: 'get_api_key_raw', name: k.name });
+          });
 
           card.querySelector('[data-action="delete"]').addEventListener('click', () => {
             if (confirm(`Delete API key "${k.name}"? Subprocesses will no longer have access to this token.`)) {
@@ -5683,6 +5706,23 @@
         });
       }
 
+      const btnAISkillScopeGlobal = document.getElementById('btnAISkillScopeGlobal');
+      const btnAISkillScopeWorkspace = document.getElementById('btnAISkillScopeWorkspace');
+      let currentAISkillScope = 'global';
+
+      if (btnAISkillScopeGlobal && btnAISkillScopeWorkspace) {
+        btnAISkillScopeGlobal.addEventListener('click', () => {
+          currentAISkillScope = 'global';
+          btnAISkillScopeGlobal.classList.add('active');
+          btnAISkillScopeWorkspace.classList.remove('active');
+        });
+        btnAISkillScopeWorkspace.addEventListener('click', () => {
+          currentAISkillScope = 'workspace';
+          btnAISkillScopeWorkspace.classList.add('active');
+          btnAISkillScopeGlobal.classList.remove('active');
+        });
+      }
+
       if (btnStartAISkillSession) {
         btnStartAISkillSession.addEventListener('click', () => {
           const name = inputAISkillName ? inputAISkillName.value.trim() : '';
@@ -5699,7 +5739,8 @@
             type: 'create_skill_prompt',
             name: name,
             purpose: purpose,
-            trigger: trigger
+            trigger: trigger,
+            scope: currentAISkillScope
           });
         });
       }
@@ -5727,8 +5768,9 @@
           }
           sendWs({
             type: 'save_skill',
-            scope: scope,
+            name: folderName,
             folder_name: folderName,
+            scope: scope,
             content: contentVal
           });
           closeSkillEditModal();
@@ -5790,15 +5832,15 @@
           `;
 
           card.querySelector('[data-action="read"]').addEventListener('click', () => {
-            sendWs({ type: 'get_skill', path: s.path });
+            sendWs({ type: 'get_skill', path: s.path, name: s.name, for_edit: false });
           });
 
           const btnEdit = card.querySelector('[data-action="edit"]');
           if (btnEdit) {
             btnEdit.addEventListener('click', () => {
-              state.pendingSkillEditScope = s.scope;
+              state.pendingSkillEditScope = sScope === 'workspace' ? 'workspace' : 'global';
               state.pendingSkillEditFolder = s.folder_name || s.name;
-              sendWs({ type: 'get_skill', path: s.path, for_edit: true });
+              sendWs({ type: 'get_skill', path: s.path, name: s.name, for_edit: true });
             });
           }
 
@@ -5881,6 +5923,7 @@
           tabBtnMCPAI.classList.remove('active');
           if (mcpManualSection) mcpManualSection.style.display = 'flex';
           if (mcpAISection) mcpAISection.style.display = 'none';
+          if (btnConfirmAddMCP) btnConfirmAddMCP.textContent = 'Save Server';
         });
         tabBtnMCPAI.addEventListener('click', () => {
           currentMCPAddTab = 'ai';
@@ -5888,6 +5931,7 @@
           tabBtnMCPManual.classList.remove('active');
           if (mcpManualSection) mcpManualSection.style.display = 'none';
           if (mcpAISection) mcpAISection.style.display = 'flex';
+          if (btnConfirmAddMCP) btnConfirmAddMCP.textContent = 'Start AI Setup';
         });
       }
 
@@ -5912,12 +5956,20 @@
         btnOpenAddMCPModal.addEventListener('click', () => {
           if (modalAddMCP) {
             modalAddMCP.style.display = 'flex';
+            currentMCPAddTab = 'manual';
+            if (tabBtnMCPManual) tabBtnMCPManual.classList.add('active');
+            if (tabBtnMCPAI) tabBtnMCPAI.classList.remove('active');
+            if (mcpManualSection) mcpManualSection.style.display = 'flex';
+            if (mcpAISection) mcpAISection.style.display = 'none';
+            if (btnConfirmAddMCP) btnConfirmAddMCP.textContent = 'Save Server';
             if (inputMCPName) inputMCPName.value = '';
             if (inputMCPUrl) inputMCPUrl.value = '';
             if (txtMCPHeaders) txtMCPHeaders.value = '';
             if (inputMCPCommand) inputMCPCommand.value = '';
             if (inputMCPArgs) inputMCPArgs.value = '';
             if (txtMCPEnv) txtMCPEnv.value = '';
+            if (inputAIMCPName) inputAIMCPName.value = '';
+            if (txtAIMCPDetails) txtAIMCPDetails.value = '';
           }
         });
       }
@@ -6008,9 +6060,22 @@
         });
       }
 
-      function renderMCP(servers) {
+      function renderMCP(serversData) {
         if (!mcpList) return;
         mcpList.innerHTML = '';
+        let servers = [];
+        if (Array.isArray(serversData)) {
+          servers = serversData;
+        } else if (serversData && typeof serversData === 'object') {
+          servers = Object.entries(serversData).map(([name, srv]) => {
+            const copy = Object.assign({}, srv);
+            copy.name = copy.name || name;
+            copy.transport = copy.transport || ((copy.serverUrl || copy.url) ? 'http' : 'stdio');
+            copy.target = copy.target || copy.serverUrl || copy.url || copy.command || '';
+            copy.enabled = copy.enabled !== undefined ? copy.enabled : !copy.disabled;
+            return copy;
+          });
+        }
         if (!servers || servers.length === 0) {
           mcpList.innerHTML = '<div class="settings-empty-state"><div>' + faIcon('server', '', 'width:28px;height:28px;color:var(--text-muted);') + '</div><div>No MCP servers registered.</div></div>';
           return;
@@ -6063,6 +6128,36 @@
           });
 
           mcpList.appendChild(card);
+        });
+      }
+
+      function updateMCPHealth(statusMap) {
+        if (!mcpList || !statusMap) return;
+        mcpList.querySelectorAll('.mcp-card').forEach(card => {
+          const probeBtn = card.querySelector('[data-action="probe"]');
+          if (!probeBtn) return;
+          const sName = probeBtn.getAttribute('data-name');
+          if (sName && statusMap[sName]) {
+            const st = statusMap[sName];
+            const dot = card.querySelector('.status-dot');
+            if (dot) {
+              if (st === 'connected' || st === 'ready') dot.style.background = 'var(--accent-emerald)';
+              else if (st === 'disabled' || st === 'stopped') dot.style.background = 'var(--text-muted)';
+              else dot.style.background = 'var(--accent-coral)';
+            }
+            let healthBadge = card.querySelector('.badge-health');
+            if (!healthBadge) {
+              healthBadge = document.createElement('span');
+              healthBadge.className = 'card-badge badge-health';
+              healthBadge.style.marginLeft = '4px';
+              const titleEl = card.querySelector('.card-main-title');
+              if (titleEl) titleEl.appendChild(healthBadge);
+            }
+            healthBadge.textContent = st.toUpperCase();
+            if (st === 'connected' || st === 'ready') healthBadge.style.color = 'var(--accent-emerald)';
+            else if (st === 'disabled' || st === 'stopped') healthBadge.style.color = 'var(--text-muted)';
+            else healthBadge.style.color = 'var(--accent-coral)';
+          }
         });
       }
 
