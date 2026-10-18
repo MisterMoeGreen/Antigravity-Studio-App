@@ -70,6 +70,9 @@ object EnvironmentBootstrapper {
         listOf(usrDir, homeDir, workspaceDir, glibcLibDir, usrLibDir, binDir, gitCoreDir, etcDir, tmpDir).forEach {
             it.mkdirs()
         }
+        try {
+            Os.chmod(binDir.absolutePath, 0b111_000_000)
+        } catch (_: Exception) {}
 
         // 1. Unpack assets/usr-data.tar.zst on first launch or version/build upgrade
         val versionFile = File(usrDir, ".version_code")

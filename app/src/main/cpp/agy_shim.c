@@ -237,6 +237,105 @@ int posix_spawnp(pid_t* pid, const char* file,
     return ret;
 }
 
+/* Check if target path resides within protected system directories */
+static int is_protected_target(int dirfd, const char* path) {
+    if (!path) return 0;
+
+    // Fast filter on protected basenames
+    const char* base = strrchr(path, '/');
+    const char* name = base ? (base + 1) : path;
+    if (strcmp(name, "agy") != 0 &&
+        strcmp(name, "agy.va39") != 0 &&
+        strcmp(name, "libagy.so") != 0 &&
+        strncmp(name, ".agy", 4) != 0 &&
+        strncmp(name, "agy.tmp", 7) != 0) {
+        return 0;
+    }
+
+    // Resolve full path using dirfd if relative
+    char full_path[PATH_MAX];
+    if (path[0] == '/') {
+        snprintf(full_path, sizeof(full_path), "%s", path);
+    } else {
+        if (dirfd == AT_FDCWD) {
+            if (!getcwd(full_path, sizeof(full_path))) return 1;
+        } else {
+            char fd_link[64];
+            snprintf(fd_link, sizeof(fd_link), "/proc/self/fd/%d", dirfd);
+            ssize_t r = readlink(fd_link, full_path, sizeof(full_path) - 1);
+            if (r < 0) return 1;
+            full_path[r] = '\0';
+        }
+        size_t cur = strlen(full_path);
+        snprintf(full_path + cur, sizeof(full_path) - cur, "/%s", path);
+    }
+
+    // Strictly protect system bin/lib directories (avoid false positives on workspace folders)
+    if (strstr(full_path, "/files/usr/bin/") != NULL ||
+        strstr(full_path, "/files/usr/lib/") != NULL ||
+        strstr(full_path, "/lib/arm64/") != NULL) {
+        return 1;
+    }
+    return 0;
+}
+
+/* Intercept unlink & unlinkat */
+typedef int (*unlink_fn)(const char*);
+int unlink(const char* pathname) {
+    if (is_protected_target(AT_FDCWD, pathname)) {
+        errno = EROFS;
+        return -1;
+    }
+    static unlink_fn real_unlink = NULL;
+    if (!real_unlink) real_unlink = (unlink_fn)dlsym(RTLD_NEXT, "unlink");
+    return real_unlink(pathname);
+}
+
+typedef int (*unlinkat_fn)(int, const char*, int);
+int unlinkat(int dirfd, const char* pathname, int flags) {
+    if (is_protected_target(dirfd, pathname)) {
+        errno = EROFS;
+        return -1;
+    }
+    static unlinkat_fn real_unlinkat = NULL;
+    if (!real_unlinkat) real_unlinkat = (unlinkat_fn)dlsym(RTLD_NEXT, "unlinkat");
+    return real_unlinkat(dirfd, pathname, flags);
+}
+
+/* Intercept rename, renameat & renameat2 */
+typedef int (*rename_fn)(const char*, const char*);
+int rename(const char* oldpath, const char* newpath) {
+    if (is_protected_target(AT_FDCWD, oldpath) || is_protected_target(AT_FDCWD, newpath)) {
+        errno = EROFS;
+        return -1;
+    }
+    static rename_fn real_rename = NULL;
+    if (!real_rename) real_rename = (rename_fn)dlsym(RTLD_NEXT, "rename");
+    return real_rename(oldpath, newpath);
+}
+
+typedef int (*renameat_fn)(int, const char*, int, const char*);
+int renameat(int olddirfd, const char* oldpath, int newdirfd, const char* newpath) {
+    if (is_protected_target(olddirfd, oldpath) || is_protected_target(newdirfd, newpath)) {
+        errno = EROFS;
+        return -1;
+    }
+    static renameat_fn real_renameat = NULL;
+    if (!real_renameat) real_renameat = (renameat_fn)dlsym(RTLD_NEXT, "renameat");
+    return real_renameat(olddirfd, oldpath, newdirfd, newpath);
+}
+
+typedef int (*renameat2_fn)(int, const char*, int, const char*, unsigned int);
+int renameat2(int olddirfd, const char* oldpath, int newdirfd, const char* newpath, unsigned int flags) {
+    if (is_protected_target(olddirfd, oldpath) || is_protected_target(newdirfd, newpath)) {
+        errno = EROFS;
+        return -1;
+    }
+    static renameat2_fn real_renameat2 = NULL;
+    if (!real_renameat2) real_renameat2 = (renameat2_fn)dlsym(RTLD_NEXT, "renameat2");
+    return real_renameat2(olddirfd, oldpath, newdirfd, newpath, flags);
+}
+
 /* Intercept openat & openat64 */
 typedef int (*openat_fn)(int, const char*, int, ...);
 int openat(int dirfd, const char* pathname, int flags, ...) {
@@ -248,6 +347,11 @@ int openat(int dirfd, const char* pathname, int flags, ...) {
         va_start(args, flags);
         mode = (mode_t)va_arg(args, int);
         va_end(args);
+    }
+    if ((flags & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC | O_APPEND)) &&
+        is_protected_target(dirfd, pathname)) {
+        errno = EROFS;
+        return -1;
     }
     char buf[PATH_MAX];
     const char* target = translate_path(pathname, buf, sizeof(buf));
@@ -266,6 +370,11 @@ int open(const char* pathname, int flags, ...) {
         va_start(args, flags);
         mode = (mode_t)va_arg(args, int);
         va_end(args);
+    }
+    if ((flags & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC | O_APPEND)) &&
+        is_protected_target(AT_FDCWD, pathname)) {
+        errno = EROFS;
+        return -1;
     }
     char buf[PATH_MAX];
     const char* target = translate_path(pathname, buf, sizeof(buf));

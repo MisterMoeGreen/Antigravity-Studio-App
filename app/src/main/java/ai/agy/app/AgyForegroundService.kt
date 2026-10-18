@@ -50,6 +50,7 @@ class AgyForegroundService : Service() {
 
         serviceScope.launch {
             EnvironmentBootstrapper.initialize(this@AgyForegroundService)
+            reconcileSymlinkFarmAndLock(this@AgyForegroundService)
             registerDnsWatcher()
             registerTelemetryBridge()
 
@@ -138,10 +139,12 @@ class AgyForegroundService : Service() {
         val env = pb.environment()
         env["HOME"] = home
         env["PREFIX"] = usr
-        env["PATH"] = "$usr/bin:/system/bin"
+        env["PATH"] = "$usr/bin:$home/.local/bin:/system/bin"
+        env["PYTHONUSERBASE"] = "$home/.local"
         env["TMPDIR"] = "$usr/tmp"
         env["SHELL"] = "$usr/bin/bash"
         env["AGY_BIN"] = "$usr/bin/agy"
+        env["AGY_DISABLE_AUTO_UPDATE"] = "1"
         env["AGY_WEB_PORT"] = port.toString()
         env["AGY_WEB_HOST"] = "127.0.0.1"
         env["GODEBUG"] = "netdns=cgo"
@@ -150,11 +153,9 @@ class AgyForegroundService : Service() {
         env["SSL_CERT_FILE"] = "$usr/etc/tls/cert.pem"
         env["GIT_SSL_CAINFO"] = "$usr/etc/tls/cert.pem"
         env["GIT_EXEC_PATH"] = "$usr/libexec/git-core"
-        val pInfo = packageManager.getPackageInfo(packageName, 0)
-        val vName = pInfo.versionName ?: "1.0.1"
-        val vCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) pInfo.longVersionCode else @Suppress("DEPRECATION") pInfo.versionCode.toLong()
-        env["AGY_APP_VERSION"] = vName
-        env["AGY_APP_VERSION_CODE"] = vCode.toString()
+        env["AGY_APP_VERSION"] = BuildConfig.VERSION_NAME
+        env["AGY_APP_VERSION_CODE"] = BuildConfig.APP_VERSION_CODE.toString()
+        env["AGY_RUNTIME_VERSION"] = BuildConfig.AGY_RUNTIME_VERSION
         env["PYTHONHOME"] = usr
         env["PYTHONPATH"] = "$usr/lib/python3.14:$usr/lib/python3.14/site-packages:$usr/lib/python3.12:$usr/lib/python3.12/site-packages"
 
@@ -280,6 +281,41 @@ class AgyForegroundService : Service() {
             stopForeground(true)
         }
         stopSelf()
+    }
+
+    fun reconcileSymlinkFarmAndLock(context: Context) {
+        val filesDir = context.filesDir
+        val usrBinDir = File(filesDir, "usr/bin")
+        File(filesDir, "home/.local/bin").mkdirs()
+        val nativeLibDir = File(context.applicationInfo.nativeLibraryDir)
+
+        usrBinDir.mkdirs()
+        // 1. Temporarily unlock usr/bin (0700) so we can replace dangling symlinks after an APK upgrade
+        android.system.Os.chmod(usrBinDir.absolutePath, 0b111_000_000)
+
+        val symlinkMap = mapOf(
+            "agy" to "libagy.so",
+            "agy.va39" to "libagy.so",
+            "bash" to "libbash.so",
+            "sh" to "libbash.so",
+            "git" to "libgit.so",
+            "python3" to "libpython3_bin.so"
+        )
+
+        for ((binName, soName) in symlinkMap) {
+            val targetSo = File(nativeLibDir, soName)
+            val linkFile = File(usrBinDir, binName)
+            try {
+                // Unconditionally remove first: File.exists() returns false on dangling symlinks!
+                android.system.Os.remove(linkFile.absolutePath)
+            } catch (_: Exception) {}
+            try {
+                android.system.Os.symlink(targetSo.absolutePath, linkFile.absolutePath)
+            } catch (_: Exception) {}
+        }
+
+        // 2. Lock usr/bin to 0500 (dr-x------): kernel VFS blocks raw Go SVC #0 unlinkat/renameat2!
+        android.system.Os.chmod(usrBinDir.absolutePath, 0b101_000_000)
     }
 
     override fun onDestroy() {

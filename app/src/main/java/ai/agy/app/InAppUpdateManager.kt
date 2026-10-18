@@ -93,12 +93,19 @@ object InAppUpdateManager {
                 }
             }
 
-            val intent = Intent(context, UpdateReceiver::class.java)
+            // CRITICAL for targetSdk 35: Must use an EXPLICIT component Intent with FLAG_MUTABLE
+            val callbackIntent = Intent(context, UpdateReceiver::class.java).apply {
+                setPackage(context.packageName)
+                action = "ai.agy.app.ACTION_INSTALL_COMMIT"
+            }
+            val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+                (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+
             val pendingIntent = PendingIntent.getBroadcast(
                 context,
                 sessionId,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+                callbackIntent,
+                flags
             )
 
             activeSession.commit(pendingIntent.intentSender)
@@ -145,7 +152,7 @@ object InAppUpdateManager {
     /**
      * Periodically queries the repository's latest release and triggers in-app
      * APK installation if a newer version is published.
-     * Avoids infinite update prompt loops via semantic version comparison and 24h throttling.
+     * Avoids infinite update prompt loops via semantic/integer version comparison and 24h throttling.
      */
     suspend fun checkForUpdates(context: Context) = withContext(Dispatchers.IO) {
         try {
@@ -161,11 +168,43 @@ object InAppUpdateManager {
                 val rawTagName = jsonObj.optString("tag_name", "").trim()
                 if (rawTagName.isEmpty()) return@withContext
 
+                val assets = jsonObj.optJSONArray("assets")
+                var downloadUrl: String? = null
+                var remoteVersionCode: Long? = null
+
+                if (assets != null) {
+                    for (i in 0 until assets.length()) {
+                        val asset = assets.getJSONObject(i)
+                        val name = asset.optString("name")
+                        if (name == "release-metadata.json") {
+                            try {
+                                val metaUrl = URL(asset.optString("browser_download_url"))
+                                val metaConn = metaUrl.openConnection() as java.net.HttpURLConnection
+                                metaConn.connectTimeout = 3000
+                                metaConn.readTimeout = 3000
+                                if (metaConn.responseCode == 200) {
+                                    val metaJson = metaConn.inputStream.bufferedReader().use { it.readText() }
+                                    remoteVersionCode = org.json.JSONObject(metaJson).optLong("version_code")
+                                }
+                            } catch (_: Exception) {}
+                        } else if (name.endsWith(".apk") && downloadUrl == null) {
+                            downloadUrl = asset.optString("browser_download_url")
+                        }
+                    }
+                }
+
                 val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
                 val currentVersion = pInfo.versionName
+                val currentCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) pInfo.longVersionCode else @Suppress("DEPRECATION") pInfo.versionCode.toLong()
 
-                if (!isNewerVersion(rawTagName, currentVersion)) {
-                    android.util.Log.d(TAG, "Installed version ($currentVersion) is up-to-date with remote release ($rawTagName)")
+                val shouldUpdate = if (remoteVersionCode != null && remoteVersionCode > 0) {
+                    remoteVersionCode > currentCode
+                } else {
+                    isNewerVersion(rawTagName, currentVersion)
+                }
+
+                if (!shouldUpdate) {
+                    android.util.Log.d(TAG, "Installed version ($currentVersion / code $currentCode) is up-to-date with remote release ($rawTagName / code $remoteVersionCode)")
                     return@withContext
                 }
 
@@ -180,20 +219,8 @@ object InAppUpdateManager {
                     return@withContext
                 }
 
-                val assets = jsonObj.optJSONArray("assets")
-                var downloadUrl: String? = null
-                if (assets != null) {
-                    for (i in 0 until assets.length()) {
-                        val asset = assets.getJSONObject(i)
-                        if (asset.optString("name").endsWith(".apk")) {
-                            downloadUrl = asset.optString("browser_download_url")
-                            break
-                        }
-                    }
-                }
-
                 if (downloadUrl != null) {
-                    android.util.Log.i(TAG, "New version detected ($rawTagName > $currentVersion). Starting download...")
+                    android.util.Log.i(TAG, "New version detected ($rawTagName / code $remoteVersionCode > $currentVersion / code $currentCode). Starting download...")
                     prefs.edit()
                         .putString(KEY_LAST_ATTEMPTED_TAG, rawTagName)
                         .putLong(KEY_LAST_ATTEMPTED_TIME, now)

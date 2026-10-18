@@ -926,9 +926,23 @@
   - Clean version bump to `v1.0.2` resolving release tagging and asset conflict issues.
   - Production release APK rebuilt and staged at `/sdcard/Download/AntigravityStudio-v1.0.2.apk`.
 
+### Milestone P7.16 — AGY Runtime 1.4.2 Integration & Release v1.0.3
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-18T08:44:00Z
+- **Files Created / Modified**:
+  - `AgyStudio/scripts/prepare_binaries.sh` (re-staged `agy.va39` v1.4.2 with 16KB page alignment and Bionic/glibc shims into `libagy.so`)
+  - `~/.agy-ui/server.py` (updated runtime fallback to `1.4.2` and app version to `1.0.3`)
+  - `~/.agy-ui/index.html` (updated drawer footer version placeholders to `v1.0.3` and `v1.4.2`)
+  - `AgyStudio/app/build.gradle.kts` (bumped `versionCode` to `5` and `versionName` to `"1.0.3"`)
+  - `/sdcard/Download/AntigravityStudio.apk` (recompiled release binary)
+  - `/sdcard/Download/AntigravityStudio-v1.0.3.apk` (recompiled release binary staged for GitHub release)
+- **Deliverables**:
+  - Upgraded embedded Antigravity CLI binary from v1.4.0 to v1.4.2 across Android native libraries and web UI.
+  - Production release APK rebuilt and staged at `/sdcard/Download/AntigravityStudio-v1.0.3.apk`.
+
 ---
 
 ## Final Project Summary
-All phases (Phase 0 through Phase 7.15) have been implemented, tested, and verified.
+All phases (Phase 0 through Phase 7.16) have been implemented, tested, and verified.
 Both repositories (`~/.agy-ui` and `AgyStudio`) have clean, anonymized commit histories with author `MisterMoeGreen <48449987+MisterMoeGreen@users.noreply.github.com>`.
 
