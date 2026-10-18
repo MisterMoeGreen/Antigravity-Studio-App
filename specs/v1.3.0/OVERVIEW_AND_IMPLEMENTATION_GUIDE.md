@@ -140,13 +140,15 @@ sequenceDiagram
     readelf -lW app/src/main/jniLibs/arm64-v8a/libproot.so | awk '/LOAD/{if (strtonum($NF) < 16384) exit 1}'
     ```
 - [ ] **AC-2.2: Bootstrapper & Service PRoot Symlink Assembly**
-  - Verify both `EnvironmentBootstrapper.kt` and `AgyForegroundService.kt` map `proot` to `libproot.so` and `agy-sh` to `libagy_sh.so`.
+  - Verify both `EnvironmentBootstrapper.kt` and `AgyForegroundService.kt` map `proot` to `libproot.so`, `agy-sh` to `libagy_sh.so`, and retain `ask_question` to `libask_question.so`.
   - **Verification Gate**:
     ```bash
     grep -q '"proot" to "libproot.so"' app/src/main/java/ai/agy/app/EnvironmentBootstrapper.kt && \
     grep -q '"agy-sh" to "libagy_sh.so"' app/src/main/java/ai/agy/app/EnvironmentBootstrapper.kt && \
+    grep -q '"ask_question" to "libask_question.so"' app/src/main/java/ai/agy/app/EnvironmentBootstrapper.kt && \
     grep -q '"proot" to "libproot.so"' app/src/main/java/ai/agy/app/AgyForegroundService.kt && \
-    grep -q '"agy-sh" to "libagy_sh.so"' app/src/main/java/ai/agy/app/AgyForegroundService.kt
+    grep -q '"agy-sh" to "libagy_sh.so"' app/src/main/java/ai/agy/app/AgyForegroundService.kt && \
+    grep -q '"ask_question" to "libask_question.so"' app/src/main/java/ai/agy/app/AgyForegroundService.kt
     ```
 
 ### Phase 3: Alpine Linux Rootfs Packaging & Bootstrapper Integration
@@ -220,10 +222,11 @@ sequenceDiagram
     /bin/sh -c 'apk add --no-cache gcc musl-dev && printf "#include <stdio.h>\nint main(){puts(\"ANON_ELF_EXEC_OK\");return 0;}\n" > /root/t.c && gcc /root/t.c -o /root/t && /root/t' | grep -q 'ANON_ELF_EXEC_OK'
     ```
 - [ ] **AC-5.4: Version Bump to v1.3.0 & 16 KB Aligned Release APK Verification**
-  - Verify `version.properties` is set to `1.3.0`, release APK builds cleanly, and all bundled `.so` files in `jniLibs` pass 16 KB alignment checks.
+  - Verify `version.properties` is set to `VERSION_NAME=1.3.0` and `VERSION_CODE=11`, release APK builds cleanly, and all bundled `.so` files in `jniLibs` pass 16 KB alignment checks.
   - **Verification Gate**:
     ```bash
     grep -q 'VERSION_NAME=1.3.0' version.properties && \
+    grep -q 'VERSION_CODE=11' version.properties && \
     bash ./gradlew assembleRelease && \
     test -f app/build/outputs/apk/release/app-release.apk
     ```

@@ -204,4 +204,7 @@ const unsigned long default_ptrace_options = (
 * **Compiler**: Android Bionic Clang (NDK r27+).
 * **Page Alignment**: `-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384`.
 * **Output Library**: `app/src/main/jniLibs/arm64-v8a/libproot.so`.
-* **Symlink Assembly**: Synchronized in both `EnvironmentBootstrapper.kt` and `reconcileSymlinkFarmAndLock()` (`"proot" to "libproot.so"`).
+* **Symlink Assembly**: Synchronized in both `EnvironmentBootstrapper.kt` and `reconcileSymlinkFarmAndLock()`:
+  - `"proot"` to `"libproot.so"`
+  - `"agy-sh"` to `"libagy_sh.so"`
+  - `"ask_question"` to `"libask_question.so"` (retained from v1.2.0)

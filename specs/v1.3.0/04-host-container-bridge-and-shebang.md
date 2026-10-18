@@ -4,7 +4,7 @@
 > **Components**: `app/src/main/cpp/agy_sh.c`, `app/src/main/cpp/agy_shim.c`, `AgyForegroundService.kt`  
 > **Destination**: `app/src/main/jniLibs/arm64-v8a/libagy_sh.so` (Symlinked at `usr/bin/agy-sh`)  
 > **Target SDK**: `35` (Android 15 / 16 / 17+) | **Architecture**: `arm64-v8a`  
-> **Audit Status**: Hardened per Argon Review (`ARGON-V13-08`, `ARGON-V13-14`, `ARGON-V13-15`)
+> **Audit Status**: Hardened per Argon Review & Aligned with v1.2.0 Native Launcher Baseline
 
 ---
 
@@ -16,22 +16,24 @@ To maximize performance, Antigravity Studio separates agent internal operations 
 [ Host Layer (Unconstrained) ]
 • server.py (WebSocket Daemon & API Router)
 • libagy.so (201 MB Go Engine: LLM Context, Tree Search, Tool Planner)
-• Built-in Tools: view_file, edit_file, librg.so (Fast Local Search)
+• Built-in Tools: view_file, edit_file, librg.so, libask_question.so (v1.2.0)
   └── Runs natively on Android Bionic host with ZERO ptrace overhead
 
 [ Container Layer (W^X-Aware PRoot Subsystem) ]
 • Invoked ONLY when agy calls run_command (/bin/sh -c "...")
 • Provides full Linux environment: /bin, /usr/bin, apk, npm, node, gcc
 • Direct ARM64 execution with Anonymous Memory Loader
+• Connected to Host via UNIX Socket Bridge (ask_question.sock)
 ```
 
 ---
 
 ## 2. Native Bridge Executable (`app/src/main/cpp/agy_sh.c`)
 
-### Critical Mitigations Integrated (`ARGON-V13-08`):
-* **Bypassing the Text Script Inode Block**: In modern Android, executing a text shell script (`#!/bin/sh`) stored inside `/data/data/...` fails at the kernel level (`MAY_EXEC` check on `app_data_file`). We compile `agy-sh` as a native C ELF binary (`libagy_sh.so`) staged in `jniLibs/arm64-v8a/` (`apk_data_file`), which is symlinked to `usr/bin/agy-sh`.
+### Critical Mitigations Integrated:
+* **Bypassing the Text Script Inode Block (`ARGON-V13-08`)**: In modern Android, executing a text shell script (`#!/bin/sh`) stored inside `/data/data/...` fails at the kernel level (`MAY_EXEC` check on `app_data_file`). We compile `agy-sh` as a native C ELF binary (`libagy_sh.so`) staged in `jniLibs/arm64-v8a/` (`apk_data_file`), following the exact native ELF launcher pattern proven in `v1.2.0` by `libask_question.so`.
 * **Sanitizing Bionic Preload Leakage**: `libagy_sh.so` strips `LD_PRELOAD`, `PYTHONHOME`, and `PYTHONPATH` so Bionic libraries do not crash the guest `musl` dynamic linker.
+* **v1.2.0 Interactive Decision Bridge Propagation**: Exports `AGY_QUESTION_SOCK` and bind-mounts `/usr/local/bin/ask_question` and `usr/share/agy-ui` so interactive questions initiated from within the container communicate directly with `server.py`.
 
 ```c
 #define _GNU_SOURCE
@@ -63,7 +65,10 @@ int main(int argc, char *argv[]) {
     setenv("PROOT_LOADER", LOADER_SO, 0);
     setenv("PROOT_NO_SECCOMP", "0", 0);
 
-    /* 3. Set mobile concurrency & memory guardrails (Spec 05) */
+    /* 3. Propagate v1.2.0 interactive question IPC socket */
+    setenv("AGY_QUESTION_SOCK", APP_FILES "/home/.gemini/antigravity-cli/ask_question.sock", 1);
+
+    /* 4. Set mobile concurrency & memory guardrails (Spec 05) */
     setenv("CARGO_BUILD_JOBS", "4", 0);
     setenv("MAKEFLAGS", "-j4", 0);
     setenv("CMAKE_BUILD_PARALLEL_LEVEL", "4", 0);
@@ -72,14 +77,14 @@ int main(int argc, char *argv[]) {
     setenv("NODE_OPTIONS", "--max-old-space-size=1536", 0);
     setenv("HOME", "/root", 1);
 
-    /* 4. Resolve current working directory with safe fallback */
+    /* 5. Resolve current working directory with safe fallback */
     char cwd[PATH_MAX];
     if (!getcwd(cwd, sizeof(cwd))) {
         snprintf(cwd, sizeof(cwd), "%s", APP_FILES "/home/workspace");
     }
 
-    /* 5. Construct proot argv with 1:1 host path identity mounts */
-    char **new_argv = calloc((size_t)argc + 32, sizeof(char *));
+    /* 6. Construct proot argv with 1:1 host path identity mounts */
+    char **new_argv = calloc((size_t)argc + 36, sizeof(char *));
     if (!new_argv) return 127;
 
     int k = 0;
@@ -99,6 +104,9 @@ int main(int argc, char *argv[]) {
     new_argv[k++] = "-b"; new_argv[k++] = APP_FILES "/home:" APP_FILES "/home";
     new_argv[k++] = "-b"; new_argv[k++] = APP_FILES "/home/workspace:/root/workspace";
     new_argv[k++] = "-b"; new_argv[k++] = APP_FILES "/home/.ssh:/root/.ssh";
+    /* Bridge v1.2.0 ask_question tool into container */
+    new_argv[k++] = "-b"; new_argv[k++] = APP_FILES "/usr/bin/ask_question:/usr/local/bin/ask_question";
+    new_argv[k++] = "-b"; new_argv[k++] = APP_FILES "/usr/share/agy-ui:" APP_FILES "/usr/share/agy-ui";
     if (access("/storage/emulated/0", F_OK) == 0) {
         new_argv[k++] = "-b"; new_argv[k++] = "/storage/emulated/0:/storage/emulated/0";
     }
@@ -127,7 +135,7 @@ int main(int argc, char *argv[]) {
 ## 3. Virtualization Shim Updates (`agy_shim.c`)
 
 1. **Path Interception**: In `translate_path()`, route `/bin/sh` to `APP_PREFIX "/bin/agy-sh"`, while keeping `/bin/bash` pointing to the host Bionic bash.
-2. **Stripping `LD_PRELOAD`**: In `is_glibc_target()`, strip `LD_PRELOAD` whenever entering `proot`, `libproot.so`, `agy-sh`, or `libagy_sh.so`.
+2. **Stripping `LD_PRELOAD`**: In `is_glibc_target()`, strip `LD_PRELOAD` whenever entering `proot`, `libproot.so`, `agy-sh`, `libagy_sh.so`, or `libask_question.so`.
 
 ---
 
