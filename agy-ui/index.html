@@ -6758,10 +6758,10 @@
         if (options && options.skipped) {
           closeQuestionModal();
           try {
-            await fetch('/api/question/respond', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ question_id: qid, skipped: true }),
+            sendWs({
+              type: 'question_response',
+              question_id: qid,
+              skipped: true,
             });
           } catch (e) {
             console.warn('Failed to submit question skip:', e);
@@ -6792,31 +6792,22 @@
         closeQuestionModal();
 
         try {
-          await fetch('/api/question/respond', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              question_id: qid,
-              skipped: false,
-              responses: responsesToSend,
-            }),
+          sendWs({
+            type: 'question_response',
+            question_id: qid,
+            skipped: false,
+            responses: responsesToSend,
           });
         } catch (e) {
           console.warn('Failed to submit question response:', e);
         }
       }
 
-      async function fetchPendingQuestions() {
+      function fetchPendingQuestions() {
         try {
-          const res = await fetch('/api/question/pending');
-          if (res.ok) {
-            const data = await res.json();
-            if (data.pending && data.pending.length > 0) {
-              handleAskQuestionEvent(data.pending[0]);
-            }
-          }
+          sendWs({ type: 'get_pending_questions' });
         } catch (e) {
-          // Ignore network errors during reconnect
+          // Ignore
         }
       }
 

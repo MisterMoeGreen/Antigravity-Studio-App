@@ -2,13 +2,14 @@
 """
 Antigravity Studio Interactive Question Bridge Tool (v1.2.0)
 Suspends agent tool execution until the mobile user responds via the touch modal.
+Communicates via UNIX domain socket with backend server daemon.
 """
 import sys
 import os
 import json
 import time
-import urllib.request
-import urllib.error
+import socket
+from pathlib import Path
 
 
 def _iso_now():
@@ -19,6 +20,22 @@ def _format_output(created_at, completed_at, body_lines):
     if body_lines.startswith("Created At:"):
         return body_lines
     return f"Created At: {created_at}\nCompleted At: {completed_at}\n{body_lines}"
+
+
+def _get_socket_path() -> Path:
+    if os.environ.get("AGY_QUESTION_SOCK"):
+        return Path(os.environ["AGY_QUESTION_SOCK"])
+
+    candidates = [
+        Path(os.environ.get("HOME", "/data/data/ai.agy.app/files/home")) / ".gemini" / "antigravity-cli" / "ask_question.sock",
+        Path.home() / ".gemini" / "antigravity-cli" / "ask_question.sock",
+        Path("/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/ask_question.sock"),
+        Path("/data/data/com.termux/files/home/.gemini/antigravity-cli/ask_question.sock"),
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    return candidates[0]
 
 
 def main():
@@ -71,36 +88,37 @@ def main():
         print(_format_output(created_at, _iso_now(), "A1: User Skipped (no valid questions provided)"))
         return
 
+    timeout_sec = int(data.get("timeout_seconds") or data.get("timeoutSeconds") or 300)
     payload = {
+        "action": "ask",
         "questions": normalized_questions,
         "tool_action": data.get("tool_action") or data.get("toolAction") or "Waiting for user decision",
         "tool_summary": data.get("tool_summary") or data.get("toolSummary") or "Decision required",
-        "timeout_seconds": int(data.get("timeout_seconds") or data.get("timeoutSeconds") or 300)
+        "timeout_seconds": timeout_sec
     }
 
-    port = os.environ.get("AGY_WEB_PORT", "8081")
-    url = f"http://127.0.0.1:{port}/api/question/ask"
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST"
-    )
-
+    sock_path = _get_socket_path()
     try:
-        with urllib.request.urlopen(req, timeout=payload["timeout_seconds"] + 30) as resp:
-            res = json.loads(resp.read().decode("utf-8"))
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(timeout_sec + 30)
+        sock.connect(str(sock_path))
+        sock.sendall(json.dumps(payload).encode("utf-8") + b"\n")
+
+        file_obj = sock.makefile("r", encoding="utf-8")
+        line = file_obj.readline()
+        sock.close()
+
+        if line:
+            res = json.loads(line)
             ans = res.get("formatted_output", "A1: User Skipped")
             print(_format_output(created_at, _iso_now(), ans))
-    except urllib.error.HTTPError as e:
-        try:
-            err_body = json.loads(e.read().decode("utf-8"))
-            ans = err_body.get("formatted_output", "A1: User Timed Out")
-        except Exception:
-            ans = "A1: User Skipped"
-        print(_format_output(created_at, _iso_now(), ans))
-    except Exception:
-        print(_format_output(created_at, _iso_now(), "A1: User Skipped"))
+        else:
+            print(_format_output(created_at, _iso_now(), "A1: User Skipped (empty daemon response)"))
+    except socket.timeout:
+        print(_format_output(created_at, _iso_now(), f"A1: User Timed Out (no response received within {timeout_sec}s)"))
+    except Exception as exc:
+        # Fallback to User Skipped if daemon unreachable
+        print(_format_output(created_at, _iso_now(), f"A1: User Skipped ({exc})"))
 
 
 if __name__ == "__main__":

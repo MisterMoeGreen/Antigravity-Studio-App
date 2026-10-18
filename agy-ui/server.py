@@ -257,6 +257,7 @@ API_KEYS_MANIFEST_FILE = GEMINI_RULES_DIR / "api_keys_manifest.md"
 MCP_CONFIG_FILE = GEMINI_CONFIG_DIR / "mcp_config.json"
 GLOBAL_SKILLS_DIR = GEMINI_CONFIG_DIR / "skills"
 BUILTIN_SKILLS_DIR = HOME_DIR / ".gemini" / "antigravity-cli" / "builtin" / "skills"
+PROTECTED_SYSTEM_SKILLS: frozenset[str] = frozenset({"ask-question"})
 
 
 def atomic_write_secure(target_path: str, content: str, mode: int = 0o600) -> int:
@@ -774,7 +775,11 @@ def discover_skills(workspace_dir: Optional[str] = None, include_builtin: bool =
                 except Exception as exc:
                     logger.debug("Skipping invalid builtin skill %s: %s", d.name, exc)
 
-    return skills
+    return [
+        s for s in skills
+        if s.get("name") not in PROTECTED_SYSTEM_SKILLS
+        and s.get("folder_name") not in PROTECTED_SYSTEM_SKILLS
+    ]
 
 
 def get_skill_content(target_path: str, workspace_dir: Optional[str] = None) -> str:
@@ -782,6 +787,8 @@ def get_skill_content(target_path: str, workspace_dir: Optional[str] = None) -> 
     if workspace_dir and Path(workspace_dir).is_dir():
         allowed_roots.append(str(Path(workspace_dir) / ".agents" / "skills"))
     real_path = os.path.realpath(target_path)
+    if Path(real_path).parent.name in PROTECTED_SYSTEM_SKILLS:
+        raise PermissionError(f"Protected system skills cannot be edited")
     is_allowed = False
     for r in allowed_roots:
         if real_path.startswith(os.path.realpath(r)):
@@ -795,6 +802,8 @@ def get_skill_content(target_path: str, workspace_dir: Optional[str] = None) -> 
 def save_skill(name: str, scope: str, content: str, workspace_dir: Optional[str] = None) -> dict[str, Any]:
     meta, _ = parse_skill_frontmatter(content)
     slug = meta["name"]
+    if slug in PROTECTED_SYSTEM_SKILLS or name in PROTECTED_SYSTEM_SKILLS:
+        raise PermissionError(f"Cannot overwrite protected system skill '{slug}'")
     if scope.lower() == "workspace":
         if not workspace_dir or not Path(workspace_dir).is_dir():
             raise ValueError("No active workspace selected for workspace skill")
@@ -809,6 +818,8 @@ def save_skill(name: str, scope: str, content: str, workspace_dir: Optional[str]
     root.mkdir(parents=True, exist_ok=True)
     target_dir = root / slug
     safe_dir = resolve_safe_skill_dir(str(target_dir), allowed_roots)
+    if Path(safe_dir).name in PROTECTED_SYSTEM_SKILLS:
+        raise PermissionError(f"Cannot overwrite protected system skill '{Path(safe_dir).name}'")
     os.makedirs(safe_dir, exist_ok=True)
     target_skill_file = Path(safe_dir) / "SKILL.md"
     atomic_write_secure(str(target_skill_file), content, mode=0o644)
@@ -826,6 +837,8 @@ def delete_skill(target_path: str, workspace_dir: Optional[str] = None) -> bool:
     if workspace_dir and Path(workspace_dir).is_dir():
         allowed_roots.append(str(Path(workspace_dir) / ".agents" / "skills"))
     safe_dir = resolve_safe_skill_dir(target_path, allowed_roots)
+    if Path(safe_dir).name in PROTECTED_SYSTEM_SKILLS:
+        raise PermissionError(f"Cannot delete protected system skill '{Path(safe_dir).name}'")
     if os.path.exists(safe_dir) and os.path.isdir(safe_dir):
         shutil.rmtree(safe_dir)
         return True
@@ -3233,6 +3246,252 @@ class AgyWebServer:
         self._cached_quotas: Optional[list[dict[str, str]]] = None
         self._quotas_cached_at: float = 0.0
         self._pending_questions: dict[str, dict[str, Any]] = {}
+        self.ipc_sock_path: Path = GEMINI_DIR / "ask_question.sock"
+        self.ipc_server: Optional[asyncio.AbstractServer] = None
+
+    async def start_ipc_server(self) -> None:
+        GEMINI_DIR.mkdir(parents=True, exist_ok=True)
+        if self.ipc_sock_path.exists():
+            try:
+                self.ipc_sock_path.unlink()
+            except Exception as exc:
+                logger.warning("Could not unlink stale socket %s: %s", self.ipc_sock_path, exc)
+        try:
+            self.ipc_server = await asyncio.start_unix_server(
+                self.handle_ipc_client,
+                str(self.ipc_sock_path),
+            )
+            logger.info("Antigravity question IPC server listening on %s", self.ipc_sock_path)
+        except Exception as exc:
+            logger.error("Failed to start question IPC server on %s: %s", self.ipc_sock_path, exc)
+
+    async def stop_ipc_server(self) -> None:
+        if self.ipc_server:
+            self.ipc_server.close()
+            try:
+                await self.ipc_server.wait_closed()
+            except Exception:
+                pass
+            self.ipc_server = None
+        if self.ipc_sock_path.exists():
+            try:
+                self.ipc_sock_path.unlink()
+            except Exception:
+                pass
+
+    async def handle_ipc_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            line = await reader.readline()
+            if not line:
+                return
+            payload = json.loads(line.decode("utf-8"))
+            action = payload.get("action", "ask")
+            if action == "ask":
+                res = await self.process_question_ask(payload)
+                writer.write(json.dumps(res).encode("utf-8") + b"\n")
+                await writer.drain()
+            elif action == "respond":
+                res = await self.resolve_question_response(payload)
+                writer.write(json.dumps(res).encode("utf-8") + b"\n")
+                await writer.drain()
+            else:
+                err_res = {"status": "error", "error": f"Unknown action: {action}"}
+                writer.write(json.dumps(err_res).encode("utf-8") + b"\n")
+                await writer.drain()
+        except Exception as exc:
+            logger.error("Error in question IPC handler: %s", exc, exc_info=True)
+            try:
+                err_res = {
+                    "status": "error",
+                    "skipped": True,
+                    "formatted_output": f"A1: User Skipped (IPC error: {exc})",
+                }
+                writer.write(json.dumps(err_res).encode("utf-8") + b"\n")
+                await writer.drain()
+            except Exception:
+                pass
+        finally:
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
+
+    async def process_question_ask(self, payload: dict[str, Any]) -> dict[str, Any]:
+        raw_questions = payload.get("questions")
+        if not raw_questions and (payload.get("question") or payload.get("title")):
+            raw_questions = [{
+                "question": payload.get("question") or payload.get("title"),
+                "options": payload.get("options") or payload.get("choices") or ["(Recommended) Proceed", "Skip"],
+                "is_multi_select": bool(payload.get("is_multi_select") or payload.get("isMultiSelect", False)),
+            }]
+
+        if not raw_questions or not isinstance(raw_questions, list):
+            return {
+                "error": "Missing or invalid 'questions' array",
+                "status": "error",
+                "skipped": True,
+                "formatted_output": "A1: User Skipped (invalid questions)",
+            }
+
+        normalized_questions = []
+        for q in raw_questions:
+            if not isinstance(q, dict):
+                continue
+            q_text = str(q.get("question") or q.get("title") or "").strip()
+            if not q_text:
+                continue
+            raw_opts = q.get("options") or q.get("choices") or ["(Recommended) Proceed", "Skip"]
+            opts = [str(o).strip() for o in raw_opts if str(o).strip()]
+            if not opts:
+                opts = ["(Recommended) Proceed", "Skip"]
+            multi = bool(q.get("is_multi_select") or q.get("isMultiSelect", False))
+            normalized_questions.append({
+                "question": q_text,
+                "options": opts,
+                "is_multi_select": multi,
+            })
+
+        if not normalized_questions:
+            return {
+                "error": "No valid questions found",
+                "status": "error",
+                "skipped": True,
+                "formatted_output": "A1: User Skipped (no valid questions)",
+            }
+
+        tool_action = str(payload.get("tool_action") or payload.get("toolAction") or "Waiting for user decision").strip()
+        tool_summary = str(payload.get("tool_summary") or payload.get("toolSummary") or "Decision required").strip()
+        try:
+            timeout_val = float(payload.get("timeout_seconds") or payload.get("timeoutSeconds") or 300)
+        except (ValueError, TypeError):
+            timeout_val = 300.0
+
+        question_id = f"q-{uuid.uuid4().hex[:8]}"
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+
+        self._pending_questions[question_id] = {
+            "future": future,
+            "session_id": self.orchestrator.config.conversation_id,
+            "created_at": int(time.time()),
+            "questions": normalized_questions,
+            "tool_action": tool_action,
+            "tool_summary": tool_summary,
+        }
+
+        # Broadcast WebSocket frame to all connected mobile clients
+        await self.broadcast({
+            "type": "ask_question",
+            "question_id": question_id,
+            "created_at": int(time.time()),
+            "tool_action": tool_action,
+            "tool_summary": tool_summary,
+            "questions": normalized_questions,
+        })
+
+        try:
+            result = await asyncio.wait_for(future, timeout=timeout_val)
+            return result
+        except asyncio.TimeoutError:
+            timeout_res = {
+                "status": "timeout",
+                "question_id": question_id,
+                "skipped": True,
+                "answers": [],
+                "formatted_output": f"A1: User Timed Out (no response received within {int(timeout_val)}s)",
+            }
+            await self.broadcast({
+                "type": "dismiss_question",
+                "question_id": question_id,
+                "reason": "timeout",
+            })
+            return timeout_res
+        except asyncio.CancelledError:
+            await self.broadcast({
+                "type": "dismiss_question",
+                "question_id": question_id,
+                "reason": "client_disconnected",
+            })
+            raise
+        finally:
+            self._pending_questions.pop(question_id, None)
+
+    async def resolve_question_response(self, payload: dict[str, Any]) -> dict[str, Any]:
+        question_id = str(payload.get("question_id") or "").strip()
+        if not question_id or question_id not in self._pending_questions:
+            return {"error": "Question not found or already resolved", "status": "not_found"}
+
+        entry = self._pending_questions[question_id]
+        future: Optional[asyncio.Future] = entry.get("future")
+        if not future or future.done():
+            return {"error": "Question already completed", "status": "gone"}
+
+        skipped = bool(payload.get("skipped", False))
+        if skipped:
+            res = {
+                "status": "skipped",
+                "question_id": question_id,
+                "skipped": True,
+                "answers": [],
+                "formatted_output": "A1: User Skipped",
+            }
+        else:
+            responses = payload.get("responses")
+            if responses and isinstance(responses, list):
+                lines = []
+                all_answers = []
+                for idx, item in enumerate(responses):
+                    if not isinstance(item, dict):
+                        continue
+                    q_idx = item.get("question_index", idx)
+                    selected = [str(s).strip() for s in (item.get("selected") or []) if str(s).strip()]
+                    write_in = str(item.get("write_in") or "").strip()
+                    all_answers.extend(selected)
+                    if write_in:
+                        all_answers.append(write_in)
+
+                    if selected and write_in:
+                        line_content = f"{', '.join(selected)} (User Note: {write_in})"
+                    elif selected:
+                        line_content = ", ".join(selected)
+                    elif write_in:
+                        line_content = write_in
+                    else:
+                        line_content = "User Skipped"
+                    lines.append(f"A{q_idx + 1}: {line_content}")
+                formatted_out = "\n".join(lines) if lines else "A1: User Skipped"
+            else:
+                answers = [str(a).strip() for a in (payload.get("answers") or []) if str(a).strip()]
+                write_in = str(payload.get("write_in") or "").strip()
+                all_answers = list(answers)
+                if write_in:
+                    all_answers.append(write_in)
+                if answers and write_in:
+                    line_content = f"{', '.join(answers)} (User Note: {write_in})"
+                elif answers:
+                    line_content = ", ".join(answers)
+                elif write_in:
+                    line_content = write_in
+                else:
+                    line_content = "User Skipped"
+                formatted_out = f"A1: {line_content}"
+
+            res = {
+                "status": "success",
+                "question_id": question_id,
+                "skipped": False,
+                "answers": all_answers,
+                "formatted_output": formatted_out,
+            }
+
+        future.set_result(res)
+        await self.broadcast({
+            "type": "dismiss_question",
+            "question_id": question_id,
+            "reason": "skipped" if skipped else "answered",
+        })
+        return {"status": "ok", "message": "Question response accepted"}
 
     async def _cancel_all_pending_questions(self, reason: str = "user_aborted") -> None:
         if not self._pending_questions:
@@ -3639,96 +3898,8 @@ class AgyWebServer:
                     payload = json.loads(request.body.decode("utf-8")) if request.body else {}
                 except Exception as exc:
                     return _json_response({"error": f"Invalid JSON payload: {exc}"}, HTTPStatus.BAD_REQUEST)
-
-                # Shorthand wrapping: if single question passed at root
-                raw_questions = payload.get("questions")
-                if not raw_questions and (payload.get("question") or payload.get("title")):
-                    raw_questions = [{
-                        "question": payload.get("question") or payload.get("title"),
-                        "options": payload.get("options") or payload.get("choices") or ["(Recommended) Proceed", "Skip"],
-                        "is_multi_select": bool(payload.get("is_multi_select") or payload.get("isMultiSelect", False)),
-                    }]
-
-                if not raw_questions or not isinstance(raw_questions, list):
-                    return _json_response({"error": "Missing or invalid 'questions' array"}, HTTPStatus.BAD_REQUEST)
-
-                normalized_questions = []
-                for q in raw_questions:
-                    if not isinstance(q, dict):
-                        continue
-                    q_text = str(q.get("question") or q.get("title") or "").strip()
-                    if not q_text:
-                        continue
-                    raw_opts = q.get("options") or q.get("choices") or ["(Recommended) Proceed", "Skip"]
-                    opts = [str(o).strip() for o in raw_opts if str(o).strip()]
-                    if not opts:
-                        opts = ["(Recommended) Proceed", "Skip"]
-                    multi = bool(q.get("is_multi_select") or q.get("isMultiSelect", False))
-                    normalized_questions.append({
-                        "question": q_text,
-                        "options": opts,
-                        "is_multi_select": multi,
-                    })
-
-                if not normalized_questions:
-                    return _json_response({"error": "No valid questions found in payload"}, HTTPStatus.BAD_REQUEST)
-
-                tool_action = str(payload.get("tool_action") or payload.get("toolAction") or "Waiting for user decision").strip()
-                tool_summary = str(payload.get("tool_summary") or payload.get("toolSummary") or "Decision required").strip()
-                try:
-                    timeout_val = float(payload.get("timeout_seconds") or payload.get("timeoutSeconds") or 300)
-                except (ValueError, TypeError):
-                    timeout_val = 300.0
-
-                question_id = f"q-{uuid.uuid4().hex[:8]}"
-                loop = asyncio.get_running_loop()
-                future = loop.create_future()
-
-                self._pending_questions[question_id] = {
-                    "future": future,
-                    "session_id": self.orchestrator.config.conversation_id,
-                    "created_at": int(time.time()),
-                    "questions": normalized_questions,
-                    "tool_action": tool_action,
-                    "tool_summary": tool_summary,
-                }
-
-                # Broadcast WebSocket frame to all connected mobile clients
-                await self.broadcast({
-                    "type": "ask_question",
-                    "question_id": question_id,
-                    "created_at": int(time.time()),
-                    "tool_action": tool_action,
-                    "tool_summary": tool_summary,
-                    "questions": normalized_questions,
-                })
-
-                try:
-                    result = await asyncio.wait_for(future, timeout=timeout_val)
-                    return _json_response(result)
-                except asyncio.TimeoutError:
-                    timeout_res = {
-                        "status": "timeout",
-                        "question_id": question_id,
-                        "skipped": True,
-                        "answers": [],
-                        "formatted_output": f"A1: User Timed Out (no response received within {int(timeout_val)}s)",
-                    }
-                    await self.broadcast({
-                        "type": "dismiss_question",
-                        "question_id": question_id,
-                        "reason": "timeout",
-                    })
-                    return _json_response(timeout_res)
-                except asyncio.CancelledError:
-                    await self.broadcast({
-                        "type": "dismiss_question",
-                        "question_id": question_id,
-                        "reason": "client_disconnected",
-                    })
-                    raise
-                finally:
-                    self._pending_questions.pop(question_id, None)
+                res = await self.process_question_ask(payload)
+                return _json_response(res)
 
         if path == "/api/question/respond":
             if request.method == "POST":
@@ -3736,81 +3907,9 @@ class AgyWebServer:
                     payload = json.loads(request.body.decode("utf-8")) if request.body else {}
                 except Exception as exc:
                     return _json_response({"error": f"Invalid JSON payload: {exc}"}, HTTPStatus.BAD_REQUEST)
-
-                question_id = str(payload.get("question_id") or "").strip()
-                if not question_id or question_id not in self._pending_questions:
-                    return _json_response({"error": "Question not found or already resolved"}, HTTPStatus.NOT_FOUND)
-
-                entry = self._pending_questions[question_id]
-                future: asyncio.Future = entry.get("future")
-                if not future or future.done():
-                    return _json_response({"error": "Question already completed"}, HTTPStatus.GONE)
-
-                skipped = bool(payload.get("skipped", False))
-                if skipped:
-                    res = {
-                        "status": "skipped",
-                        "question_id": question_id,
-                        "skipped": True,
-                        "answers": [],
-                        "formatted_output": "A1: User Skipped",
-                    }
-                else:
-                    responses = payload.get("responses")
-                    if responses and isinstance(responses, list):
-                        lines = []
-                        all_answers = []
-                        for idx, item in enumerate(responses):
-                            if not isinstance(item, dict):
-                                continue
-                            q_idx = item.get("question_index", idx)
-                            selected = [str(s).strip() for s in (item.get("selected") or []) if str(s).strip()]
-                            write_in = str(item.get("write_in") or "").strip()
-                            all_answers.extend(selected)
-                            if write_in:
-                                all_answers.append(write_in)
-
-                            if selected and write_in:
-                                line_content = f"{', '.join(selected)} (User Note: {write_in})"
-                            elif selected:
-                                line_content = ", ".join(selected)
-                            elif write_in:
-                                line_content = write_in
-                            else:
-                                line_content = "User Skipped"
-                            lines.append(f"A{q_idx + 1}: {line_content}")
-                        formatted_out = "\n".join(lines) if lines else "A1: User Skipped"
-                    else:
-                        answers = [str(a).strip() for a in (payload.get("answers") or []) if str(a).strip()]
-                        write_in = str(payload.get("write_in") or "").strip()
-                        all_answers = list(answers)
-                        if write_in:
-                            all_answers.append(write_in)
-                        if answers and write_in:
-                            line_content = f"{', '.join(answers)} (User Note: {write_in})"
-                        elif answers:
-                            line_content = ", ".join(answers)
-                        elif write_in:
-                            line_content = write_in
-                        else:
-                            line_content = "User Skipped"
-                        formatted_out = f"A1: {line_content}"
-
-                    res = {
-                        "status": "success",
-                        "question_id": question_id,
-                        "skipped": False,
-                        "answers": all_answers,
-                        "formatted_output": formatted_out,
-                    }
-
-                future.set_result(res)
-                await self.broadcast({
-                    "type": "dismiss_question",
-                    "question_id": question_id,
-                    "reason": "skipped" if skipped else "answered",
-                })
-                return _json_response({"status": "ok", "message": "Question response accepted"})
+                res = await self.resolve_question_response(payload)
+                status_code = HTTPStatus.OK if res.get("status") in ("ok", "success") else HTTPStatus.BAD_REQUEST
+                return _json_response(res, status_code)
 
         if path == "/api/question/pending":
             if request.method == "GET":
@@ -4907,6 +5006,26 @@ class AgyWebServer:
                     })
             return
 
+        if mtype == "question_response":
+            await self.resolve_question_response(data)
+            return
+
+        if mtype == "get_pending_questions":
+            for qid, qentry in list(self._pending_questions.items()):
+                await websocket.send(
+                    json.dumps(
+                        {
+                            "type": "ask_question",
+                            "question_id": qid,
+                            "created_at": qentry.get("created_at", int(time.time())),
+                            "tool_action": qentry.get("tool_action", ""),
+                            "tool_summary": qentry.get("tool_summary", ""),
+                            "questions": qentry.get("questions", []),
+                        }
+                    )
+                )
+            return
+
         if mtype == "slash_command":
             cmd = str(data.get("command") or "").lower()
             arg = str(data.get("args") or "").strip()
@@ -5436,19 +5555,23 @@ async def main() -> None:
         except NotImplementedError:
             pass
 
-    async with serve(
-        app.ws_handler,
-        HOST,
-        PORT,
-        process_request=app.handle_http_request,
-        max_size=16 * 1024 * 1024,
-        ping_interval=20,
-        ping_timeout=20,
-    ):
-        logger.info("Antigravity Mobile UI listening on http://%s:%d", HOST, PORT)
-        await stop_event.wait()
-        logger.info("Shutting down Antigravity Mobile UI server...")
-        await app.orchestrator.abort_current_turn()
+    await app.start_ipc_server()
+    try:
+        async with serve(
+            app.ws_handler,
+            HOST,
+            PORT,
+            process_request=app.handle_http_request,
+            max_size=16 * 1024 * 1024,
+            ping_interval=20,
+            ping_timeout=20,
+        ):
+            logger.info("Antigravity Mobile UI listening on http://%s:%d", HOST, PORT)
+            await stop_event.wait()
+            logger.info("Shutting down Antigravity Mobile UI server...")
+            await app.orchestrator.abort_current_turn()
+    finally:
+        await app.stop_ipc_server()
 
 
 if __name__ == "__main__":

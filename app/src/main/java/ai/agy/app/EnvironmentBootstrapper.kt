@@ -29,7 +29,8 @@ object EnvironmentBootstrapper {
         "python" to "libpython3_bin.so",
         "env" to "libbusybox.so",
         "ssh" to "libssh_bin.so",
-        "ssh-keygen" to "libssh_keygen.so"
+        "ssh-keygen" to "libssh_keygen.so",
+        "ask_question" to "libask_question.so"
     )
 
     private val GIT_CORE_SYMLINKS = mapOf(
@@ -221,18 +222,18 @@ object EnvironmentBootstrapper {
             createOrUpdateSymlink(File(homeDir, ".gemini/GEMINI.md"), geminiMd.absolutePath)
         } catch (_: Exception) {}
 
-        // 6. Seed ask-question binary symlink & global skill
+        // 6. Seed ask-question builtin skill (isolated from user-editable skills)
         try {
-            val askQuestionScript = File(usrDir, "share/agy-ui/ask_question.py")
-            if (askQuestionScript.exists()) {
-                createOrUpdateSymlink(File(binDir, "ask_question"), askQuestionScript.absolutePath)
-            }
             val askQuestionSkillSrc = File(usrDir, "share/agy-ui/skills/ask-question/SKILL.md")
-            val targetSkillDir = File(homeDir, ".gemini/config/skills/ask-question")
-            val targetSkillMd = File(targetSkillDir, "SKILL.md")
-            if (askQuestionSkillSrc.exists() && (!targetSkillMd.exists() || askQuestionSkillSrc.lastModified() > targetSkillMd.lastModified())) {
-                targetSkillDir.mkdirs()
-                askQuestionSkillSrc.copyTo(targetSkillMd, overwrite = true)
+            val builtinSkillDir = File(homeDir, ".gemini/antigravity-cli/builtin/skills/ask-question")
+            val builtinSkillMd = File(builtinSkillDir, "SKILL.md")
+            if (askQuestionSkillSrc.exists() && (!builtinSkillMd.exists() || askQuestionSkillSrc.lastModified() > builtinSkillMd.lastModified())) {
+                builtinSkillDir.mkdirs()
+                askQuestionSkillSrc.copyTo(builtinSkillMd, overwrite = true)
+            }
+            val legacySkillDir = File(homeDir, ".gemini/config/skills/ask-question")
+            if (legacySkillDir.exists()) {
+                legacySkillDir.deleteRecursively()
             }
         } catch (_: Exception) {}
     }

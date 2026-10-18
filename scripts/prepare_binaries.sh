@@ -49,6 +49,15 @@ patchelf --remove-rpath "${JNI_DIR}/libagy_shim.so" 2>/dev/null || true
 patch_elf_bytes "${JNI_DIR}/libagy_shim.so"
 echo "lib/libagy_shim.so|libagy_shim.so" >> "$MANIFEST_FILE"
 
+# 1b. Compile ask_question ELF Launcher
+echo "[1b/7] Compiling ask_question ELF Launcher (libask_question.so)..."
+$CC_BIN -pie -fPIE -O2 -Wall \
+  "${PROJECT_ROOT}/app/src/main/cpp/ask_question_launcher.c" \
+  -o "${JNI_DIR}/libask_question.so"
+llvm-strip --strip-unneeded "${JNI_DIR}/libask_question.so" 2>/dev/null || strip --strip-unneeded "${JNI_DIR}/libask_question.so"
+patchelf --remove-rpath "${JNI_DIR}/libask_question.so" 2>/dev/null || true
+patch_elf_bytes "${JNI_DIR}/libask_question.so"
+
 # 2. Stage & Patch agy.va39 -> libagy.so
 echo "[2/7] Patching agy.va39 -> libagy.so..."
 AGY_VA39_SRC="${SOURCE_PREFIX}/bin/agy.va39"
@@ -160,8 +169,6 @@ cp -L "${AGY_UI_DIR}/sw.js" "${STAGING_DIR}/share/agy-ui/sw.js"
 cp -L "${AGY_UI_DIR}/server.py" "${STAGING_DIR}/share/agy-ui/server.py"
 cp -L "${AGY_UI_DIR}/ask_question.py" "${STAGING_DIR}/share/agy-ui/ask_question.py"
 chmod 0755 "${STAGING_DIR}/share/agy-ui/ask_question.py"
-mkdir -p "${STAGING_DIR}/bin"
-ln -sf "../share/agy-ui/ask_question.py" "${STAGING_DIR}/bin/ask_question"
 if [ -d "${AGY_UI_DIR}/skills" ]; then
   mkdir -p "${STAGING_DIR}/share/agy-ui/skills"
   cp -rL "${AGY_UI_DIR}/skills"/* "${STAGING_DIR}/share/agy-ui/skills/" 2>/dev/null || true
@@ -217,6 +224,7 @@ for elf in "${JNI_DIR}"/libbash.so "${JNI_DIR}"/libbusybox.so "${JNI_DIR}"/libgi
            "${JNI_DIR}"/libgit_remote_https.so "${JNI_DIR}"/librg.so \
            "${JNI_DIR}"/libcurl_bin.so "${JNI_DIR}"/libpython3_bin.so \
            "${JNI_DIR}"/libssh_bin.so "${JNI_DIR}"/libssh_keygen.so \
+           "${JNI_DIR}"/libask_question.so \
            "${JNI_DIR}"/libpyext_*.so; do
   [ -f "$elf" ] && queue+=("$elf")
 done
