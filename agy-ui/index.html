@@ -1985,23 +1985,6 @@
       height: 14px;
       flex-shrink: 0;
     }
-    .drawer-settings-box {
-      margin-top: 8px;
-      padding: 8px 12px;
-      background: var(--bg-surface);
-      border: 1px solid var(--border-subtle);
-      border-radius: 10px;
-      cursor: pointer;
-      transition: background 0.15s;
-    }
-    .drawer-settings-box:active {
-      background: var(--bg-elevated);
-    }
-    .drawer-settings-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
     .settings-info-banner {
       padding: 10px 14px;
       border-radius: 10px;
@@ -2406,13 +2389,7 @@
           <span>Dark</span>
         </button>
       </div>
-            <div class="drawer-settings-box" id="btnDrawerSettings" role="button" tabindex="0" title="Settings & Hub">
-        <div class="drawer-settings-row">
-          <span class="session-ws-icon"><svg class="fa-icon" viewBox="0 0 512 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M495.9 166.6c3.2 8.7 .5 18.4-6.4 24.6l-43.3 39.4c1.1 8.3 1.7 16.8 1.7 25.4s-.6 17.1-1.7 25.4l43.3 39.4c6.9 6.2 9.6 15.9 6.4 24.6c-4.4 11.9-9.7 23.3-15.8 34.3l-4.7 8.1c-6.6 11-14 21.4-22.1 31.2c-5.9 7.2-15.7 9.6-24.5 6.8l-55.7-17.7c-13.4 10.3-28.2 18.9-44 25.4l-12.5 57.1c-2 9.1-9 16.3-18.2 17.8c-13.8 2.3-28 3.5-42.5 3.5s-28.7-1.2-42.5-3.5c-9.2-1.5-16.2-8.7-18.2-17.8l-12.5-57.1c-15.8-6.5-30.6-15.1-44-25.4L83.1 425.9c-8.8 2.8-18.6 .3-24.5-6.8c-8.1-9.8-15.5-20.2-22.1-31.2l-4.7-8.1c-6.1-11-11.4-22.4-15.8-34.3c-3.2-8.7-.5-18.4 6.4-24.6l43.3-39.4C64.6 273.1 64 264.6 64 256s.6-17.1 1.7-25.4L22.4 191.2c-6.9-6.2-9.6-15.9-6.4-24.6c4.4-11.9 9.7-23.3 15.8-34.3l4.7-8.1c6.6-11 14-21.4 22.1-31.2c5.9-7.2 15.7-9.6 24.5-6.8l55.7 17.7c13.4-10.3 28.2-18.9 44-25.4l12.5-57.1c2-9.1 9-16.3 18.2-17.8C227.3 1.2 241.5 0 256 0s28.7 1.2 42.5 3.5c9.2 1.5 16.2 8.7 18.2 17.8l12.5 57.1c15.8 6.5 30.6 15.1 44 25.4l55.7-17.7c8.8-2.8 18.6-.3 24.5 6.8c8.1 9.8 15.5 20.2 22.1 31.2l4.7 8.1c6.1 11 11.4 22.4 15.8 34.3zM256 336a80 80 0 1 0 0-160 80 80 0 1 0 0 160z"/></svg></span>
-          <span class="drawer-ws-path" style="font-weight:600;font-size:13px;color:var(--text-primary);">Settings & Hub</span>
-        </div>
-      </div>
-<div class="drawer-workspace-box" id="drawerWorkspaceBox" title="Default workspace for new sessions. Tap to change.">
+      <div class="drawer-workspace-box" id="drawerWorkspaceBox" title="Default workspace for new sessions. Tap to change.">
         <div class="drawer-ws-header">
           <span class="drawer-ws-label">DEFAULT WORKSPACE</span>
           <button class="drawer-ws-btn" id="btnChangeWorkspace" title="Browse / Change Default Workspace">Change</button>
@@ -5224,7 +5201,6 @@
       // =====================================================================
       const settingsHub = document.getElementById('settingsHub');
       const btnOpenSettings = document.getElementById('btnOpenSettings');
-      const btnDrawerSettings = document.getElementById('btnDrawerSettings');
       const btnCloseSettingsHub = document.getElementById('btnCloseSettingsHub');
 
       let currentSettingsView = 'viewSettingsMenu';
@@ -5307,12 +5283,6 @@
 
       if (btnOpenSettings) {
         btnOpenSettings.addEventListener('click', openSettingsHub);
-      }
-      if (btnDrawerSettings) {
-        btnDrawerSettings.addEventListener('click', () => {
-          closeDrawer();
-          openSettingsHub();
-        });
       }
       if (btnCloseSettingsHub) {
         btnCloseSettingsHub.addEventListener('click', closeSettingsHub);
