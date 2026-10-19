@@ -17,115 +17,57 @@
 
 ## Overview
 
-**Antigravity Studio** brings Google DeepMind’s autonomous coding engine (**Antigravity**) directly to your Android device in a native, touch-first mobile IDE. 
+**Antigravity Studio** brings Google DeepMind's autonomous coding engine (**Antigravity**) directly to your Android device in a native, touch-first mobile IDE.
 
-Traditionally, running developer toolchains or advanced agentic runtimes on Android required complex command-line setups: installing Termux, configuring proot-distros, compiling glibc loaders, and running local background servers manually. On Android 10+ and modern Android 15/16 devices, strict SELinux `W^X` (Write XOR Execute) policies and 16 KB memory page alignments made running compilers, JIT runtimes (Node.js V8, OpenJDK HotSpot), or dynamic native binaries nearly impossible without root.
+Download a single APK, sign in with Google, and start building — no Termux, no root, no laptop required. The app ships everything you need: a full AI coding agent, built-in developer tools (bash, git, python, ssh), and the ability to install virtually any programming language or compiler on the fly.
 
-**Antigravity Studio completely eliminates all prerequisites.** Bundled as a single, self-contained Android APK, it provides:
-1. **The Core Antigravity Engine** (`libagy.so` – 201 MB Go/glibc binary) running at full native speed.
-2. **Unconstrained Execution via W^X-Aware PRoot Subsystem** (`libproot.so` + `libproot_loader.so`) allowing dynamic JIT runtimes (Node.js, Java) and native compilers (GCC, Clang, Rust) to run directly on Android.
-3. **Embedded Alpine Linux Minirootfs & Dynamic Package Management** with instant `apk add` / `pkg add` access to thousands of packages.
-4. **Multicall Toolchain Bridge** (`libagy_sh.so`) transparently bridging `node`, `npm`, `cargo`, `gcc`, `java`, and more into `$PATH`.
-5. **Interactive Touch Decision Modals** (`ask_question`) replacing awkward CLI prompts with bottom-sheet touch cards, radio buttons, and checkboxes.
-6. **Settings Hub Package Manager UI** with instant package search, developer preset chips, and AI-assisted package installation.
-7. **Complete Host Developer Toolchain** (`bash 5.3`, `busybox 1.38`, `python 3.14`, `git 2.56`, `ripgrep 15.2`, `curl 8.22`, `ssh 9.9`).
-8. **Modern Mobile SPA Interface** rendered in an optimized native `WebView` with Google OAuth, file picker, and keyboard management.
-9. **Background Task Durability** powered by an Android Foreground Service with Partial WakeLock and live hardware telemetry.
+What makes it unique: Antigravity Studio is the first app to run real native compilers and JIT runtimes (Node.js, Java, Rust, GCC, Clang, Go) **directly on Android at full native speed** — something normally blocked by Android's security restrictions. It does this transparently, so you just write code and the agent handles the rest.
 
 ---
 
 ## Key Features
 
-### 🚀 Unconstrained Execution: W^X-Aware PRoot & Anonymous ELF Loader (v1.3.0)
-Modern Android enforces strict Write XOR Execute (`W^X`) memory restrictions:
-* Memory pages with executable permissions (`PROT_EXEC`) cannot be writable (`PROT_WRITE`).
-* `mmap(PROT_EXEC)` is blocked on all writable file descriptors and non-system filesystems.
-* Dynamic binaries cannot be executed from app internal storage or shared storage (`noexec` mount).
+### 🚀 Code in Any Language — Directly on Android
+Install and run virtually any programming language or compiler with a single command. Node.js, Java, Python, C/C++, Rust, Go, Clang, PHP — all execute at **full native ARM64 speed**, not through emulation. The agent can install toolchains on demand, or you can install them yourself from the Settings Hub.
 
-Antigravity Studio solves this at the native kernel level:
-* **Anonymous ELF Loader (`libproot_loader.so`)**: A freestanding native loader that allocates purely anonymous memory pages with `PROT_READ | PROT_WRITE`, directly copies ELF segments via `pread64`, resolves auxiliary vectors, and converts permissions to `PROT_READ | PROT_EXEC` via `mprotect`. This completely bypasses Android SELinux execution barriers.
-* **W^X-Aware PRoot Tracer Engine (`libproot.so`)**: An optimized user-space virtualization engine running via `ptrace` and seccomp BPF filters. Syscalls (`execve`, `mprotect`, `open`, `stat`) are intercepted in user-space to enforce W^X compliance, translate paths, and safely chain execution without kernel modifications.
-* **Unrestricted JIT & Compiler Speed**: Native compilers (GCC, Clang, Rustc) and JIT virtual machines (Node.js V8, OpenJDK HotSpot JVM) execute at direct native ARM64 speed.
+### 📦 Built-In Package Manager
+Access thousands of packages from Alpine Linux's repository, installable in seconds:
+* **From the Settings Hub**: Tap **Settings ⚙ → Packages** to browse installed packages, check disk usage, search for new ones, or use quick-install presets (Node.js, Python, Rust, Java, C/C++, Go, etc.).
+* **From the Chat**: Just ask the agent — *"Install Node.js"* or *"I need OpenCV"* — and it finds the right packages, resolves dependencies, and installs them.
+* **From Commands**: The agent runs `apk add` directly when it needs a tool, no manual intervention required.
 
-### 📦 Dynamic Alpine Linux Subsystem & Multicall Toolchain Bridge (v1.3.0)
-* **Alpine Linux Minirootfs (`rootfs.tar.zst`)**: A lightweight 3.5 MB Alpine `aarch64` rootfs (v3.20.9) bundled with a zero-trap patched `ld-musl`, `jemalloc` allocator, and transparent OpenJDK memory assertions workaround.
-* **On-Demand Package Management (`apk` / `pkg`)**: Install any compiler, runtime, or library on the fly:
-  * `apk add --no-cache nodejs npm`
-  * `apk add --no-cache gcc musl-dev build-base`
-  * `apk add --no-cache openjdk21-jre-headless`
-  * `apk add --no-cache rust cargo`
-  * `apk add --no-cache php python3 py3-pip clang go ffmpeg`
-* **Multicall Toolchain Bridge (`libagy_sh.so`)**: A unified native dispatcher mapped in `usr/bin/` to `apk`, `pkg`, `node`, `nodejs`, `npm`, `npx`, `cargo`, `rustc`, `gcc`, `g++`, `clang`, `clang++`, `make`, `php`, `go`, `java`, and `javac`. Executing `node app.js` or `gcc main.c` transparently routes into the container at native speed.
-* **1:1 Path Preservation**: Host storage directories (`/storage/emulated/0/...`, `/data/data/ai.agy.app/files/home`) are seamlessly virtualized and bound into the container, allowing seamless editing and execution across storage boundaries.
-* **Non-Interactive TTY Guard**: Prevents background tasks from hanging on interactive prompts when run by the agent.
+### 💬 Interactive Touch Prompts
+When the AI agent needs your input — choosing an architecture, picking between options, or confirming a decision — it presents **native touch dialogs** instead of raw terminal prompts:
+* Single-select radio cards and multi-select checkboxes
+* Free-form text write-in for custom answers
+* Clean bottom-sheet modals designed for mobile screens
 
-### 📱 On-Device Package Manager UI & AI Disambiguation (v1.3.0 Phase 6)
-* **Settings Hub Package Manager (`#viewPackages`)**:
-  * Live package counter badge in the Settings menu.
-  * Dedicated full-screen sub-view with smooth sliding transitions and 56px touch header.
-  * Storage consumption breakdown banner showing user-installed package footprint vs. base container size.
-  * Individual package cards with version info, size breakdown, upgrade, and delete action triggers.
-  * One-tap **Update All** button running synchronized repository index updates and package upgrades.
-* **Ultra-Fast Alpine DB Parser**:
-  * Directly parses `/etc/apk/world` and `/lib/apk/db/installed` in Python in $<3$ ms with zero PRoot subprocess overhead.
-  * Recursively aggregates meta-package dependencies (e.g. `build-base`) for accurate size reporting.
-* **Security & Concurrency Hardening**:
-  * Immutable `PROTECTED_PACKAGES` whitelist (16 core packages including `musl`, `busybox`, `apk-tools`, `libcrypto3`) prevents accidental system corruption.
-  * Strict regex package name validation (`^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,127}$`) and direct `argv` execution prevent shell injection.
-  * Global async lock (`APK_MUTATION_LOCK`) and `--wait 30` prevent database collisions during concurrent agent CLI turns.
-* **Interactive Install Package Modal (`#modalInstallPackage`)**:
-  * Touch-first bottom-sheet modal with quick developer preset chips (`Node.js`, `Python 3`, `OpenJDK 21`, `Rust`, `C/C++`, `Go`, `Clang`, `PHP`, `FFmpeg`).
-  * Manual package query search box.
-* **Automated AI Turn Handoff & Disambiguation**:
-  * Natural language requests (e.g., *"Install Node.js"* or *"I need OpenCV"*) seamlessly dispatch to the agent backend.
-  * The agent searches the Alpine package index, analyzes candidate dependencies, and presents touch choices directly to the user via the `ask_question` bottom-sheet dialog.
+### 🧰 Pre-Bundled Developer Toolchain
+Everything an AI coding agent needs ships inside the APK — no separate installs:
+* **bash 5.3** & **busybox 1.38** — Shell and core UNIX utilities
+* **python 3.14** — Full runtime with 80+ compiled extensions
+* **git 2.56** — Clone, commit, and push over HTTPS or SSH
+* **ripgrep 15.2** — Fast codebase search
+* **curl 8.22** — Network requests and API calls
+* **ssh 9.9** — Secure remote connections and Git operations
 
-### 💬 Interactive Touch Decision Modals (`ask_question`) (v1.2.0)
-* **Touch-First Clarification Bridge**:
-  * Replaces awkward terminal prompts and broken auto-skipping headless questions with native Android touch dialogs.
-  * Executable bridge `ask_question` (`libask_question.so` $\to$ `usr/share/agy-ui/ask_question.py`) accepts JSON schemas and delivers them over WebSocket to the active UI.
-* **Bottom-Sheet Modal Experience**:
-  * Single-select radio cards with clear `(Recommended)` visual markers.
-  * Multi-select checkboxes for multi-choice architectural decisions.
-  * Free-form text write-in field for custom answers.
-  * Submit and Skip touch actions.
-  * Android Back-Button interception: gracefully cancels or navigates without losing session state.
+### ⚙️ Settings Hub
+A touch-first control panel for managing your development environment:
+* **API Keys** — Store service tokens (GitHub, OpenAI, Tavily, etc.) that auto-inject into the agent
+* **SSH Keys** — Generate ED25519 or RSA-4096 keys and copy the public key with one tap
+* **MCP Servers** — Connect Model Context Protocol servers (local stdio or remote HTTP)
+* **Skills & Custom Instructions** — Browse, create, and edit agent behaviors and workspace rules
+* **Packages** — Visual package manager for the built-in Alpine subsystem
 
-### 🧰 Full Native Host Toolchain Parity
-The agent has full access to the standard development tools required to inspect code, manage git repositories, run Python scripts, and process text files:
-* **`bash 5.3` & `busybox 1.38`**: Multi-call shell and coreutils.
-* **`python 3.14`**: Full runtime with 80+ pre-compiled C-extensions (including `ssl`, `sqlite3`, `socket`, `ctypes`, and `zstandard`).
-* **`git 2.56`**: Complete with `git-remote-https` and OpenSSL CA bundle for seamless cloning and pushing.
-* **`ripgrep 15.2` & `curl 8.22`**: Lightning-fast codebase search and network requests.
-* **`ssh 9.9` & `ssh-keygen 9.9`**: OpenSSH client binaries for secure remote deployments and Git operations.
+### 🔋 Runs in the Background
+Lock your screen or switch apps — the agent keeps working:
+* Foreground service with persistent notification keeps tasks alive
+* Battery-aware: the agent can check battery level, charging state, and CPU temperature
+* Automatic network handling when switching between Wi-Fi and cellular
 
-### ⚡ User-Space Virtualization Shim (`libagy_shim.so`)
-Android’s Bionic C library lacks traditional Linux system directories like `/bin/sh` or `/usr/bin/env`. Antigravity Studio includes a custom Bionic preload shim that intercepts:
-* `execve` and `execv`
-* `posix_spawn` and `posix_spawnp`
-* Dynamic shebang (`#!`) parsing
-
-Any execution of `#!/bin/sh`, `#!/bin/bash`, or `#!/usr/bin/env python3` is transparently rewritten on the fly to point to the internal toolchain.
-
-### 🛡️ 16 KB Page Alignment & Modern Android Security
-Antigravity Studio strictly complies with Android’s mandatory **16 KB memory page alignment** requirement for modern and future Android releases (Android 15, 16, 17+). All 115+ shared libraries and native ELF binaries are packaged under the SELinux `apk_data_file` security domain, ensuring zero W^X violations or text relocations across modern ARM64 devices.
-
-### 🔋 Background Durability & Hardware Telemetry
-* **Partial WakeLock**: Keeps the CPU active during multi-turn agent tasks even if your screen turns off.
-* **Foreground Service**: Posts a persistent, sticky notification (`FOREGROUND_SERVICE_TYPE_SPECIAL_USE`) compliant with Android 14+ background policies.
-* **Hardware Telemetry Bridge**: Continuously reports battery level, charging state, and CPU temperature to the agent via `usr/tmp/android_telemetry.json`.
-* **Atomic Dynamic DNS**: Watches network changes (`Wi-Fi` $\leftrightarrow$ `Cellular`) and automatically updates `usr/etc/resolv.conf` so agent network calls never drop.
-
-### ⚙️ Native Settings Hub & Tooling Integrations
-* **Package Manager**: Browse installed packages, inspect disk footprints, trigger updates, and install new toolchains.
-* **API Keys Management**: Securely store and inject third-party service tokens (`GITHUB_TOKEN`, `OPENAI_API_KEY`, `TAVILY_API_KEY`, etc.) directly into the agent environment.
-* **Touch-First SSH Key Manager**: Generate `ED25519` and `RSA-4096` keypairs and copy public keys with one tap for Git repositories.
-* **Model Context Protocol (MCP) Hub**: Connect local Python/Node stdio or remote HTTP MCP servers with live health probing and latency diagnostics.
-* **Custom Instructions & Skills**: Browse, edit, and create custom agent skills and persistent workspace instructions.
-
-### 🔄 Dual-Tier In-App Updaters
-* **Tier-1 (Instant In-App OTA)**: Silently downloads and updates frontend UI assets and server scripts without requiring an app reinstall or restart.
-* **Tier-2 (APK Self-Updater)**: On-demand GitHub release queries with side-by-side version comparison (`Current` ➔ `Latest`), in-app progress tracking, and Android `PackageInstaller` session handoff.
+### 🔄 Seamless Updates
+* **Instant UI updates**: Frontend patches download and apply without reinstalling the app
+* **In-app APK updater**: Check for new versions, download, and install — all from within the app
 
 ---
 
@@ -182,6 +124,16 @@ flowchart TD
 
     Bootstrapper -->|Unpacks usr-data.tar.zst & rootfs.tar.zst| Sandbox
 ```
+
+### Under the Hood
+
+Running real compilers and JIT runtimes on Android is hard — the OS blocks dynamic code execution by design. Antigravity Studio solves this with three native components:
+
+* **Anonymous ELF Loader** (`libproot_loader.so`): Loads binaries into anonymous memory pages that bypass Android's SELinux execution barriers entirely.
+* **W^X-Aware PRoot Engine** (`libproot.so`): A user-space virtualization layer that intercepts system calls via `ptrace`, translating paths and enforcing safe execution without kernel modifications.
+* **Bionic Shim** (`libagy_shim.so`): An `LD_PRELOAD` hook that rewrites shebangs (`#!/bin/sh`, `#!/usr/bin/env python3`) to point to the bundled toolchain, since Android lacks standard Linux paths.
+
+The app also embeds a lightweight Alpine Linux rootfs (~3.5 MB) that provides the `apk` package manager and its full repository — this is how `apk add nodejs` or `apk add gcc` works on a phone. All 115+ native binaries are 16 KB page-aligned and signed for Android 10–17+ compatibility.
 
 ### Cold Boot Workflow
 1. **Runtime Extraction**: On first launch (or build update), `EnvironmentBootstrapper` extracts:
