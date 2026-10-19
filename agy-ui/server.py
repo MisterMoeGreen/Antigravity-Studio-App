@@ -230,8 +230,8 @@ def get_agy_version() -> str:
 
     return _cached_agy_version or "1.4.2"
 
-APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.2.0")
-APP_BUILD = os.environ.get("AGY_APP_VERSION_CODE", "10")
+APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.3.1")
+APP_BUILD = os.environ.get("AGY_APP_VERSION_CODE", "14")
 AGY_VERSION = get_agy_version()
 
 logging.basicConfig(
@@ -906,7 +906,7 @@ async def probe_single_mcp_server(name: str) -> dict[str, Any]:
         def _do_http() -> dict[str, Any]:
             import ssl
             t0 = time.time()
-            headers = {"User-Agent": "AntigravityStudio/1.1.2", **raw_headers}
+            headers = {"User-Agent": f"AntigravityStudio/{APP_VERSION}", **raw_headers}
             req = urllib.request.Request(url, headers=headers)
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
@@ -917,8 +917,20 @@ async def probe_single_mcp_server(name: str) -> dict[str, Any]:
                     return {"status": "connected", "name": name, "message": f"Reachable (HTTP {resp.status}) · {elapsed}ms"}
             except urllib.error.HTTPError as e:
                 elapsed = int((time.time() - t0) * 1000)
-                st = "connected" if e.code in (401, 403, 405) else "ready"
-                return {"status": st, "name": name, "message": f"Responding (HTTP {e.code}) · {elapsed}ms"}
+                # 401/403 (Auth required) and 405 (Method Not Allowed, e.g. server expects POST for JSON-RPC)
+                # indicate an active MCP server running and processing requests.
+                if e.code in (401, 403, 405):
+                    return {"status": "connected", "name": name, "message": f"Active (HTTP {e.code}) · {elapsed}ms"}
+                # Any 5xx code (500, 502, 503, 504, 520..530, etc.) is a server/gateway error and MUST be considered offline
+                elif e.code >= 500:
+                    reason = getattr(e, "reason", "Server Error") or "Server Error"
+                    return {"status": "error", "name": name, "message": f"Server Error (HTTP {e.code}: {reason}) · {elapsed}ms"}
+                # 404 is an invalid/missing endpoint URL
+                elif e.code == 404:
+                    return {"status": "error", "name": name, "message": f"Endpoint Not Found (HTTP 404) · {elapsed}ms"}
+                else:
+                    reason = getattr(e, "reason", "HTTP Error") or "HTTP Error"
+                    return {"status": "error", "name": name, "message": f"HTTP {e.code} ({reason}) · {elapsed}ms"}
             except Exception as e:
                 msg = str(e)
                 if hasattr(e, "reason"):
@@ -1053,11 +1065,11 @@ async def delete_mcp_server(name: str) -> dict[str, Any]:
 
 
 async def check_github_updates() -> dict[str, Any]:
-    installed_version = os.environ.get("AGY_APP_VERSION", "1.2.0")
-    installed_code = int(os.environ.get("AGY_APP_VERSION_CODE", "10"))
+    installed_version = os.environ.get("AGY_APP_VERSION", "1.3.1")
+    installed_code = int(os.environ.get("AGY_APP_VERSION_CODE", "14"))
     url = "https://api.github.com/repos/MisterMoeGreen/Antigravity-Studio-App/releases/latest"
 
-    cmd = ["curl", "-sSL", "-H", "User-Agent: AntigravityStudio/1.2.0", url]
+    cmd = ["curl", "-sSL", "-H", f"User-Agent: AntigravityStudio/{APP_VERSION}", url]
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
@@ -2483,6 +2495,7 @@ class AgyProcessOrchestrator:
         self.on_auth_success_cb: Optional[Any] = None
         self._pending_auth_prompt: Optional[str] = None
         self._pending_auth_attachments: list[dict[str, Any]] = []
+        self._auth_required_detected: bool = False
 
     def build_cli_args(
         self,
@@ -2540,6 +2553,7 @@ class AgyProcessOrchestrator:
             turn_id = f"turn-{uuid.uuid4().hex[:8]}"
             self._current_turn_id = turn_id
             self._interrupted = False
+            self._auth_required_detected = False
             self.is_running = True
 
             await self.broadcast(
@@ -2617,6 +2631,31 @@ class AgyProcessOrchestrator:
                     143,  # 128 + SIGTERM
                 )
 
+                # Check if auth required was detected during streaming or in stderr
+                if not self._auth_required_detected and not was_interrupted:
+                    combined_err = (stderr_text or "").lower()
+                    if (
+                        "authentication required" in combined_err
+                        or "accounts.google.com/o/oauth2/auth" in combined_err
+                        or "you are not logged into antigravity" in combined_err
+                        or "error getting token source" in combined_err
+                        or "authentication failed or timed out" in combined_err
+                        or "please log in" in combined_err
+                        or "please visit the url to log in" in combined_err
+                    ):
+                        self._auth_required_detected = True
+
+                if self._auth_required_detected and not was_interrupted:
+                    logger.info("Session expired or authentication required. Triggering in-app login...")
+                    token_file = GEMINI_DIR / "antigravity-oauth-token"
+                    if token_file.exists():
+                        try:
+                            token_file.unlink()
+                        except Exception:
+                            pass
+                    await self.trigger_in_app_login(turn_id, original_prompt=prompt, original_attachments=attachments)
+                    return
+
                 if was_interrupted:
                     status_str = "INTERRUPTED"
                 elif return_code != 0 and not emitted_any_content and stderr_text.strip():
@@ -2624,10 +2663,7 @@ class AgyProcessOrchestrator:
                         line for line in stderr_text.strip().splitlines()
                         if not line.lower().startswith("warning:")
                     ).strip()
-                    if "authentication required" in cleaned_err.lower() or "log in" in cleaned_err.lower():
-                        await self.trigger_in_app_login(turn_id, original_prompt=prompt, original_attachments=attachments)
-                        status_str = "AUTH_REQUIRED"
-                    elif cleaned_err:
+                    if cleaned_err:
                         await self.broadcast(
                             {
                                 "type": "agent_token",
@@ -2710,9 +2746,10 @@ class AgyProcessOrchestrator:
                 self.active_proc = None
                 self.is_running = False
                 self._current_turn_id = None
-                await self.broadcast(
-                    {"type": "status", "state": "idle", "detail": "Ready"}
-                )
+                if not self.is_authenticating:
+                    await self.broadcast(
+                        {"type": "status", "state": "idle", "detail": "Ready"}
+                    )
 
     def _cleanup_auth(self) -> None:
         self.is_authenticating = False
@@ -3085,6 +3122,14 @@ class AgyProcessOrchestrator:
                         "delta": "\nCould not automatically generate Google OAuth session. Please retry.\n",
                     }
                 )
+                await self.broadcast({"type": "auth_failed"})
+                await self.broadcast(
+                    {
+                        "type": "turn_complete",
+                        "turn_id": turn_id,
+                        "status": "ERROR",
+                    }
+                )
                 self._cleanup_auth()
         except Exception as exc:
             logger.exception("Error during in-app login initialization: %s", exc)
@@ -3093,6 +3138,14 @@ class AgyProcessOrchestrator:
                     "type": "agent_token",
                     "turn_id": turn_id,
                     "delta": f"\n**Sign-in initialization error:** `{exc}`\n",
+                }
+            )
+            await self.broadcast({"type": "auth_failed"})
+            await self.broadcast(
+                {
+                    "type": "turn_complete",
+                    "turn_id": turn_id,
+                    "status": "ERROR",
                 }
             )
             self._cleanup_auth()
@@ -3114,6 +3167,23 @@ class AgyProcessOrchestrator:
 
             # Parse NDJSON line or handle raw text fallback gracefully
             if not line.startswith("{"):
+                lower = line.lower()
+                if (
+                    "authentication required" in lower
+                    or "accounts.google.com/o/oauth2/auth" in lower
+                    or "you are not logged into antigravity" in lower
+                    or "error getting token source" in lower
+                    or "please visit the url to log in" in lower
+                ):
+                    logger.warning("Auth requirement detected in CLI stdout: %s", line)
+                    self._auth_required_detected = True
+                    if self.active_proc and self.active_proc.returncode is None:
+                        try:
+                            self.active_proc.terminate()
+                        except Exception:
+                            pass
+                    return False
+
                 emitted = True
                 await self.broadcast(
                     {"type": "agent_token", "turn_id": turn_id, "delta": line + "\n"}
@@ -3143,6 +3213,26 @@ class AgyProcessOrchestrator:
                 break
             decoded = raw_line.decode("utf-8", errors="replace")
             chunks.append(decoded)
+
+            # Real-time detection of auth expiration / sign-in requirement
+            lower = decoded.lower()
+            if (
+                "authentication required" in lower
+                or "accounts.google.com/o/oauth2/auth" in lower
+                or "you are not logged into antigravity" in lower
+                or "error getting token source" in lower
+                or "please visit the url to log in" in lower
+                or "please log in" in lower
+            ):
+                logger.warning("Auth requirement detected in CLI stderr stream: %s", decoded.strip())
+                self._auth_required_detected = True
+                # Terminate the blocked CLI process immediately to prevent 60s timeout stall
+                if self.active_proc and self.active_proc.returncode is None:
+                    try:
+                        self.active_proc.terminate()
+                    except Exception:
+                        pass
+                break
         return "".join(chunks)
 
     async def _demux_json_event(
@@ -3242,6 +3332,21 @@ class AgyProcessOrchestrator:
             if cid:
                 self.config.conversation_id = cid
 
+            err_msg = str(res.get("error") or "")
+            if res.get("status") == "ERROR" and (
+                "auth" in err_msg.lower()
+                or "log in" in err_msg.lower()
+                or "token" in err_msg.lower()
+            ):
+                logger.warning("Auth failure detected in result event: %s", err_msg)
+                self._auth_required_detected = True
+                if self.active_proc and self.active_proc.returncode is None:
+                    try:
+                        self.active_proc.terminate()
+                    except Exception:
+                        pass
+                return False
+
             res_usage = res.get("usage")
             if isinstance(res_usage, dict):
                 for k in ("input_tokens", "output_tokens", "thinking_tokens"):
@@ -3256,6 +3361,19 @@ class AgyProcessOrchestrator:
                     {"type": "agent_token", "turn_id": turn_id, "delta": final_resp}
                 )
             return emitted
+
+        # 4b. Handle explicit "error" event
+        if etype == "error":
+            err_str = str(event.get("error") or event.get("message") or "")
+            if "auth" in err_str.lower() or "log in" in err_str.lower() or "token" in err_str.lower():
+                logger.warning("Auth failure detected in error event: %s", err_str)
+                self._auth_required_detected = True
+                if self.active_proc and self.active_proc.returncode is None:
+                    try:
+                        self.active_proc.terminate()
+                    except Exception:
+                        pass
+                return False
 
         # 5. Handle Antigravity Native "init" event
         if etype == "init":

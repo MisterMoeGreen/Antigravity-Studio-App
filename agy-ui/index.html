@@ -4220,7 +4220,7 @@
 
           case 'mcp_probe_result':
             if (msg.name && msg.name !== 'all') {
-              const ok = msg.ok || msg.status === 'connected' || msg.status === 'ready';
+              const ok = msg.ok || msg.status === 'connected';
               if (ok) {
                 showToast(`✓ ${msg.name}: Online`);
               } else {
@@ -6549,15 +6549,15 @@
 
         const healthMsg = card.querySelector('.card-health-msg');
 
-        if (st === 'connected' || st === 'ready') {
+        if (st === 'connected') {
           if (dot) dot.style.background = 'var(--accent-emerald)';
-          healthBadge.textContent = (st === 'connected' ? 'ONLINE' : 'READY');
+          healthBadge.textContent = 'ONLINE';
           healthBadge.style.color = 'var(--accent-emerald)';
           healthBadge.style.background = 'rgba(52, 211, 153, 0.15)';
           if (healthMsg) {
             healthMsg.style.display = 'block';
             healthMsg.style.color = 'var(--accent-emerald)';
-            healthMsg.innerHTML = `${faIcon('check', '', 'width:11px;height:11px;')} ${escapeHtml(message || (st === 'connected' ? 'Reachable and verified' : 'Ready'))}`;
+            healthMsg.innerHTML = `${faIcon('check', '', 'width:11px;height:11px;')} ${escapeHtml(message || 'Reachable and verified')}`;
           }
         } else if (st === 'disabled' || st === 'stopped') {
           if (dot) dot.style.background = 'var(--text-muted)';
