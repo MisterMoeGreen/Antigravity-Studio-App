@@ -45,7 +45,10 @@ jobs:
       - name: Install Host Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y patchelf zstd python3 curl jq binutils-aarch64-linux-gnu
+          sudo apt-get install -y zstd python3 curl jq binutils-aarch64-linux-gnu
+          # CRITICAL: Install patchelf 0.19.2 (fixes DT_STRTAB page-alignment corruption on large ELFs present in 0.18.0)
+          curl -sSL "https://github.com/NixOS/patchelf/releases/download/0.19.2/patchelf-0.19.2-x86_64.tar.gz" | sudo tar -xz -C /usr/local --strip-components=1 bin/patchelf
+          patchelf --version
 
       - name: Check Upstream Google Antigravity Version
         id: check_upstream
@@ -131,9 +134,17 @@ jobs:
             fi
           fi
 
-          # If upstream agy version changed, download and patch new upstream agy.va39 into libagy.so
+          # If upstream agy version changed, force_build was requested, or baseline is missing/corrupted, download and patch new upstream agy.va39 into libagy.so
           NEW_SHA256=""
-          if [ "$NEW_AGY_VER" != "$OLD_AGY_VER" ] || [ ! -f "app/src/main/jniLibs/arm64-v8a/libagy.so" ]; then
+          IS_CORRUPT=false
+          if [ -f "app/src/main/jniLibs/arm64-v8a/libagy.so" ]; then
+            if aarch64-linux-gnu-readelf -d "app/src/main/jniLibs/arm64-v8a/libagy.so" 2>&1 | grep -qi "unable to parse DT_STRTAB"; then
+              echo "Detected corrupted DT_STRTAB in baseline libagy.so!"
+              IS_CORRUPT=true
+            fi
+          fi
+
+          if [ "$NEW_AGY_VER" != "$OLD_AGY_VER" ] || [ "${{ inputs.force_build }}" = "true" ] || [ ! -f "app/src/main/jniLibs/arm64-v8a/libagy.so" ] || [ "$IS_CORRUPT" = "true" ]; then
             echo "Downloading upstream agy v${NEW_AGY_VER}..."
             TAR_URL="https://github.com/wallentx/antigravity-cli-termux/releases/download/v${NEW_AGY_VER}/antigravity-termux-standalone.tar.gz"
             curl -sSL -f -o agy.tar.gz "$TAR_URL"
@@ -147,6 +158,15 @@ jobs:
               app/src/main/jniLibs/arm64-v8a/libagy.so
             python3 -c "path='app/src/main/jniLibs/arm64-v8a/libagy.so'; d=open(path,'rb').read(); open(path,'wb').write(d.replace(b'/data/data/com.termux',b'/data/data/ai.agy.app'))"
             rm -f agy.tar.gz
+
+            # Verify that DT_STRTAB was mapped within valid PT_LOAD segments
+            readelf_check=$(aarch64-linux-gnu-readelf -d app/src/main/jniLibs/arm64-v8a/libagy.so 2>&1)
+            if echo "$readelf_check" | grep -qi "unable to parse DT_STRTAB"; then
+              echo "FATAL: libagy.so DT_STRTAB corrupted by patchelf!" >&2
+              echo "$readelf_check" >&2
+              exit 1
+            fi
+            echo "Verified libagy.so ELF integrity successfully."
           fi
 
           # Synchronize latest agy-ui web assets into usr-data.tar.zst if present
@@ -197,8 +217,8 @@ jobs:
               -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
           fi
-          # Ensure arm64 binaries use 16KB page alignment on x86_64 runner
-          find app/src/main/jniLibs -name "*.so" -exec patchelf --page-size 16384 {} + 2>/dev/null || true
+          # Ensure arm64 binaries use 16KB page alignment on x86_64 runner (excluding libagy.so which is already aligned)
+          find app/src/main/jniLibs -name "*.so" ! -name "libagy.so" -exec patchelf --page-size 16384 {} + 2>/dev/null || true
           ./gradlew assembleRelease --stacktrace
 
       - name: Verify & Stage Generated APKs

@@ -215,7 +215,14 @@ def get_agy_version() -> str:
     except Exception as exc:
         logger.warning("Error running agy --version: %s", exc)
 
-    # 2. Check cli.log if agy has written its startup header
+    # 2. Check environment variable injected by Android container
+    env_ver = os.environ.get("AGY_RUNTIME_VERSION")
+    if env_ver:
+        _cached_agy_version = env_ver.strip().lstrip("v")
+        _cached_agy_version_at = now
+        return _cached_agy_version
+
+    # 3. Check cli.log if agy has written its startup header
     try:
         cli_log = GEMINI_DIR / "cli.log"
         if cli_log.exists():
@@ -228,10 +235,10 @@ def get_agy_version() -> str:
     except Exception:
         pass
 
-    return _cached_agy_version or "1.4.2"
+    return _cached_agy_version or os.environ.get("AGY_RUNTIME_VERSION", "1.4.3")
 
-APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.3.1")
-APP_BUILD = os.environ.get("AGY_APP_VERSION_CODE", "14")
+APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.3.3")
+APP_BUILD = os.environ.get("AGY_APP_VERSION_CODE", "16")
 AGY_VERSION = get_agy_version()
 
 logging.basicConfig(
@@ -3033,6 +3040,8 @@ class AgyProcessOrchestrator:
             output = ""
             start_wait = time.time()
             while time.time() - start_wait < 6.0:
+                if proc.returncode is not None:
+                    break
                 await asyncio.sleep(0.15)
                 r, _, _ = select.select([master], [], [], 0.1)
                 if r:
@@ -3044,13 +3053,23 @@ class AgyProcessOrchestrator:
                     except Exception:
                         break
 
+            if proc.returncode is not None:
+                raise RuntimeError(
+                    f"Antigravity CLI process terminated prematurely (exit code {proc.returncode}). Output: {output.strip() or 'None'}"
+                )
+
             await asyncio.sleep(0.25)
             # Send Enter (\r\n) to select "1. Google OAuth"
-            os.write(master, b"\r\n")
+            try:
+                os.write(master, b"\r\n")
+            except Exception as write_err:
+                raise RuntimeError(f"Failed communicating with CLI login pseudo-terminal: {write_err}")
 
             auth_url = None
             start_time = time.time()
             while time.time() - start_time < 10.0:
+                if proc.returncode is not None:
+                    break
                 await asyncio.sleep(0.2)
                 r, _, _ = select.select([master], [], [], 0.1)
                 if r:
@@ -3112,7 +3131,11 @@ class AgyProcessOrchestrator:
                 self.auth_waiter_task = asyncio.create_task(_monitor_proc())
             else:
                 logger.error("Failed to capture OAuth URL from agy.")
-                proc.terminate()
+                try:
+                    if proc.returncode is None:
+                        proc.terminate()
+                except Exception:
+                    pass
                 try: os.close(master)
                 except Exception: pass
                 await self.broadcast(
@@ -3132,12 +3155,13 @@ class AgyProcessOrchestrator:
                 )
                 self._cleanup_auth()
         except Exception as exc:
-            logger.exception("Error during in-app login initialization: %s", exc)
+            err_msg = str(exc).strip() or repr(exc)
+            logger.exception("Error during in-app login initialization: %s", err_msg)
             await self.broadcast(
                 {
                     "type": "agent_token",
                     "turn_id": turn_id,
-                    "delta": f"\n**Sign-in initialization error:** `{exc}`\n",
+                    "delta": f"\n**Sign-in initialization error:** `{err_msg}`\n",
                 }
             )
             await self.broadcast({"type": "auth_failed"})
