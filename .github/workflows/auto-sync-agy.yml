@@ -186,6 +186,10 @@ jobs:
           AGY_KEY_ALIAS: ${{ secrets.AGY_KEY_ALIAS }}
           AGY_KEY_PASSWORD: ${{ secrets.AGY_KEY_PASSWORD }}
         run: |
+          # Remove local Termux aapt2 override on Linux x86_64 CI runner
+          if [ ! -f "/data/data/com.termux/files/usr/bin/aapt2" ]; then
+            sed -i '/aapt2FromMavenOverride/d' gradle.properties
+          fi
           # Fallback: create ~/.android/debug.keystore if neither secrets nor keystore exist
           mkdir -p ~/.android
           if [ -z "$AGY_KEYSTORE_BASE64" ] && [ ! -f ~/.android/debug.keystore ]; then
@@ -211,6 +215,7 @@ jobs:
       - name: Commit & Push Updated Version
         if: steps.check_upstream.outputs.should_build == 'true'
         run: |
+          git checkout -- gradle.properties 2>/dev/null || true
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add version.properties
