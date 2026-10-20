@@ -49,6 +49,8 @@ jobs:
 
       - name: Check Upstream Google Antigravity Version
         id: check_upstream
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           CURRENT_AGY_VER=$(grep '^AGY_VERSION=' version.properties | cut -d'=' -f2)
           CURRENT_CODE=$(grep '^VERSION_CODE=' version.properties | cut -d'=' -f2)
@@ -57,7 +59,7 @@ jobs:
 
           UPSTREAM_VER="${{ inputs.custom_agy_version }}"
           if [ -z "$UPSTREAM_VER" ]; then
-            UPSTREAM_VER=$(curl -sSL "https://api.github.com/repos/wallentx/antigravity-cli-termux/releases/latest" | jq -r '.tag_name // empty' | sed 's/^v//')
+            UPSTREAM_VER=$(curl -sSL -H "Authorization: Bearer $GITHUB_TOKEN" "https://api.github.com/repos/wallentx/antigravity-cli-termux/releases/latest" | jq -r '.tag_name // empty' | sed 's/^v//')
             [ -z "$UPSTREAM_VER" ] && UPSTREAM_VER="$CURRENT_AGY_VER"
           fi
           echo "Latest upstream agy version: $UPSTREAM_VER"
@@ -69,12 +71,15 @@ jobs:
 
           echo "should_build=$SHOULD_BUILD" >> $GITHUB_OUTPUT
           echo "upstream_ver=$UPSTREAM_VER" >> $GITHUB_OUTPUT
+          echo "current_agy_ver=$CURRENT_AGY_VER" >> $GITHUB_OUTPUT
           echo "current_code=$CURRENT_CODE" >> $GITHUB_OUTPUT
           echo "current_name=$CURRENT_NAME" >> $GITHUB_OUTPUT
 
       - name: Process Binaries & Bump Version
         if: steps.check_upstream.outputs.should_build == 'true'
         id: version_bump
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           OLD_CODE=${{ steps.check_upstream.outputs.current_code }}
           NEW_CODE=$((OLD_CODE + 1))
@@ -85,55 +90,86 @@ jobs:
           NEW_PATCH=$((PATCH_NUM + 1))
           NEW_NAME="${BASE_NAME}.${NEW_PATCH}"
           NEW_AGY_VER="${{ steps.check_upstream.outputs.upstream_ver }}"
+          OLD_AGY_VER="${{ steps.check_upstream.outputs.current_agy_ver }}"
 
           echo "Bumping version: $OLD_NAME (code $OLD_CODE) -> $NEW_NAME (code $NEW_CODE)"
-          echo "Bundling agy version: $NEW_AGY_VER"
-
-          cat <<EOF > version.properties
-          VERSION_CODE=$NEW_CODE
-          VERSION_NAME=$NEW_NAME
-          AGY_VERSION=$NEW_AGY_VER
-          EOF
-
-          # Create release metadata manifest
-          cat <<EOF > release-metadata.json
-          {
-            "version_code": $NEW_CODE,
-            "version_name": "$NEW_NAME",
-            "agy_version": "$NEW_AGY_VER",
-            "apk_name": "AntigravityStudio-v${NEW_NAME}.apk"
-          }
-          EOF
+          echo "Bundling agy version: $NEW_AGY_VER (previous: $OLD_AGY_VER)"
 
           # Fetch baseline toolchain and assets from latest published release APK
           mkdir -p app/src/main/jniLibs/arm64-v8a app/src/main/assets
           if [ ! -f "app/src/main/jniLibs/arm64-v8a/libbash.so" ]; then
             echo "Fetching baseline runtime from latest published release APK..."
-            curl -sSL -f -o prev.apk "https://github.com/MisterMoeGreen/Antigravity-Studio-App/releases/latest/download/AntigravityStudio.apk"
-            unzip -q prev.apk "lib/arm64-v8a/*" "assets/*"
-            cp -r lib/arm64-v8a/* app/src/main/jniLibs/arm64-v8a/
-            cp -r assets/* app/src/main/assets/
-            rm -rf prev.apk lib assets
+            # Try downloading via GitHub CLI first
+            gh release download -R "${{ github.repository }}" -p "*.apk" --clobber 2>/dev/null || true
+            APK_FILE=$(ls AntigravityStudio*.apk *.apk 2>/dev/null | head -n 1)
+
+            # Fallback to GitHub Releases API if gh download didn't find an APK
+            if [ -z "$APK_FILE" ] || [ ! -f "$APK_FILE" ]; then
+              echo "Searching GitHub releases API for latest published APK..."
+              APK_URL=$(curl -sSL -H "Authorization: Bearer $GITHUB_TOKEN" \
+                -H "Accept: application/vnd.github.v3+json" \
+                "https://api.github.com/repos/${{ github.repository }}/releases" \
+                | jq -r '.[].assets[] | select(.name | endswith(".apk")) | .browser_download_url' | head -n 1)
+              if [ -n "$APK_URL" ] && [ "$APK_URL" != "null" ]; then
+                echo "Downloading APK from $APK_URL..."
+                curl -sSL -f -o prev.apk "$APK_URL"
+                APK_FILE="prev.apk"
+              fi
+            fi
+
+            if [ -n "$APK_FILE" ] && [ -f "$APK_FILE" ]; then
+              echo "Extracting baseline runtime from $APK_FILE..."
+              unzip -q "$APK_FILE" "lib/arm64-v8a/*" "assets/*"
+              cp -r lib/arm64-v8a/* app/src/main/jniLibs/arm64-v8a/
+              [ -f "assets/usr-data.tar.zst" ] && cp assets/usr-data.tar.zst app/src/main/assets/
+              # Restore repo rootfs.tar.zst so baseline APK does not overwrite tracked version
+              git checkout HEAD -- app/src/main/assets/rootfs.tar.zst 2>/dev/null || true
+              rm -rf "$APK_FILE" prev.apk lib assets
+            else
+              echo "Error: Could not locate baseline APK from any GitHub release!" >&2
+              exit 1
+            fi
           fi
 
           # If upstream agy version changed, download and patch new upstream agy.va39 into libagy.so
-          CURRENT_AGY_VER="${{ steps.check_upstream.outputs.current_code }}"
-          if [ "$NEW_AGY_VER" != "$(grep '^AGY_VERSION=' version.properties | cut -d'=' -f2)" ] || [ ! -f "app/src/main/jniLibs/arm64-v8a/libagy.so" ]; then
+          NEW_SHA256=""
+          if [ "$NEW_AGY_VER" != "$OLD_AGY_VER" ] || [ ! -f "app/src/main/jniLibs/arm64-v8a/libagy.so" ]; then
             echo "Downloading upstream agy v${NEW_AGY_VER}..."
             TAR_URL="https://github.com/wallentx/antigravity-cli-termux/releases/download/v${NEW_AGY_VER}/antigravity-termux-standalone.tar.gz"
-            curl -sSL -f -o agy.tar.gz "$TAR_URL" || true
-            if [ -f agy.tar.gz ]; then
-              tar -xzf agy.tar.gz agy.va39
-              mv agy.va39 app/src/main/jniLibs/arm64-v8a/libagy.so
-              chmod 755 app/src/main/jniLibs/arm64-v8a/libagy.so
-              patchelf --page-size 16384 \
-                --set-interpreter "/data/data/ai.agy.app/files/usr/glibc/lib/ld-linux-aarch64.so.1" \
-                --force-rpath --set-rpath "/data/data/ai.agy.app/files/usr/glibc/lib" \
-                app/src/main/jniLibs/arm64-v8a/libagy.so
-              python3 -c "path='app/src/main/jniLibs/arm64-v8a/libagy.so'; d=open(path,'rb').read(); open(path,'wb').write(d.replace(b'/data/data/com.termux',b'/data/data/ai.agy.app'))"
-              rm -f agy.tar.gz
-            fi
+            curl -sSL -f -o agy.tar.gz "$TAR_URL"
+            NEW_SHA256=$(sha256sum agy.tar.gz | cut -d' ' -f1)
+            tar -xzf agy.tar.gz agy.va39
+            mv agy.va39 app/src/main/jniLibs/arm64-v8a/libagy.so
+            chmod 755 app/src/main/jniLibs/arm64-v8a/libagy.so
+            patchelf --page-size 16384 \
+              --set-interpreter "/data/data/ai.agy.app/files/usr/glibc/lib/ld-linux-aarch64.so.1" \
+              --force-rpath --set-rpath "/data/data/ai.agy.app/files/usr/glibc/lib" \
+              app/src/main/jniLibs/arm64-v8a/libagy.so
+            python3 -c "path='app/src/main/jniLibs/arm64-v8a/libagy.so'; d=open(path,'rb').read(); open(path,'wb').write(d.replace(b'/data/data/com.termux',b'/data/data/ai.agy.app'))"
+            rm -f agy.tar.gz
           fi
+
+          # Synchronize latest agy-ui web assets into usr-data.tar.zst if present
+          if [ -d "agy-ui" ] && [ -f "app/src/main/assets/usr-data.tar.zst" ]; then
+            echo "Syncing latest agy-ui assets into usr-data.tar.zst..."
+            TEMP_USR=$(mktemp -d)
+            tar --zstd -xf app/src/main/assets/usr-data.tar.zst -C "$TEMP_USR"
+            mkdir -p "$TEMP_USR/share/agy-ui"
+            cp -rL agy-ui/* "$TEMP_USR/share/agy-ui/"
+            chmod 755 "$TEMP_USR/share/agy-ui/ask_question.py" 2>/dev/null || true
+            find "$TEMP_USR/share/agy-ui" -type f \( -name "*.py" -o -name "*.json" -o -name "*.html" -o -name "*.js" \) -exec \
+              sed -i "s|/data/data/com.termux|/data/data/ai.agy.app|g" {} + 2>/dev/null || true
+            tar --zstd -cf app/src/main/assets/usr-data.tar.zst -C "$TEMP_USR" .
+            rm -rf "$TEMP_USR"
+          fi
+
+          OLD_SHA256=$(grep '^AGY_SHA256=' version.properties | cut -d'=' -f2)
+          printf "# Antigravity Studio Version Specification\nVERSION_CODE=%s\nVERSION_NAME=%s\nAGY_VERSION=%s\nAGY_SHA256=%s\n" \
+            "$NEW_CODE" "$NEW_NAME" "$NEW_AGY_VER" "${NEW_SHA256:-$OLD_SHA256}" > version.properties
+
+          # Create release metadata manifest
+          printf '{\n  "version_code": %s,\n  "version_name": "%s",\n  "agy_version": "%s",\n  "apk_name": "AntigravityStudio-v%s.apk"\n}\n' \
+            "$NEW_CODE" "$NEW_NAME" "$NEW_AGY_VER" "$NEW_NAME" > release-metadata.json
 
           echo "new_name=$NEW_NAME" >> $GITHUB_OUTPUT
           echo "new_code=$NEW_CODE" >> $GITHUB_OUTPUT
@@ -150,6 +186,13 @@ jobs:
           AGY_KEY_ALIAS: ${{ secrets.AGY_KEY_ALIAS }}
           AGY_KEY_PASSWORD: ${{ secrets.AGY_KEY_PASSWORD }}
         run: |
+          # Fallback: create ~/.android/debug.keystore if neither secrets nor keystore exist
+          mkdir -p ~/.android
+          if [ -z "$AGY_KEYSTORE_BASE64" ] && [ ! -f ~/.android/debug.keystore ]; then
+            keytool -genkey -v -keystore ~/.android/debug.keystore -storepass android \
+              -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
           # Ensure arm64 binaries use 16KB page alignment on x86_64 runner
           find app/src/main/jniLibs -name "*.so" -exec patchelf --page-size 16384 {} + 2>/dev/null || true
           ./gradlew assembleRelease --stacktrace
