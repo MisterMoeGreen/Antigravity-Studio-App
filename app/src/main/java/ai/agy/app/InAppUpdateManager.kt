@@ -23,10 +23,21 @@ object InAppUpdateManager {
      * Replaces web assets in usr/share/agy-ui/ without requiring an APK reinstallation.
      */
     suspend fun syncOtaAssets(context: Context, assetUrl: String, destRelativePath: String): Boolean = withContext(Dispatchers.IO) {
-        val destFile = File("/data/data/${context.packageName}/files/usr/share/agy-ui/$destRelativePath")
+        val safeUrl = assetUrl.trim()
+        if (!safeUrl.startsWith("https://github.com/MisterMoeGreen/Antigravity-Studio-App/") &&
+            !safeUrl.startsWith("https://raw.githubusercontent.com/MisterMoeGreen/Antigravity-Studio-App/")) {
+            android.util.Log.e(TAG, "Rejected untrusted OTA asset URL: $safeUrl")
+            return@withContext false
+        }
+        val baseDir = File("/data/data/${context.packageName}/files/usr/share/agy-ui").canonicalFile
+        val destFile = File(baseDir, destRelativePath).canonicalFile
+        if (!destFile.canonicalPath.startsWith(baseDir.canonicalPath + File.separator)) {
+            android.util.Log.e(TAG, "Path traversal attempt blocked in syncOtaAssets: $destRelativePath")
+            return@withContext false
+        }
         val tempFile = File("${destFile.absolutePath}.ota_tmp")
         try {
-            val connection = URL(assetUrl).openConnection()
+            val connection = URL(safeUrl).openConnection()
             connection.connectTimeout = 5000
             connection.readTimeout = 10000
             connection.getInputStream().use { input ->
@@ -51,11 +62,17 @@ object InAppUpdateManager {
      * On Android 12+ (SDK 31+), allows silent background upgrades without user popups.
      */
     suspend fun downloadAndInstall(context: Context, apkDownloadUrl: String, onProgress: (Int) -> Unit) = withContext(Dispatchers.IO) {
+        val safeUrl = apkDownloadUrl.trim()
+        if (!safeUrl.startsWith("https://github.com/MisterMoeGreen/Antigravity-Studio-App/releases/download/") ||
+            !safeUrl.endsWith(".apk")) {
+            throw SecurityException("Rejected untrusted APK download URL: $safeUrl")
+        }
+
         val destFile = File(context.cacheDir, "update.apk")
         if (destFile.exists()) destFile.delete()
 
         // 1. Download APK with progress tracking and redirect resolution
-        var currentUrl = apkDownloadUrl
+        var currentUrl = safeUrl
         var connection: java.net.HttpURLConnection
         var redirectCount = 0
         while (true) {

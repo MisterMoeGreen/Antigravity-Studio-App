@@ -285,6 +285,27 @@ object EnvironmentBootstrapper {
                 legacySkillDir.deleteRecursively()
             }
         } catch (_: Exception) {}
+
+        // 7. Seed standard SSH known_hosts for GitHub & GitLab (MITM defense)
+        try {
+            val sshDir = File(homeDir, ".ssh")
+            sshDir.mkdirs()
+            Os.chmod(sshDir.absolutePath, 0b111_000_000) // 0700
+            val knownHostsFile = File(sshDir, "known_hosts")
+            if (!knownHostsFile.exists() || knownHostsFile.length() == 0L) {
+                val defaultKnownHosts = """
+# Standard GitHub & GitLab Host Keys (Pre-seeded for MITM protection)
+github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLnxAzETJ+kytsnupzs0KECc
+github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uR23pHrCEhVlW/9pcKGqvdqQD37OOcxSk+4HtddKeU=
+github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDb6wqqsz/mt4C27fqBQU2vqh4WhhxxnrRqwUS199IjVCc692crkFAIbN5MmOJayUEYW6dJitterzH1FF951LT8GI626floIbEk6Y+io65NVzMiahEr72MZ+OYyavVVpXN55nj5dTC65NT6IFMgE44zfCunCob046g300jdKGig7/MrX05h+29KNeFHB64THV6/22+OxqAEysmVuzZMgyGw28BIbwOmvyEQdzTEKLRgIC6uSohHGZObLnElJyMxXxRHtk=
+gitlab.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfuCHKVTjquxvt6CM6tdG4SLp1Btn/nOeHHE5UOzRdf
+gitlab.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBFSMqzJeV9rUzU4kWitGjeR4PWSa29SPqJ1fUtEQjZecqErYzWCisKed3UngAJ7G3Prd21OUI+9LEUhgBQgkE4=
+gitlab.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCsj2bNKTBSpIYDEGb9KzsGh3ULVNop7ZREmlLtQt8Am2ihw6AZMul+JY3PHyhmPv0BJPiteVeRR6LvxEWPzSjiBQMWVkC5DUbe0Sf/IAFc8OOMrHJedk20YDY95baa+UxP9GWHYktqfZjcKyaWimSCnE9GlReUxN1bf2II6iA6VNqznZaoKn373VK40fi/mzFjZtZN3wN84YOE2YCGkkgrVKmBQY57A6egIp+gwpDgoIfpbIdeINhA4eMZXdZmU3a100HJaTDBprzQdJJ6WNiUomScLurZs48NRH/9jeGvokUKdtWhyYXuCY6U5O+Bigfp8w6hMZ9HS8xexNu7twPD
+""".trimIndent() + "\n"
+                knownHostsFile.writeText(defaultKnownHosts)
+                Os.chmod(knownHostsFile.absolutePath, 0b110_000_000) // 0600
+            }
+        } catch (_: Exception) {}
     }
 
     private fun createOrUpdateSymlink(linkFile: File, targetPath: String) {

@@ -32,6 +32,9 @@ class AgyForegroundService : Service() {
 
         private val _readyPortFlow = MutableStateFlow<Int?>(null)
         val readyPortFlow: StateFlow<Int?> = _readyPortFlow.asStateFlow()
+
+        private val _authTokenFlow = MutableStateFlow<String?>(null)
+        val authTokenFlow: StateFlow<String?> = _authTokenFlow.asStateFlow()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -55,8 +58,10 @@ class AgyForegroundService : Service() {
             registerTelemetryBridge()
 
             val port = pickAvailablePort(8081, listOf(8082, 8090, 8091))
+            val token = java.util.UUID.randomUUID().toString().replace("-", "")
+            _authTokenFlow.value = token
             startStickyNotification(port)
-            startPythonDaemon(port)
+            startPythonDaemon(port, token)
             _readyPortFlow.value = port
         }
     }
@@ -120,11 +125,19 @@ class AgyForegroundService : Service() {
         }
     }
 
-    private fun startPythonDaemon(port: Int) {
+    private fun startPythonDaemon(port: Int, token: String) {
         val root = "/data/data/$packageName/files"
         val usr = "$root/usr"
         val home = "$root/home"
         val nativeDir = applicationInfo.nativeLibraryDir
+
+        // Securely write ephemeral session auth token with 0600 permissions
+        try {
+            val tokenFile = File("$usr/tmp/.auth_token")
+            tokenFile.parentFile?.mkdirs()
+            tokenFile.writeText(token)
+            android.system.Os.chmod(tokenFile.absolutePath, 0b110_000_000)
+        } catch (_: Exception) {}
 
         // Clean up any stale orphaned server processes before spawning
         try {
@@ -149,6 +162,7 @@ class AgyForegroundService : Service() {
         env["AGY_DISABLE_AUTO_UPDATE"] = "1"
         env["AGY_WEB_PORT"] = port.toString()
         env["AGY_WEB_HOST"] = "127.0.0.1"
+        env["AGY_AUTH_TOKEN"] = token
         env["GODEBUG"] = "netdns=cgo"
         env["LD_LIBRARY_PATH"] = "$usr/lib:$nativeDir"
         env["LD_PRELOAD"] = "$usr/lib/libagy_shim.so"
@@ -253,6 +267,10 @@ class AgyForegroundService : Service() {
     private fun stopServiceGracefully() {
         Log.i(TAG, "Stopping Antigravity background service and daemon...")
         _readyPortFlow.value = null
+        _authTokenFlow.value = null
+        try {
+            File("/data/data/$packageName/files/usr/tmp/.auth_token").delete()
+        } catch (_: Exception) {}
         try {
             serviceScope.cancel()
         } catch (_: Exception) {}

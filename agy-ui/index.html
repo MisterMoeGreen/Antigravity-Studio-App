@@ -3679,9 +3679,24 @@
       // ---------------------------------------------------------------------
       // WebSocket Connection & Auto-Reconnect
       // ---------------------------------------------------------------------
+      function getAuthToken() {
+        try {
+          const urlToken = new URLSearchParams(window.location.search).get('auth');
+          if (urlToken) {
+            sessionStorage.setItem('agy_auth_token', urlToken);
+            return urlToken;
+          }
+          return sessionStorage.getItem('agy_auth_token') || '';
+        } catch (_) {
+          return '';
+        }
+      }
+
       function connectWebSocket() {
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${proto}//${location.host}/ws`;
+        const token = getAuthToken();
+        const authParam = token ? `?auth=${encodeURIComponent(token)}` : '';
+        const wsUrl = `${proto}//${location.host}/ws${authParam}`;
         const ws = new WebSocket(wsUrl);
         state.ws = ws;
 

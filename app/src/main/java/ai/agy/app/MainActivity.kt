@@ -59,13 +59,23 @@ class MainActivity : AppCompatActivity() {
 
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                    val url = request?.url?.toString() ?: return false
-                    if (url.contains("accounts.google.com")) {
-                        CustomTabsIntent.Builder().setShowTitle(true).build()
-                            .launchUrl(this@MainActivity, Uri.parse(url))
-                        return true
+                    val uri = request?.url ?: return false
+                    val host = uri.host ?: ""
+                    // Strictly allow local daemon navigation within the WebView
+                    if (host == "127.0.0.1" || host == "localhost") {
+                        return false
                     }
-                    return false
+                    // Prevent external websites from loading in WebView and accessing @JavascriptInterface.
+                    // Instead, launch all external links safely in Chrome Custom Tabs or external browser.
+                    try {
+                        CustomTabsIntent.Builder().setShowTitle(true).build()
+                            .launchUrl(this@MainActivity, uri)
+                    } catch (_: Exception) {
+                        try {
+                            startActivity(Intent(Intent.ACTION_VIEW, uri))
+                        } catch (_: Exception) {}
+                    }
+                    return true
                 }
             }
 
@@ -110,9 +120,10 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
-        // Await until EnvironmentBootstrapper completes and AgyForegroundService publishes the bound port
+        // Await until EnvironmentBootstrapper completes and AgyForegroundService publishes the bound port and token
         lifecycleScope.launch(Dispatchers.IO) {
             val port = AgyForegroundService.readyPortFlow.filterNotNull().first()
+            val token = AgyForegroundService.authTokenFlow.filterNotNull().first()
             val healthUrl = "http://127.0.0.1:$port/health"
             for (i in 1..100) {
                 try {
@@ -124,7 +135,7 @@ class MainActivity : AppCompatActivity() {
                 delay(100)
             }
             withContext(Dispatchers.Main) {
-                webView.loadUrl("http://127.0.0.1:$port/")
+                webView.loadUrl("http://127.0.0.1:$port/?auth=$token")
             }
         }
     }
@@ -161,9 +172,19 @@ class MainActivity : AppCompatActivity() {
 
         @JavascriptInterface
         fun installUpdate(apkUrl: String) {
+            val safeUrl = apkUrl.trim()
+            if (!safeUrl.startsWith("https://github.com/MisterMoeGreen/Antigravity-Studio-App/releases/download/") ||
+                !safeUrl.endsWith(".apk")) {
+                android.util.Log.e("AgyMainActivity", "Rejected untrusted APK update URL: $safeUrl")
+                val errMsg = org.json.JSONObject.quote("Untrusted update URL source")
+                runOnUiThread {
+                    webView.evaluateJavascript("window.onUpdateError && window.onUpdateError($errMsg);", null)
+                }
+                return
+            }
             lifecycleScope.launch(Dispatchers.IO) {
                 try {
-                    InAppUpdateManager.downloadAndInstall(this@MainActivity, apkUrl) { progress ->
+                    InAppUpdateManager.downloadAndInstall(this@MainActivity, safeUrl) { progress ->
                         runOnUiThread {
                             webView.evaluateJavascript("window.onUpdateProgress && window.onUpdateProgress($progress);", null)
                         }
