@@ -4420,8 +4420,27 @@
             renderDirectoryListing(msg);
             break;
 
+          case 'conversation_assigned': {
+            if (msg.old_conversation_id && msg.conversation_id) {
+              if (state.conversationId === msg.old_conversation_id) {
+                state.conversationId = msg.conversation_id;
+              }
+              if (sessionBuffers.has(msg.old_conversation_id)) {
+                const oldBuf = sessionBuffers.get(msg.old_conversation_id);
+                sessionBuffers.delete(msg.old_conversation_id);
+                oldBuf.conversationId = msg.conversation_id;
+                sessionBuffers.set(msg.conversation_id, oldBuf);
+              }
+              renderSessionDrawerList();
+            }
+            break;
+          }
+
           case 'turn_start': {
             const cid = msg.conversation_id || state.conversationId;
+            if (!state.conversationId && cid) {
+              state.conversationId = cid;
+            }
             const buf = getOrCreateSessionBuffer(cid);
             buf.isRunning = true;
             buf.currentAction = 'Thinking...';
@@ -4444,6 +4463,9 @@
 
           case 'agent_thought': {
             const cid = msg.conversation_id || state.conversationId;
+            if (!state.conversationId && cid) {
+              state.conversationId = cid;
+            }
             const buf = getOrCreateSessionBuffer(cid);
             const tRec = getOrCreateTurnRecord(buf, msg.turn_id);
             const delta = msg.delta || '';
@@ -4460,6 +4482,9 @@
 
           case 'agent_token': {
             const cid = msg.conversation_id || state.conversationId;
+            if (!state.conversationId && cid) {
+              state.conversationId = cid;
+            }
             const buf = getOrCreateSessionBuffer(cid);
             const tRec = getOrCreateTurnRecord(buf, msg.turn_id);
             const delta = msg.delta || '';
@@ -4477,6 +4502,9 @@
 
           case 'tool_call': {
             const cid = msg.conversation_id || state.conversationId;
+            if (!state.conversationId && cid) {
+              state.conversationId = cid;
+            }
             const buf = getOrCreateSessionBuffer(cid);
             const tRec = getOrCreateTurnRecord(buf, msg.turn_id);
             const existingIdx = tRec.toolCalls.findIndex(tc => (tc.tool_id && tc.tool_id === msg.tool_id) || (tc.name === msg.name && !tc.tool_id));
@@ -4494,6 +4522,17 @@
           }
 
           case 'turn_complete': {
+            if (msg.old_conversation_id && msg.conversation_id) {
+              if (state.conversationId === msg.old_conversation_id) {
+                state.conversationId = msg.conversation_id;
+              }
+              if (sessionBuffers.has(msg.old_conversation_id)) {
+                const oldBuf = sessionBuffers.get(msg.old_conversation_id);
+                sessionBuffers.delete(msg.old_conversation_id);
+                oldBuf.conversationId = msg.conversation_id;
+                sessionBuffers.set(msg.conversation_id, oldBuf);
+              }
+            }
             const cid = msg.conversation_id || state.conversationId;
             const buf = getOrCreateSessionBuffer(cid);
             buf.isRunning = false;
