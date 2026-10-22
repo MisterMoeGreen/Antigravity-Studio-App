@@ -237,6 +237,7 @@ bash ./gradlew assembleRelease
 ## Specifications & Audit Logs
 
 For detailed technical specifications, architectural diagrams, security audits, and verification proofs:
+* [v1.4.0 Parallel Session Concurrency & Sidebar Ergonomics](specs/v1.4.0/OVERVIEW_AND_IMPLEMENTATION_GUIDE.md)
 * [v1.3.0 W^X PRoot Engine, Anonymous Loader & Package Manager](specs/v1.3.0/OVERVIEW_AND_IMPLEMENTATION_GUIDE.md)
 * [v1.2.0 Interactive Decision Modals & Touch Prompts](specs/v1.2.0/OVERVIEW_AND_IMPLEMENTATION_GUIDE.md)
 * [v1.1.0 Dynamic DNS, Hardware Telemetry & In-App Updaters](specs/1.1.0/OVERVIEW_AND_IMPLEMENTATION_GUIDE.md)
