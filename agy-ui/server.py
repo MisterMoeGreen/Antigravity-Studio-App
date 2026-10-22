@@ -1475,6 +1475,21 @@ class AntigravityStorageEngine:
     and JSONL step transcripts.
     """
 
+    def __init__(self) -> None:
+        self._init_sqlite_wal()
+
+    def _init_sqlite_wal(self) -> None:
+        if SUMMARIES_DB.exists():
+            try:
+                conn = sqlite3.connect(str(SUMMARIES_DB), timeout=15.0)
+                conn.execute("PRAGMA journal_mode=WAL;")
+                conn.execute("PRAGMA busy_timeout=10000;")
+                conn.execute("PRAGMA synchronous=NORMAL;")
+                conn.close()
+                logger.info("Initialized SQLite WAL mode on conversation_summaries.db")
+            except Exception as exc:
+                logger.warning("Could not set SQLite WAL mode on conversation_summaries.db: %s", exc)
+
     def _resolve_session_title(self, row: sqlite3.Row) -> str:
         cid = row["conversation_id"]
 
@@ -2529,39 +2544,80 @@ def get_default_workspace() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Antigravity Subprocess & Stream-JSON Orchestrator
+# Antigravity Subprocess & Stream-JSON Orchestrator (Multi-Session v1.4.0)
 # ---------------------------------------------------------------------------
 
+def get_available_ram_mb() -> int:
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) // 1024
+    except Exception:
+        pass
+    return 2048
+
+MAX_CONCURRENT_SESSIONS = 2
+MIN_AVAILABLE_RAM_MB_FOR_PARALLEL = 750
+
 @dataclass
-class SessionConfig:
-    conversation_id: Optional[str] = None
+class TurnSnapshot:
+    turn_id: str
+    model: str
+    raw_markdown: str = ""
+    raw_thoughts: str = ""
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    start_time: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "turn_id": self.turn_id,
+            "model": self.model,
+            "raw_markdown": self.raw_markdown,
+            "raw_thoughts": self.raw_thoughts,
+            "tool_calls": self.tool_calls,
+            "start_time": self.start_time,
+        }
+
+@dataclass
+class SessionExecutionContext:
+    conversation_id: str
+    workspace: str = field(default_factory=get_default_workspace)
     model: str = "gemini-3.8-flash-high"
     mode: str = "default"
     effort: str = "high"
-    workspace: str = field(default_factory=get_default_workspace)
+    active_proc: Optional[asyncio.subprocess.Process] = None
+    current_turn_id: Optional[str] = None
+    turn_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    is_running: bool = False
+    interrupted: bool = False
+    waiting_input: bool = False
+    pending_question: Optional[dict[str, Any]] = None
+    active_snapshot: Optional[TurnSnapshot] = None
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     total_thinking_tokens: int = 0
     turn_count: int = 0
+    created_at: float = field(default_factory=time.time)
+    last_activity: float = field(default_factory=time.time)
+
+# Retain SessionConfig as backwards-compatible alias
+SessionConfig = SessionExecutionContext
 
 
 class AgyProcessOrchestrator:
     """
-    Manages the lifecycle of the `agy` CLI subprocess, supporting both:
-      1. Persistent bidirectional `--input-format stream-json --output-format stream-json`
-      2. Turn-scoped streaming `--output-format stream-json -p <prompt>`
-    with automatic fallback, real-time NDJSON event demultiplexing, and SIGINT abort.
+    Manages concurrent lifecycles of per-session `agy` CLI subprocesses,
+    supporting parallel execution, isolated process groups (setsid/killpg),
+    real-time NDJSON event demultiplexing, and per-session SIGINT/SIGKILL aborts.
     """
 
     def __init__(self, storage: AntigravityStorageEngine, broadcast_cb):
         self.storage = storage
         self.broadcast = broadcast_cb
-        self.config = SessionConfig()
-        self.active_proc: Optional[asyncio.subprocess.Process] = None
-        self.is_running: bool = False
-        self._interrupted: bool = False
-        self._current_turn_id: Optional[str] = None
-        self._turn_lock = asyncio.Lock()
+        self._sessions: dict[str, SessionExecutionContext] = {}
+        self.active_view_cid: Optional[str] = None
+        self._global_auth_lock = asyncio.Lock()
         self._streamed_turn_ids: set[str] = set()
 
         # In-app Google Authentication lifecycle state
@@ -2569,40 +2625,98 @@ class AgyProcessOrchestrator:
         self.auth_proc: Optional[asyncio.subprocess.Process] = None
         self.auth_master: Optional[int] = None
         self.auth_turn_id: Optional[str] = None
+        self.auth_cid: Optional[str] = None
         self.auth_waiter_task: Optional[asyncio.Task] = None
         self.on_auth_success_cb: Optional[Any] = None
         self._pending_auth_prompt: Optional[str] = None
         self._pending_auth_attachments: list[dict[str, Any]] = []
         self._auth_required_detected: bool = False
 
+    @property
+    def config(self) -> SessionExecutionContext:
+        return self.get_or_create_context(self.active_view_cid)
+
+    @property
+    def is_running(self) -> bool:
+        return any(s.is_running for s in self._sessions.values())
+
+    @property
+    def active_proc(self) -> Optional[asyncio.subprocess.Process]:
+        if self.active_view_cid and self.active_view_cid in self._sessions:
+            return self._sessions[self.active_view_cid].active_proc
+        for s in self._sessions.values():
+            if s.active_proc:
+                return s.active_proc
+        return None
+
+    def _active_view_defaults(self) -> tuple[str, str, str]:
+        """Return (model, mode, effort) from the active view session, or hardcoded defaults."""
+        if self.active_view_cid and self.active_view_cid in self._sessions:
+            v = self._sessions[self.active_view_cid]
+            return v.model, v.mode, v.effort
+        return "gemini-3.8-flash-high", "default", "high"
+
+    def get_or_create_context(
+        self,
+        conversation_id: Optional[str],
+        workspace: Optional[str] = None,
+        model: Optional[str] = None,
+        mode: Optional[str] = None,
+        effort: Optional[str] = None,
+    ) -> SessionExecutionContext:
+        cid = (conversation_id or "").strip()
+        if not cid:
+            cid = f"session-{uuid.uuid4().hex[:12]}"
+        if cid not in self._sessions:
+            ws = workspace or get_default_workspace()
+            default_model, default_mode, default_effort = self._active_view_defaults()
+            self._sessions[cid] = SessionExecutionContext(
+                conversation_id=cid,
+                workspace=ws,
+                model=model or default_model,
+                mode=mode or default_mode,
+                effort=effort or default_effort,
+            )
+        ctx = self._sessions[cid]
+        if workspace and Path(workspace).is_dir():
+            ctx.workspace = workspace
+        if model:
+            ctx.model = model
+        if mode:
+            ctx.mode = mode
+        if effort:
+            ctx.effort = effort
+        ctx.last_activity = time.time()
+        return ctx
+
     def build_cli_args(
         self,
+        ctx: Optional[SessionExecutionContext] = None,
         prompt: Optional[str] = None,
         use_persistent_stdio: bool = False,
     ) -> list[str]:
+        target_ctx = ctx or self.config
         args = [
             str(AGY_BIN),
             "--dangerously-skip-permissions",
             "--output-format",
             "stream-json",
             "--model",
-            self.config.model,
+            target_ctx.model,
         ]
         # Only pass --effort for models that explicitly support reasoning effort (Gemini)
-        if "gemini" in self.config.model.lower() and self.config.effort in ("low", "medium", "high"):
-            args.extend(["--effort", self.config.effort])
+        if "gemini" in target_ctx.model.lower() and target_ctx.effort in ("low", "medium", "high"):
+            args.extend(["--effort", target_ctx.effort])
 
         # Only pass --mode when a specific non-default mode is selected (accept-edits or plan).
-        # Note: --mode auto triggers 'warning: --mode auto is not available for this account'
-        # in standard agy accounts. Omitting --mode runs in the native default mode with full tool permissions.
-        if self.config.mode and self.config.mode not in ("default", "standard", "auto"):
-            args.extend(["--mode", self.config.mode])
+        if target_ctx.mode and target_ctx.mode not in ("default", "standard", "auto"):
+            args.extend(["--mode", target_ctx.mode])
 
         if use_persistent_stdio:
             args.extend(["--input-format", "stream-json"])
 
-        if self.config.conversation_id:
-            args.extend(["--conversation", self.config.conversation_id])
+        if target_ctx.conversation_id:
+            args.extend(["--conversation", target_ctx.conversation_id])
 
         if prompt is not None and not use_persistent_stdio:
             if prompt.strip().startswith("/"):
@@ -2614,39 +2728,110 @@ class AgyProcessOrchestrator:
     async def execute_turn(
         self,
         prompt: str,
+        conversation_id: Optional[str] = None,
         attachments: Optional[list[dict[str, Any]]] = None,
+        model: Optional[str] = None,
+        mode: Optional[str] = None,
+        effort: Optional[str] = None,
     ) -> None:
-        if self._turn_lock.locked():
+        ctx = self.get_or_create_context(
+            conversation_id,
+            model=model,
+            mode=mode,
+            effort=effort,
+        )
+        cid = ctx.conversation_id
+
+        # 1. Intra-session lock check
+        if ctx.turn_lock.locked():
             await self.broadcast(
                 {
                     "type": "system_card",
-                    "title": "Busy",
-                    "markdown": "Antigravity is currently processing a turn. Tap **Stop** to interrupt it first.",
+                    "conversation_id": cid,
+                    "title": "Session Busy",
+                    "markdown": "This session is currently processing a turn. Tap **Stop** to interrupt it first.",
                     "level": "warning",
                 }
             )
             return
 
-        async with self._turn_lock:
+        # 2. Maximum concurrency cap check (MAX_CONCURRENT_SESSIONS = 2)
+        running_sessions = [c for c in self._sessions.values() if c.is_running and c.conversation_id != cid]
+        if len(running_sessions) >= MAX_CONCURRENT_SESSIONS:
+            await self.broadcast(
+                {
+                    "type": "system_card",
+                    "conversation_id": cid,
+                    "title": "Concurrency Limit Reached",
+                    "markdown": f"Antigravity Studio is currently running {len(running_sessions)} parallel sessions. Please wait for one to finish or stop it first.",
+                    "level": "warning",
+                }
+            )
+            return
+
+        # 3. Dynamic RAM check (ARGON-V14-16)
+        if len(running_sessions) >= 1 and get_available_ram_mb() < MIN_AVAILABLE_RAM_MB_FOR_PARALLEL:
+            await self.broadcast(
+                {
+                    "type": "system_card",
+                    "conversation_id": cid,
+                    "title": "Low Device Memory",
+                    "markdown": f"Available RAM is below {MIN_AVAILABLE_RAM_MB_FOR_PARALLEL} MB. Parallel execution paused to prevent system app closure.",
+                    "level": "warning",
+                }
+            )
+            return
+
+        # 4. Workspace collision check (ARGON-V14-13)
+        norm_ws = os.path.realpath(ctx.workspace)
+        for other in running_sessions:
+            if os.path.realpath(other.workspace) == norm_ws:
+                await self.broadcast(
+                    {
+                        "type": "system_card",
+                        "conversation_id": cid,
+                        "title": "Workspace In Use",
+                        "markdown": (
+                            f"Another active session (`{other.conversation_id[:8]}`) is currently using workspace "
+                            f"`{ctx.workspace}`. To prevent Git lock and file conflicts, wait for it to finish or switch to a different workspace."
+                        ),
+                        "level": "warning",
+                    }
+                )
+                return
+
+        async with ctx.turn_lock:
             turn_id = f"turn-{uuid.uuid4().hex[:8]}"
-            self._current_turn_id = turn_id
-            self._interrupted = False
+            ctx.current_turn_id = turn_id
+            ctx.interrupted = False
+            ctx.waiting_input = False
+            ctx.pending_question = None
+            ctx.is_running = True
+            ctx.active_snapshot = TurnSnapshot(turn_id=turn_id, model=ctx.model)
             self._auth_required_detected = False
-            self.is_running = True
 
             await self.broadcast(
                 {
-                    "type": "status",
+                    "type": "session_status",
+                    "conversation_id": cid,
                     "state": "running",
-                    "detail": f"Running ({self.config.model})",
+                    "detail": f"Running ({ctx.model})",
+                }
+            )
+            await self.broadcast(
+                {
+                    "type": "status",
+                    "conversation_id": cid,
+                    "state": "running",
+                    "detail": f"Running ({ctx.model})",
                 }
             )
             await self.broadcast(
                 {
                     "type": "turn_start",
+                    "conversation_id": cid,
                     "turn_id": turn_id,
-                    "conversation_id": self.config.conversation_id,
-                    "model": self.config.model,
+                    "model": ctx.model,
                 }
             )
 
@@ -2666,43 +2851,48 @@ class AgyProcessOrchestrator:
                 token_file = GEMINI_DIR / "antigravity-oauth-token"
                 if not token_file.exists():
                     logger.info("No token file found. Proactively initiating Google login...")
-                    await self.trigger_in_app_login(turn_id, original_prompt=prompt, original_attachments=attachments)
+                    await self.trigger_in_app_login(turn_id, conversation_id=cid, original_prompt=prompt, original_attachments=attachments)
                     return
 
                 # Spawn `agy` with `--output-format stream-json --dangerously-skip-permissions`
-                cmd = self.build_cli_args(prompt=prompt, use_persistent_stdio=False)
-                logger.info("Spawning agy: %s", " ".join(cmd[:8]) + " ...")
+                cmd = self.build_cli_args(ctx, prompt=prompt, use_persistent_stdio=False)
+                logger.info("Spawning agy for [%s]: %s", cid[:8], " ".join(cmd[:8]) + " ...")
 
                 proc_env = dict(os.environ)
                 proc_env["AGY_AUTO_UPDATE"] = "1"
                 proc_env["GIT_SSH_COMMAND"] = f"{USR_DIR}/bin/ssh -F {SSH_DIR}/config"
                 proc_env["AGY_WEB_PORT"] = str(PORT)
+                proc_env["AGY_CONVERSATION_ID"] = cid
+                proc_env["AGY_TURN_ID"] = turn_id
                 active_api_keys = get_active_api_keys()
                 for ak_k, ak_v in active_api_keys.items():
                     if ak_k not in PROTECTED_ENV_NAMES:
                         proc_env[ak_k] = ak_v
 
-                self.active_proc = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdin=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    cwd=self.config.workspace if Path(self.config.workspace).is_dir() else str(HOME_DIR),
-                    env=proc_env,
-                    limit=16 * 1024 * 1024,  # 16 MiB line buffer for large tool outputs
-                )
+                # ARGON-V14-14: brief auth lock during spawn to prevent token race
+                async with self._global_auth_lock:
+                    ctx.active_proc = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdin=asyncio.subprocess.PIPE,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        cwd=ctx.workspace if Path(ctx.workspace).is_dir() else str(HOME_DIR),
+                        env=proc_env,
+                        limit=16 * 1024 * 1024,  # 16 MiB line buffer for large tool outputs
+                        start_new_session=True,  # setsid for process group isolation (ARGON-V14-09)
+                    )
 
                 # Read stdout and stderr concurrently
                 stdout_task = asyncio.create_task(
-                    self._consume_stdout_stream(turn_id, usage_summary)
+                    self._consume_stdout_stream(ctx, turn_id, usage_summary)
                 )
-                stderr_task = asyncio.create_task(self._consume_stderr_stream(turn_id))
+                stderr_task = asyncio.create_task(self._consume_stderr_stream(ctx, turn_id))
 
                 emitted_any_content = await stdout_task
                 stderr_text = await stderr_task
-                return_code = await self.active_proc.wait()
+                return_code = await ctx.active_proc.wait()
 
-                was_interrupted = self._interrupted or return_code in (
+                was_interrupted = ctx.interrupted or return_code in (
                     -signal.SIGINT,
                     -signal.SIGTERM,
                     130,  # 128 + SIGINT
@@ -2731,7 +2921,7 @@ class AgyProcessOrchestrator:
                             token_file.unlink()
                         except Exception:
                             pass
-                    await self.trigger_in_app_login(turn_id, original_prompt=prompt, original_attachments=attachments)
+                    await self.trigger_in_app_login(turn_id, conversation_id=cid, original_prompt=prompt, original_attachments=attachments)
                     return
 
                 if was_interrupted:
@@ -2745,6 +2935,7 @@ class AgyProcessOrchestrator:
                         await self.broadcast(
                             {
                                 "type": "agent_token",
+                                "conversation_id": cid,
                                 "turn_id": turn_id,
                                 "delta": f"\n> **CLI Status ({return_code}):**\n```\n{cleaned_err[:2000]}\n```\n",
                             }
@@ -2756,30 +2947,44 @@ class AgyProcessOrchestrator:
                     status_str = "SUCCESS"
 
                 # If conversation_id was newly created, discover it from SQLite summaries
-                if not self.config.conversation_id:
+                if not ctx.conversation_id or ctx.conversation_id.startswith("session-"):
                     latest = self.storage.list_conversations(limit=1)
                     if latest:
-                        self.config.conversation_id = latest[0]["conversation_id"]
+                        old_cid = ctx.conversation_id
+                        discovered_cid = latest[0]["conversation_id"]
+                        if old_cid != discovered_cid:
+                            ctx.conversation_id = discovered_cid
+                            self._sessions[discovered_cid] = ctx
+                            self._sessions.pop(old_cid, None)
+                            cid = discovered_cid
 
                 # Accumulate session telemetry
-                self.config.total_input_tokens += usage_summary["input_tokens"]
-                self.config.total_output_tokens += usage_summary["output_tokens"]
-                self.config.total_thinking_tokens += usage_summary["thinking_tokens"]
-                self.config.turn_count += 1
+                ctx.total_input_tokens += usage_summary["input_tokens"]
+                ctx.total_output_tokens += usage_summary["output_tokens"]
+                ctx.total_thinking_tokens += usage_summary["thinking_tokens"]
+                ctx.turn_count += 1
 
                 await self.broadcast(
                     {
                         "type": "turn_complete",
+                        "conversation_id": cid,
                         "turn_id": turn_id,
-                        "conversation_id": self.config.conversation_id,
                         "usage": usage_summary,
                         "totals": {
-                            "input_tokens": self.config.total_input_tokens,
-                            "output_tokens": self.config.total_output_tokens,
-                            "thinking_tokens": self.config.total_thinking_tokens,
-                            "turns": self.config.turn_count,
+                            "input_tokens": ctx.total_input_tokens,
+                            "output_tokens": ctx.total_output_tokens,
+                            "thinking_tokens": ctx.total_thinking_tokens,
+                            "turns": ctx.turn_count,
                         },
                         "status": status_str,
+                    }
+                )
+                await self.broadcast(
+                    {
+                        "type": "session_status",
+                        "conversation_id": cid,
+                        "state": "idle",
+                        "detail": "Ready",
                     }
                 )
 
@@ -2795,17 +3000,26 @@ class AgyProcessOrchestrator:
                 await self.broadcast(
                     {
                         "type": "turn_complete",
+                        "conversation_id": cid,
                         "turn_id": turn_id,
-                        "conversation_id": self.config.conversation_id,
                         "usage": usage_summary,
                         "status": "INTERRUPTED",
                     }
                 )
+                await self.broadcast(
+                    {
+                        "type": "session_status",
+                        "conversation_id": cid,
+                        "state": "idle",
+                        "detail": "Interrupted",
+                    }
+                )
             except Exception as exc:
-                logger.exception("Error during agy turn execution")
+                logger.exception("Error during agy turn execution for [%s]", cid[:8])
                 await self.broadcast(
                     {
                         "type": "agent_token",
+                        "conversation_id": cid,
                         "turn_id": turn_id,
                         "delta": f"\n\n**Execution Error:** `{exc}`",
                     }
@@ -2813,21 +3027,50 @@ class AgyProcessOrchestrator:
                 await self.broadcast(
                     {
                         "type": "turn_complete",
+                        "conversation_id": cid,
                         "turn_id": turn_id,
-                        "conversation_id": self.config.conversation_id,
                         "usage": usage_summary,
                         "status": "ERROR",
                     }
                 )
+                await self.broadcast(
+                    {
+                        "type": "session_status",
+                        "conversation_id": cid,
+                        "state": "idle",
+                        "detail": "Error",
+                    }
+                )
             finally:
                 self._streamed_turn_ids.discard(turn_id)
-                self.active_proc = None
-                self.is_running = False
-                self._current_turn_id = None
+                ctx.active_proc = None
+                ctx.is_running = False
+                ctx.current_turn_id = None
+                ctx.active_snapshot = None
                 if not self.is_authenticating:
-                    await self.broadcast(
-                        {"type": "status", "state": "idle", "detail": "Ready"}
-                    )
+                    any_running = any(c.is_running for c in self._sessions.values())
+                    if not any_running:
+                        await self.broadcast(
+                            {"type": "status", "state": "idle", "detail": "Ready"}
+                        )
+                self._gc_idle_sessions()
+
+    _SESSION_IDLE_TTL = 30 * 60  # 30 minutes
+
+    def _gc_idle_sessions(self) -> None:
+        """Prune session contexts that have been idle beyond the TTL."""
+        now = time.time()
+        stale_cids = [
+            cid
+            for cid, ctx in self._sessions.items()
+            if not ctx.is_running
+            and cid != self.active_view_cid
+            and (now - ctx.last_activity) > self._SESSION_IDLE_TTL
+        ]
+        for cid in stale_cids:
+            self._sessions.pop(cid, None)
+        if stale_cids:
+            logger.info("GC'd %d idle session context(s): %s", len(stale_cids), [c[:8] for c in stale_cids])
 
     def _cleanup_auth(self) -> None:
         self.is_authenticating = False
@@ -3246,13 +3489,13 @@ class AgyProcessOrchestrator:
             self._cleanup_auth()
 
     async def _consume_stdout_stream(
-        self, turn_id: str, usage_summary: dict[str, int]
+        self, ctx: SessionExecutionContext, turn_id: str, usage_summary: dict[str, int]
     ) -> bool:
-        assert self.active_proc and self.active_proc.stdout
+        assert ctx.active_proc and ctx.active_proc.stdout
         emitted = False
 
         while True:
-            raw_line = await self.active_proc.stdout.readline()
+            raw_line = await ctx.active_proc.stdout.readline()
             if not raw_line:
                 break
 
@@ -3272,16 +3515,18 @@ class AgyProcessOrchestrator:
                 ):
                     logger.warning("Auth requirement detected in CLI stdout: %s", line)
                     self._auth_required_detected = True
-                    if self.active_proc and self.active_proc.returncode is None:
+                    if ctx.active_proc and ctx.active_proc.returncode is None:
                         try:
-                            self.active_proc.terminate()
+                            ctx.active_proc.terminate()
                         except Exception:
                             pass
                     return False
 
                 emitted = True
+                if ctx.active_snapshot:
+                    ctx.active_snapshot.raw_markdown += line + "\n"
                 await self.broadcast(
-                    {"type": "agent_token", "turn_id": turn_id, "delta": line + "\n"}
+                    {"type": "agent_token", "conversation_id": ctx.conversation_id, "turn_id": turn_id, "delta": line + "\n"}
                 )
                 continue
 
@@ -3289,21 +3534,23 @@ class AgyProcessOrchestrator:
                 event = json.loads(line)
             except json.JSONDecodeError:
                 emitted = True
+                if ctx.active_snapshot:
+                    ctx.active_snapshot.raw_markdown += line + "\n"
                 await self.broadcast(
-                    {"type": "agent_token", "turn_id": turn_id, "delta": line + "\n"}
+                    {"type": "agent_token", "conversation_id": ctx.conversation_id, "turn_id": turn_id, "delta": line + "\n"}
                 )
                 continue
 
-            if await self._demux_json_event(turn_id, event, usage_summary):
+            if await self._demux_json_event(ctx, turn_id, event, usage_summary):
                 emitted = True
 
         return emitted
 
-    async def _consume_stderr_stream(self, turn_id: str) -> str:
-        assert self.active_proc and self.active_proc.stderr
+    async def _consume_stderr_stream(self, ctx: SessionExecutionContext, turn_id: str) -> str:
+        assert ctx.active_proc and ctx.active_proc.stderr
         chunks: list[str] = []
         while True:
-            raw_line = await self.active_proc.stderr.readline()
+            raw_line = await ctx.active_proc.stderr.readline()
             if not raw_line:
                 break
             decoded = raw_line.decode("utf-8", errors="replace")
@@ -3322,9 +3569,9 @@ class AgyProcessOrchestrator:
                 logger.warning("Auth requirement detected in CLI stderr stream: %s", decoded.strip())
                 self._auth_required_detected = True
                 # Terminate the blocked CLI process immediately to prevent 60s timeout stall
-                if self.active_proc and self.active_proc.returncode is None:
+                if ctx.active_proc and ctx.active_proc.returncode is None:
                     try:
-                        self.active_proc.terminate()
+                        ctx.active_proc.terminate()
                     except Exception:
                         pass
                 break
@@ -3332,6 +3579,7 @@ class AgyProcessOrchestrator:
 
     async def _demux_json_event(
         self,
+        ctx: SessionExecutionContext,
         turn_id: str,
         event: dict[str, Any],
         usage_summary: dict[str, int],
@@ -3344,8 +3592,8 @@ class AgyProcessOrchestrator:
 
         # 1. Capture conversation_id if present in any frame
         conv_id = event.get("conversation_id") or event.get("session_id")
-        if isinstance(conv_id, str) and conv_id:
-            self.config.conversation_id = conv_id
+        if isinstance(conv_id, str) and conv_id and not ctx.conversation_id:
+            ctx.conversation_id = conv_id
 
         # 2. Extract token usage telemetry if present
         usage = event.get("usage") or (event.get("message") or {}).get("usage")
@@ -3360,8 +3608,8 @@ class AgyProcessOrchestrator:
         if etype == "step_update" and isinstance(event.get("step_update"), dict):
             su = event["step_update"]
             cid = su.get("conversation_id")
-            if cid:
-                self.config.conversation_id = cid
+            if cid and not ctx.conversation_id:
+                ctx.conversation_id = cid
 
             # Usage telemetry if in step_update
             su_usage = su.get("usage")
@@ -3375,8 +3623,10 @@ class AgyProcessOrchestrator:
             if isinstance(text_delta, str) and text_delta:
                 emitted = True
                 self._streamed_turn_ids.add(turn_id)
+                if ctx.active_snapshot:
+                    ctx.active_snapshot.raw_markdown += text_delta
                 await self.broadcast(
-                    {"type": "agent_token", "turn_id": turn_id, "delta": text_delta}
+                    {"type": "agent_token", "conversation_id": ctx.conversation_id, "turn_id": turn_id, "delta": text_delta}
                 )
 
             # Thinking delta (streaming reasoning tokens)
@@ -3388,8 +3638,10 @@ class AgyProcessOrchestrator:
             )
             if isinstance(thought_delta, str) and thought_delta:
                 emitted = True
+                if ctx.active_snapshot:
+                    ctx.active_snapshot.raw_thoughts += thought_delta
                 await self.broadcast(
-                    {"type": "agent_thought", "turn_id": turn_id, "delta": thought_delta}
+                    {"type": "agent_thought", "conversation_id": ctx.conversation_id, "turn_id": turn_id, "delta": thought_delta}
                 )
 
             # Tool call or execution
@@ -3406,15 +3658,28 @@ class AgyProcessOrchestrator:
                 t_status = "completed" if su.get("state") == "DONE" else "running"
                 t_out = tool_info.get("output") or tool_info.get("result") or su.get("output") or ""
                 emitted = True
+                tool_record = {
+                    "turn_id": turn_id,
+                    "tool_id": t_id,
+                    "name": t_name,
+                    "args": t_args,
+                    "status": t_status,
+                    "output": str(t_out)[:4000] if t_out else "",
+                }
+                if ctx.active_snapshot:
+                    found = False
+                    for idx_tc, tc_item in enumerate(ctx.active_snapshot.tool_calls):
+                        if tc_item.get("tool_id") == t_id:
+                            ctx.active_snapshot.tool_calls[idx_tc] = tool_record
+                            found = True
+                            break
+                    if not found:
+                        ctx.active_snapshot.tool_calls.append(tool_record)
                 await self.broadcast(
                     {
                         "type": "tool_call",
-                        "turn_id": turn_id,
-                        "tool_id": t_id,
-                        "name": t_name,
-                        "args": t_args,
-                        "status": t_status,
-                        "output": str(t_out)[:4000] if t_out else "",
+                        "conversation_id": ctx.conversation_id,
+                        **tool_record,
                     }
                 )
 
@@ -3424,8 +3689,8 @@ class AgyProcessOrchestrator:
         if etype == "result" and isinstance(event.get("result"), dict):
             res = event["result"]
             cid = res.get("conversation_id")
-            if cid:
-                self.config.conversation_id = cid
+            if cid and not ctx.conversation_id:
+                ctx.conversation_id = cid
 
             err_msg = str(res.get("error") or "")
             if res.get("status") == "ERROR" and (
@@ -3435,9 +3700,9 @@ class AgyProcessOrchestrator:
             ):
                 logger.warning("Auth failure detected in result event: %s", err_msg)
                 self._auth_required_detected = True
-                if self.active_proc and self.active_proc.returncode is None:
+                if ctx.active_proc and ctx.active_proc.returncode is None:
                     try:
-                        self.active_proc.terminate()
+                        ctx.active_proc.terminate()
                     except Exception:
                         pass
                 return False
@@ -3452,8 +3717,10 @@ class AgyProcessOrchestrator:
             final_resp = res.get("response")
             if turn_id not in self._streamed_turn_ids and isinstance(final_resp, str) and final_resp:
                 emitted = True
+                if ctx.active_snapshot:
+                    ctx.active_snapshot.raw_markdown += final_resp
                 await self.broadcast(
-                    {"type": "agent_token", "turn_id": turn_id, "delta": final_resp}
+                    {"type": "agent_token", "conversation_id": ctx.conversation_id, "turn_id": turn_id, "delta": final_resp}
                 )
             return emitted
 
@@ -3463,9 +3730,9 @@ class AgyProcessOrchestrator:
             if "auth" in err_str.lower() or "log in" in err_str.lower() or "token" in err_str.lower():
                 logger.warning("Auth failure detected in error event: %s", err_str)
                 self._auth_required_detected = True
-                if self.active_proc and self.active_proc.returncode is None:
+                if ctx.active_proc and ctx.active_proc.returncode is None:
                     try:
-                        self.active_proc.terminate()
+                        ctx.active_proc.terminate()
                     except Exception:
                         pass
                 return False
@@ -3473,8 +3740,8 @@ class AgyProcessOrchestrator:
         # 5. Handle Antigravity Native "init" event
         if etype == "init":
             cid = event.get("conversation_id")
-            if cid:
-                self.config.conversation_id = cid
+            if cid and not ctx.conversation_id:
+                ctx.conversation_id = cid
             return emitted
 
         # 6. Handle Anthropic/Gemini style content_block_delta events
@@ -3485,15 +3752,19 @@ class AgyProcessOrchestrator:
                 text = delta.get("thinking") or delta.get("text") or ""
                 if text:
                     emitted = True
+                    if ctx.active_snapshot:
+                        ctx.active_snapshot.raw_thoughts += text
                     await self.broadcast(
-                        {"type": "agent_thought", "turn_id": turn_id, "delta": text}
+                        {"type": "agent_thought", "conversation_id": ctx.conversation_id, "turn_id": turn_id, "delta": text}
                     )
                 return emitted
             text = delta.get("text") or ""
             if text:
                 emitted = True
+                if ctx.active_snapshot:
+                    ctx.active_snapshot.raw_markdown += text
                 await self.broadcast(
-                    {"type": "agent_token", "turn_id": turn_id, "delta": text}
+                    {"type": "agent_token", "conversation_id": ctx.conversation_id, "turn_id": turn_id, "delta": text}
                 )
             return emitted
 
@@ -3510,8 +3781,10 @@ class AgyProcessOrchestrator:
             )
             if isinstance(thought_delta, str) and thought_delta:
                 emitted = True
+                if ctx.active_snapshot:
+                    ctx.active_snapshot.raw_thoughts += thought_delta
                 await self.broadcast(
-                    {"type": "agent_thought", "turn_id": turn_id, "delta": thought_delta}
+                    {"type": "agent_thought", "conversation_id": ctx.conversation_id, "turn_id": turn_id, "delta": thought_delta}
                 )
             return emitted
 
@@ -3535,20 +3808,33 @@ class AgyProcessOrchestrator:
             t_status = "completed" if (etype == "tool_result" or t_out) else "running"
 
             emitted = True
+            tool_record = {
+                "turn_id": turn_id,
+                "tool_id": t_id,
+                "name": t_name,
+                "args": t_args,
+                "status": t_status,
+                "output": str(t_out)[:4000] if t_out else "",
+            }
+            if ctx.active_snapshot:
+                found = False
+                for idx_tc, tc_item in enumerate(ctx.active_snapshot.tool_calls):
+                    if tc_item.get("tool_id") == t_id:
+                        ctx.active_snapshot.tool_calls[idx_tc] = tool_record
+                        found = True
+                        break
+                if not found:
+                    ctx.active_snapshot.tool_calls.append(tool_record)
             await self.broadcast(
                 {
                     "type": "tool_call",
-                    "turn_id": turn_id,
-                    "tool_id": t_id,
-                    "name": t_name,
-                    "args": t_args,
-                    "status": t_status,
-                    "output": str(t_out)[:4000] if t_out else "",
+                    "conversation_id": ctx.conversation_id,
+                    **tool_record,
                 }
             )
             return emitted
 
-        # 6. Handle structured assistant message envelope (`{"type": "assistant", "message": ...}`)
+        # 6. Handle structured assistant message envelope
         if etype == "assistant" and isinstance(event.get("message"), dict):
             msg = event["message"]
             content_list = msg.get("content")
@@ -3559,45 +3845,59 @@ class AgyProcessOrchestrator:
                     btype = block.get("type")
                     if btype in ("thinking", "thought") and block.get("thinking"):
                         emitted = True
+                        if ctx.active_snapshot:
+                            ctx.active_snapshot.raw_thoughts += block["thinking"]
                         await self.broadcast(
                             {
                                 "type": "agent_thought",
+                                "conversation_id": ctx.conversation_id,
                                 "turn_id": turn_id,
                                 "delta": block["thinking"],
                             }
                         )
                     elif btype == "tool_use":
                         emitted = True
+                        t_rec = {
+                            "turn_id": turn_id,
+                            "tool_id": block.get("id") or f"tc-{uuid.uuid4().hex[:6]}",
+                            "name": block.get("name") or "tool",
+                            "args": block.get("input") or {},
+                            "status": "running",
+                            "output": "",
+                        }
+                        if ctx.active_snapshot:
+                            ctx.active_snapshot.tool_calls.append(t_rec)
                         await self.broadcast(
                             {
                                 "type": "tool_call",
-                                "turn_id": turn_id,
-                                "tool_id": block.get("id") or f"tc-{uuid.uuid4().hex[:6]}",
-                                "name": block.get("name") or "tool",
-                                "args": block.get("input") or {},
-                                "status": "running",
-                                "output": "",
+                                "conversation_id": ctx.conversation_id,
+                                **t_rec,
                             }
                         )
                     elif btype == "text" and block.get("text"):
                         emitted = True
+                        if ctx.active_snapshot:
+                            ctx.active_snapshot.raw_markdown += block["text"]
                         await self.broadcast(
                             {
                                 "type": "agent_token",
+                                "conversation_id": ctx.conversation_id,
                                 "turn_id": turn_id,
                                 "delta": block["text"],
                             }
                         )
                 return emitted
 
-        # 7. Handle single-shot `--print` / final result JSON (`{"conversation_id": ..., "status": "SUCCESS", "response": ...}`)
+        # 7. Handle single-shot `--print` / final result JSON
         if isinstance(event.get("response"), str) and event["response"]:
-            # Only emit final `response` if tokens weren't already incrementally streamed
             if turn_id not in self._streamed_turn_ids:
                 emitted = True
+                if ctx.active_snapshot:
+                    ctx.active_snapshot.raw_markdown += event["response"]
                 await self.broadcast(
                     {
                         "type": "agent_token",
+                        "conversation_id": ctx.conversation_id,
                         "turn_id": turn_id,
                         "delta": event["response"],
                     }
@@ -3609,26 +3909,49 @@ class AgyProcessOrchestrator:
             val = event.get(key)
             if isinstance(val, str) and val:
                 emitted = True
+                if ctx.active_snapshot:
+                    ctx.active_snapshot.raw_markdown += val
                 await self.broadcast(
-                    {"type": "agent_token", "turn_id": turn_id, "delta": val}
+                    {"type": "agent_token", "conversation_id": ctx.conversation_id, "turn_id": turn_id, "delta": val}
                 )
                 return emitted
 
         return emitted
 
-    async def abort_current_turn(self) -> bool:
-        self._interrupted = True
-        if self.active_proc and self.active_proc.returncode is None:
-            logger.info("Sending SIGINT to active agy process (PID %s)", self.active_proc.pid)
+    async def abort_turn(self, conversation_id: Optional[str] = None) -> bool:
+        target_cid = conversation_id or self.active_view_cid
+        if not target_cid or target_cid not in self._sessions:
+            for c in self._sessions.values():
+                if c.is_running and c.active_proc:
+                    target_cid = c.conversation_id
+                    break
+        if not target_cid or target_cid not in self._sessions:
+            return False
+
+        ctx = self._sessions[target_cid]
+        proc = ctx.active_proc
+        if not proc or proc.returncode is not None:
+            return False
+
+        ctx.interrupted = True
+        pgid = proc.pid
+        logger.info("Sending SIGINT to session [%s] process group (PGID %s)", target_cid[:8], pgid)
+        try:
+            os.killpg(pgid, signal.SIGINT)
+        except ProcessLookupError:
+            return True
+
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=2.0)
+        except asyncio.TimeoutError:
             try:
-                self.active_proc.send_signal(signal.SIGINT)
-                await asyncio.sleep(0.3)
-                if self.active_proc and self.active_proc.returncode is None:
-                    self.active_proc.terminate()
-                return True
+                os.killpg(pgid, signal.SIGKILL)
             except ProcessLookupError:
-                return False
-        return False
+                pass
+        return True
+
+    async def abort_current_turn(self, conversation_id: Optional[str] = None) -> bool:
+        return await self.abort_turn(conversation_id)
 
 
 # ---------------------------------------------------------------------------
@@ -3892,18 +4215,45 @@ class AgyWebServer:
         loop = asyncio.get_running_loop()
         future = loop.create_future()
 
+        cid = str(payload.get("conversation_id") or "").strip()
+        if not cid:
+            cid = self.orchestrator.active_view_cid or ""
+        if not cid:
+            for s in self.orchestrator._sessions.values():
+                if s.is_running:
+                    cid = s.conversation_id
+                    break
+
         self._pending_questions[question_id] = {
             "future": future,
-            "session_id": self.orchestrator.config.conversation_id,
+            "conversation_id": cid,
+            "session_id": cid,
             "created_at": int(time.time()),
             "questions": normalized_questions,
             "tool_action": tool_action,
             "tool_summary": tool_summary,
         }
 
-        # Broadcast WebSocket frame to all connected mobile clients
+        if cid in self.orchestrator._sessions:
+            ctx = self.orchestrator._sessions[cid]
+            ctx.waiting_input = True
+            ctx.pending_question = {
+                "question_id": question_id,
+                "tool_action": tool_action,
+                "tool_summary": tool_summary,
+                "questions": normalized_questions,
+            }
+            await self.broadcast({
+                "type": "session_status",
+                "conversation_id": cid,
+                "state": "waiting_input",
+                "detail": "Needs input",
+            })
+
+        # Broadcast WebSocket frame to all connected mobile clients with conversation_id
         await self.broadcast({
             "type": "ask_question",
+            "conversation_id": cid,
             "question_id": question_id,
             "created_at": int(time.time()),
             "tool_action": tool_action,
@@ -3924,16 +4274,26 @@ class AgyWebServer:
             }
             await self.broadcast({
                 "type": "dismiss_question",
+                "conversation_id": cid,
                 "question_id": question_id,
                 "reason": "timeout",
             })
+            if cid in self.orchestrator._sessions:
+                s = self.orchestrator._sessions[cid]
+                s.waiting_input = False
+                s.pending_question = None
             return timeout_res
         except asyncio.CancelledError:
             await self.broadcast({
                 "type": "dismiss_question",
+                "conversation_id": cid,
                 "question_id": question_id,
                 "reason": "client_disconnected",
             })
+            if cid in self.orchestrator._sessions:
+                s = self.orchestrator._sessions[cid]
+                s.waiting_input = False
+                s.pending_question = None
             raise
         finally:
             self._pending_questions.pop(question_id, None)
@@ -3947,6 +4307,19 @@ class AgyWebServer:
         future: Optional[asyncio.Future] = entry.get("future")
         if not future or future.done():
             return {"error": "Question already completed", "status": "gone"}
+
+        cid = entry.get("conversation_id", "")
+        if cid and cid in self.orchestrator._sessions:
+            ctx = self.orchestrator._sessions[cid]
+            ctx.waiting_input = False
+            ctx.pending_question = None
+            if ctx.is_running:
+                await self.broadcast({
+                    "type": "session_status",
+                    "conversation_id": cid,
+                    "state": "running",
+                    "detail": f"Running ({ctx.model})",
+                })
 
         skipped = bool(payload.get("skipped", False))
         if skipped:
@@ -4009,15 +4382,19 @@ class AgyWebServer:
         future.set_result(res)
         await self.broadcast({
             "type": "dismiss_question",
+            "conversation_id": cid,
             "question_id": question_id,
             "reason": "skipped" if skipped else "answered",
         })
         return {"status": "ok", "message": "Question response accepted"}
 
-    async def _cancel_all_pending_questions(self, reason: str = "user_aborted") -> None:
+    async def _cancel_all_pending_questions(self, conversation_id: Optional[str] = None, reason: str = "user_aborted") -> None:
         if not self._pending_questions:
             return
         for qid, qentry in list(self._pending_questions.items()):
+            q_cid = qentry.get("conversation_id")
+            if conversation_id and q_cid and q_cid != conversation_id:
+                continue
             fut = qentry.get("future")
             if fut and not fut.done():
                 fut.set_result({
@@ -4029,10 +4406,15 @@ class AgyWebServer:
                 })
             await self.broadcast({
                 "type": "dismiss_question",
+                "conversation_id": q_cid,
                 "question_id": qid,
                 "reason": reason,
             })
-        self._pending_questions.clear()
+            if q_cid and q_cid in self.orchestrator._sessions:
+                s = self.orchestrator._sessions[q_cid]
+                s.waiting_input = False
+                s.pending_question = None
+            self._pending_questions.pop(qid, None)
 
     async def discover_models(self) -> list[dict[str, Any]]:
         models: list[dict[str, Any]] = []
@@ -4579,6 +4961,8 @@ class AgyWebServer:
                         json.dumps(
                             {
                                 "type": "ask_question",
+                                "conversation_id": qentry.get("conversation_id"),
+                                "turn_id": qentry.get("turn_id"),
                                 "question_id": qid,
                                 "created_at": qentry.get("created_at", int(time.time())),
                                 "tool_action": qentry.get("tool_action", ""),
@@ -5238,6 +5622,7 @@ class AgyWebServer:
             return
 
         if mtype == "user_prompt":
+            cid = str(data.get("conversation_id") or self.orchestrator.active_view_cid or "").strip()
             raw_prompt = str(data.get("prompt") or "").strip()
             if self.orchestrator.is_authenticating and raw_prompt:
                 asyncio.create_task(self.orchestrator.submit_auth_code(raw_prompt))
@@ -5283,17 +5668,18 @@ class AgyWebServer:
             if not prompt:
                 return
 
-            # Update session config if sent with prompt
+            # Update session execution context if sent with prompt
+            ctx = self.orchestrator.get_or_create_context(cid)
             if data.get("model"):
-                self.orchestrator.config.model = str(data["model"])
+                ctx.model = str(data["model"])
             if data.get("mode"):
                 chosen_mode = str(data["mode"])
                 if chosen_mode in ("default", "accept-edits", "plan"):
-                    self.orchestrator.config.mode = chosen_mode
+                    ctx.mode = chosen_mode
                 elif chosen_mode in ("auto", "standard"):
-                    self.orchestrator.config.mode = "default"
+                    ctx.mode = "default"
             if data.get("effort") in VALID_EFFORTS:
-                self.orchestrator.config.effort = str(data["effort"])
+                ctx.effort = str(data["effort"])
 
             # Check if prompt is a built-in slash command (only if no attachments)
             if not saved_attachments and prompt.startswith("/"):
@@ -5306,21 +5692,37 @@ class AgyWebServer:
             asyncio.create_task(
                 self.orchestrator.execute_turn(
                     prompt,
+                    conversation_id=ctx.conversation_id,
                     attachments=saved_attachments,
+                    model=ctx.model,
+                    mode=ctx.mode,
+                    effort=ctx.effort,
                 )
             )
             return
 
         if mtype == "abort_generation":
-            stopped = await self.orchestrator.abort_current_turn()
-            await self._cancel_all_pending_questions(reason="user_aborted")
+            cid = str(data.get("conversation_id") or self.orchestrator.active_view_cid or "").strip()
+            stopped = await self.orchestrator.abort_turn(conversation_id=cid)
+            await self._cancel_all_pending_questions(conversation_id=cid, reason="user_aborted")
             await self.broadcast(
                 {
-                    "type": "status",
+                    "type": "session_status",
+                    "conversation_id": cid,
                     "state": "idle",
                     "detail": "Interrupted" if stopped else "Ready",
                 }
             )
+            any_running = any(c.is_running for c in self.orchestrator._sessions.values())
+            if not any_running:
+                await self.broadcast(
+                    {
+                        "type": "status",
+                        "conversation_id": cid,
+                        "state": "idle",
+                        "detail": "Interrupted" if stopped else "Ready",
+                    }
+                )
             return
 
         if mtype == "list_sessions":
@@ -5335,22 +5737,23 @@ class AgyWebServer:
             cid = str(data.get("conversation_id") or "").strip()
             if not cid:
                 return
-            await self._cancel_all_pending_questions(reason="session_changed")
-            self.orchestrator.config.conversation_id = cid
+            self.orchestrator.active_view_cid = cid
             meta = self.storage.get_conversation_meta(cid)
+            ws = self.default_workspace
             if meta.get("workspaces"):
                 ws_candidate = meta["workspaces"][0]
                 if Path(ws_candidate).is_dir():
-                    self.orchestrator.config.workspace = ws_candidate
+                    ws = ws_candidate
+            ctx = self.orchestrator.get_or_create_context(cid, workspace=ws)
             history = self.storage.load_transcript(cid)
-            branch = get_git_branch(self.orchestrator.config.workspace)
+            branch = get_git_branch(ctx.workspace)
             await self.broadcast(
                 {
                     "type": "session_history",
                     "conversation_id": cid,
-                    "title": meta["title"],
+                    "title": meta.get("title") or "Conversation",
                     "meta": meta,
-                    "workspace": self.orchestrator.config.workspace,
+                    "workspace": ctx.workspace,
                     "git_branch": branch,
                     "messages": history,
                 }
@@ -5358,12 +5761,13 @@ class AgyWebServer:
             await self.broadcast(
                 {
                     "type": "config_updated",
+                    "conversation_id": cid,
                     "config": {
-                        "conversation_id": self.orchestrator.config.conversation_id,
-                        "model": self.orchestrator.config.model,
-                        "mode": self.orchestrator.config.mode,
-                        "effort": self.orchestrator.config.effort,
-                        "workspace": self.orchestrator.config.workspace,
+                        "conversation_id": cid,
+                        "model": ctx.model,
+                        "mode": ctx.mode,
+                        "effort": ctx.effort,
+                        "workspace": ctx.workspace,
                         "git_branch": branch,
                     },
                 }
@@ -5371,18 +5775,18 @@ class AgyWebServer:
             return
 
         if mtype == "new_session":
-            await self._cancel_all_pending_questions(reason="session_changed")
-            self.orchestrator.config.conversation_id = None
-            self.orchestrator.config.total_input_tokens = 0
-            self.orchestrator.config.total_output_tokens = 0
-            self.orchestrator.config.total_thinking_tokens = 0
-            self.orchestrator.config.turn_count = 0
-            self.orchestrator.config.workspace = self.default_workspace
+            new_cid = f"session-{uuid.uuid4().hex[:12]}"
+            self.orchestrator.active_view_cid = new_cid
+            ctx = self.orchestrator.get_or_create_context(new_cid, workspace=self.default_workspace)
+            ctx.total_input_tokens = 0
+            ctx.total_output_tokens = 0
+            ctx.total_thinking_tokens = 0
+            ctx.turn_count = 0
             branch = get_git_branch(self.default_workspace)
             await self.broadcast(
                 {
                     "type": "session_history",
-                    "conversation_id": None,
+                    "conversation_id": new_cid,
                     "title": "New Conversation",
                     "meta": {"workspaces": [self.default_workspace]},
                     "workspace": self.default_workspace,
@@ -5393,11 +5797,12 @@ class AgyWebServer:
             await self.broadcast(
                 {
                     "type": "config_updated",
+                    "conversation_id": new_cid,
                     "config": {
-                        "conversation_id": None,
-                        "model": self.orchestrator.config.model,
-                        "mode": self.orchestrator.config.mode,
-                        "effort": self.orchestrator.config.effort,
+                        "conversation_id": new_cid,
+                        "model": ctx.model,
+                        "mode": ctx.mode,
+                        "effort": ctx.effort,
                         "workspace": self.default_workspace,
                         "git_branch": branch,
                     },

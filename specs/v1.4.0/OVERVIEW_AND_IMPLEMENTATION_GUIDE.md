@@ -145,7 +145,7 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
 ## 6. Command-Verified Acceptance Criteria Checklist
 
 ### Phase 1: Server-Side Multi-Session Concurrency
-- [ ] **AC-1.1: `SessionExecutionContext` Data Model & Registry**
+- [x] **AC-1.1: `SessionExecutionContext` Data Model & Registry**
   - Implement `SessionExecutionContext` dataclass and `self._sessions: dict[str, SessionExecutionContext]` in `AgyProcessOrchestrator` in `server.py`.
   - **Verification Gate**:
     ```bash
@@ -160,7 +160,7 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
     '
     ```
 
-- [ ] **AC-1.2: Per-Session Lock & Elimination of Global `_turn_lock`**
+- [x] **AC-1.2: Per-Session Lock & Elimination of Global `_turn_lock`**
   - Verify each session executes under its own lock, and `execute_turn` does not use a single global lock.
   - **Verification Gate**:
     ```bash
@@ -171,7 +171,7 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
     '
     ```
 
-- [ ] **AC-1.3: Mandatory `conversation_id` in All Streaming Frames**
+- [x] **AC-1.3: Mandatory `conversation_id` in All Streaming Frames**
   - Verify `turn_start`, `agent_token`, `agent_thought`, `tool_call`, and `turn_complete` include `conversation_id`.
   - **Verification Gate**:
     ```bash
@@ -184,7 +184,7 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
     '
     ```
 
-- [ ] **AC-1.4: Targeted Abort Routing & Process Group Isolation**
+- [x] **AC-1.4: Targeted Abort Routing & Process Group Isolation**
   - Verify `abort_generation` accepts `conversation_id` and uses `os.killpg` on process groups spawned with `start_new_session=True`.
   - **Verification Gate**:
     ```bash
@@ -196,7 +196,7 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
     '
     ```
 
-- [ ] **AC-1.5: SQLite WAL Mode & Workspace Collision Guard**
+- [x] **AC-1.5: SQLite WAL Mode & Workspace Collision Guard**
   - Verify `PRAGMA journal_mode=WAL;` and workspace mutex guards in `AgyProcessOrchestrator.execute_turn()`.
   - **Verification Gate**:
     ```bash
@@ -209,7 +209,7 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
     '
     ```
 
-- [ ] **AC-1.6: Interactive Question (`ask_question.py`) Session Context**
+- [x] **AC-1.6: Interactive Question (`ask_question.py`) Session Context**
   - Verify `AGY_CONVERSATION_ID` is injected into subprocess env and `ask_question.py` transmits `conversation_id`.
   - **Verification Gate**:
     ```bash
@@ -223,14 +223,14 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
     ```
 
 ### Phase 2: Frontend Virtual Session Store & Viewport Isolation
-- [ ] **AC-2.1: `sessionBuffers` Map in `index.html`**
+- [x] **AC-2.1: `sessionBuffers` Map in `index.html`**
   - Verify `sessionBuffers` store is initialized in `index.html` with virtual state isolation.
   - **Verification Gate**:
     ```bash
     grep -q 'sessionBuffers' agy-ui/index.html && echo "AC-2.1 PASSED"
     ```
 
-- [ ] **AC-2.2: Strict Viewport Demultiplexing by `conversation_id`**
+- [x] **AC-2.2: Strict Viewport Demultiplexing by `conversation_id`**
   - Verify token and thought append functions check `msg.conversation_id === state.conversationId` before modifying DOM.
   - **Verification Gate**:
     ```bash
@@ -242,7 +242,7 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
     '
     ```
 
-- [ ] **AC-2.3: Deterministic 2-Phase Session Switch & In-Flight Re-Mounting**
+- [x] **AC-2.3: Deterministic 2-Phase Session Switch & In-Flight Re-Mounting**
   - Verify switching sessions defers `remountActiveTurnCard` until after `renderFullHistory` completes in `case 'session_history'`.
   - **Verification Gate**:
     ```bash
@@ -253,7 +253,7 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
     '
     ```
 
-- [ ] **AC-2.4: String-Only Background Token Buffering**
+- [x] **AC-2.4: String-Only Background Token Buffering**
   - Verify off-screen streaming tokens perform string accumulation only without calling Markdown renderer or touching DOM.
   - **Verification Gate**:
     ```bash
@@ -265,7 +265,7 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
     ```
 
 ### Phase 3: Sidebar Branding, Indicators & Deduplication
-- [ ] **AC-3.1: Sidebar Header Branding**
+- [x] **AC-3.1: Sidebar Header Branding**
   - Verify "Conversations" header is replaced with `/icon-192.png` and "Antigravity Studio" in `index.html`.
   - **Verification Gate**:
     ```bash
@@ -278,14 +278,14 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
     '
     ```
 
-- [ ] **AC-3.2: Pulsing Working Indicator in Session Cards**
+- [x] **AC-3.2: Pulsing Working Indicator in Session Cards**
   - Verify running sessions show a pulsing working indicator in the drawer card list.
   - **Verification Gate**:
     ```bash
     grep -q 'session-indicator-working' agy-ui/index.html || grep -q 'session-working-dot' agy-ui/index.html && echo "AC-3.2 PASSED"
     ```
 
-- [ ] **AC-3.3: Unread New Response & Needs Input Badges**
+- [x] **AC-3.3: Unread New Response & Needs Input Badges**
   - Verify completed background turns display an unread "New" badge, questions show "Needs Input", and clear on view.
   - **Verification Gate**:
     ```bash
@@ -297,7 +297,7 @@ To ensure seamless multi-agent pair programming and eliminate state fragmentatio
     '
     ```
 
-- [ ] **AC-3.4: Markdown-Aware Title & Preview Deduplication**
+- [x] **AC-3.4: Markdown-Aware Title & Preview Deduplication**
   - Verify `computeSessionPreview()` strips markdown syntax and suppresses duplicate preview rows.
   - **Verification Gate**:
     ```bash

@@ -3,13 +3,13 @@
 ## 1. Quick-Resume State Header
 > **Autonomous Agent Handoff Protocol**: Any agent picking up this task MUST read this header first. Do not proceed until `LAST_COMPLETED_CRITERION` verification is confirmed and start immediately on `NEXT_PENDING_CRITERION`.
 
-- **Current Phase**: ARGON_AUDIT_VERIFIED
-- **Last Completed Criterion**: `ARGON-AUDIT-V14` (Gemini 4 Argon Architectural Review & Hardening completed)
-- **Next Pending Criterion**: `AC-1.1` (`SessionExecutionContext` Data Model & Registry)
-- **Build Status**: SPECIFICATIONS_HARDENED (All 18 Argon mitigations integrated)
-- **Active Branch**: `master` (targeting `v1.4.0`)
+- **Current Phase**: IMPLEMENTATION_VERIFIED
+- **Last Completed Criterion**: `AC-3.4` (All 14 Acceptance Criteria Verified & Passing)
+- **Next Pending Criterion**: `USER_REVIEW_AND_BUILD` (Awaiting user command to commit or build APK)
+- **Build Status**: VERIFIED_READY (Python syntax clean, HTML/JS clean, all 14 AC gates exit 0)
+- **Active Branch**: `v1.4.0`
 - **Active Blockers / Deviations**: None
-- **Last Updated**: 2026-10-22T08:55:00Z
+- **Last Updated**: 2026-10-22T09:55:00Z
 
 ---
 
@@ -17,24 +17,24 @@
 <!-- Agent updates [ ] to [x] ONLY after the specific Verification Gate command exits 0 -->
 
 ### Phase 1: Server-Side Multi-Session Concurrency
-- [ ] AC-1.1: `SessionExecutionContext` Data Model & Registry
-- [ ] AC-1.2: Per-Session Lock & Elimination of Global `_turn_lock`
-- [ ] AC-1.3: Mandatory `conversation_id` in All Streaming Frames
-- [ ] AC-1.4: Targeted Abort Routing & Process Group Isolation
-- [ ] AC-1.5: SQLite WAL Mode & Workspace Collision Guard
-- [ ] AC-1.6: Interactive Question (`ask_question.py`) Session Context
+- [x] AC-1.1: `SessionExecutionContext` Data Model & Registry
+- [x] AC-1.2: Per-Session Lock & Elimination of Global `_turn_lock`
+- [x] AC-1.3: Mandatory `conversation_id` in All Streaming Frames
+- [x] AC-1.4: Targeted Abort Routing & Process Group Isolation
+- [x] AC-1.5: SQLite WAL Mode & Workspace Collision Guard
+- [x] AC-1.6: Interactive Question (`ask_question.py`) Session Context
 
 ### Phase 2: Frontend Virtual Session Store & Viewport Isolation
-- [ ] AC-2.1: `sessionBuffers` Map in `index.html`
-- [ ] AC-2.2: Strict Viewport Demultiplexing by `conversation_id`
-- [ ] AC-2.3: Deterministic 2-Phase Session Switch & In-Flight Re-Mounting
-- [ ] AC-2.4: String-Only Background Token Buffering
+- [x] AC-2.1: `sessionBuffers` Map in `index.html`
+- [x] AC-2.2: Strict Viewport Demultiplexing by `conversation_id`
+- [x] AC-2.3: Deterministic 2-Phase Session Switch & In-Flight Re-Mounting
+- [x] AC-2.4: String-Only Background Token Buffering
 
 ### Phase 3: Sidebar Branding, Indicators & Deduplication
-- [ ] AC-3.1: Sidebar Header Branding (Logo + "Antigravity Studio")
-- [ ] AC-3.2: Pulsing Working Indicator in Session Cards
-- [ ] AC-3.3: Unread New Response & Needs Input Badges
-- [ ] AC-3.4: Markdown-Aware Title & Preview Deduplication
+- [x] AC-3.1: Sidebar Header Branding (Logo + "Antigravity Studio")
+- [x] AC-3.2: Pulsing Working Indicator in Session Cards
+- [x] AC-3.3: Unread New Response & Needs Input Badges
+- [x] AC-3.4: Markdown-Aware Title & Preview Deduplication
 
 ---
 
@@ -43,7 +43,7 @@
 ### Milestone v1.4.0-SPEC — Architectural Specifications & Roadmap Formalization
 - **Status**: COMPLETED
 - **Timestamp**: 2026-10-22T08:45:00Z
-- **Branch**: `master`
+- **Branch**: `v1.4.0`
 - **Files Created**:
   - `specs/v1.4.0/01-multi-session-concurrency-and-process-orchestrator.md`
   - `specs/v1.4.0/02-frontend-session-state-and-virtual-buffers.md`
@@ -67,4 +67,19 @@
   8. **ARGON-V14-16 (Dynamic Mobile RAM Guard)**: Added `/proc/meminfo` `MemAvailable >= 750 MB` check before spawning a 2nd concurrent session.
   9. **ARGON-V14-17 (Off-Screen CPU/Battery Throttling)**: Mandated string-only concatenation for background sessions with zero off-screen Markdown parsing or DOM construction.
   10. **ARGON-V14-18 (Markdown-Aware Dedup)**: Added `stripMarkdownSyntax()` prior to title/preview comparison.
-- **Handoff Notes**: All 18 mitigations are codified into the spec documents. All 11 acceptance criteria verification gates are defined. Ready to begin Phase 1 implementation.
+
+### Milestone v1.4.0-IMPL — Full Multi-Session Implementation & AC Verification
+- **Status**: COMPLETED
+- **Timestamp**: 2026-10-22T09:55:00Z
+- **Branch**: `v1.4.0`
+- **Files Modified**:
+  - `agy-ui/server.py`
+  - `agy-ui/ask_question.py`
+  - `agy-ui/index.html`
+  - `specs/v1.4.0/OVERVIEW_AND_IMPLEMENTATION_GUIDE.md`
+  - `specs/v1.4.0/IMPLEMENTATION_LOG.md`
+- **Summary of Changes**:
+  - Server: Replaced singleton process/config architecture with `self._sessions: dict[str, SessionExecutionContext]`. Subprocesses spawn isolated with `start_new_session=True` (`setsid`) and targeted `os.killpg(pgid, sig)`. Workspace mutex and mobile RAM throttling guarded. SQLite WAL mode active. All streaming frames tagged with `conversation_id`.
+  - Client: Decoupled active viewport DOM from background virtual states with `sessionBuffers: Map<cid, SessionVirtualState>`. Deterministic 2-phase session switch preserves draft prompts/attachments and defers in-flight turn re-mount until after canonical history renders. Off-screen streaming runs in $O(1)$ string concatenation without DOM/Markdown overhead.
+  - Sidebar: Branded drawer header with `/icon-192.png` and "Antigravity Studio". Added pulsing active working indicator, amber "Needs Input" badge, and emerald "New" unread badge. Implemented Markdown-aware preview deduplication (`stripMarkdownSyntax` + `computeSessionPreview`).
+- **Verification Output**: All 14 acceptance criteria gates (`AC-1.1` through `AC-3.4`) verified and passed with exit code 0. No commits or builds made per user instruction.

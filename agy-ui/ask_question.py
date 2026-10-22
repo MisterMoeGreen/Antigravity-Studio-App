@@ -91,6 +91,8 @@ def main():
     timeout_sec = int(data.get("timeout_seconds") or data.get("timeoutSeconds") or 300)
     payload = {
         "action": "ask",
+        "conversation_id": os.environ.get("AGY_CONVERSATION_ID", ""),
+        "turn_id": os.environ.get("AGY_TURN_ID", ""),
         "questions": normalized_questions,
         "tool_action": data.get("tool_action") or data.get("toolAction") or "Waiting for user decision",
         "tool_summary": data.get("tool_summary") or data.get("toolSummary") or "Decision required",

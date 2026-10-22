@@ -1184,6 +1184,28 @@
       font-weight: 700;
       font-size: 16px;
     }
+    .drawer-brand {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-height: 32px;
+    }
+    .drawer-brand-logo {
+      width: 22px;
+      height: 22px;
+      border-radius: 6px;
+      object-fit: contain;
+      flex-shrink: 0;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    }
+    .drawer-brand-title {
+      font-family: var(--font-sans);
+      font-weight: 700;
+      font-size: 15px;
+      letter-spacing: -0.2px;
+      color: var(--text-primary);
+      white-space: nowrap;
+    }
     .theme-segmented-control {
       display: flex;
       align-items: center;
@@ -1610,6 +1632,46 @@
       align-items: center;
       justify-content: space-between;
       gap: 6px;
+    }
+    .session-card-title-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      flex: 1;
+    }
+    .session-indicator-working {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      margin-left: 2px;
+    }
+    .session-badge-unread {
+      display: inline-block;
+      padding: 1px 6px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      border-radius: 999px;
+      background: rgba(16, 185, 129, 0.18);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      flex-shrink: 0;
+    }
+    .session-badge-input {
+      display: inline-block;
+      padding: 1px 6px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      border-radius: 999px;
+      background: rgba(245, 158, 11, 0.18);
+      color: #fbbf24;
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      flex-shrink: 0;
     }
     .session-menu-btn {
       background: none;
@@ -2607,7 +2669,10 @@
   <aside class="session-drawer" id="sessionDrawer">
     <div class="drawer-header">
       <div class="drawer-title-row">
-        <span>Conversations</span>
+        <div class="drawer-brand">
+          <img src="/icon-192.png" alt="Antigravity Studio" class="drawer-brand-logo" />
+          <span class="drawer-brand-title">Antigravity Studio</span>
+        </div>
         <button class="icon-btn" id="btnCloseDrawer" style="width:32px;height:32px;" title="Close drawer"><svg class="fa-icon" viewBox="0 0 384 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M342.6 150.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L192 210.7 86.6 105.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L146.7 256 41.4 361.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192 301.3 297.4 406.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L237.3 256 342.6 150.6z"/></svg></button>
       </div>
       <div class="theme-segmented-control" role="group" aria-label="Theme selector">
@@ -3467,6 +3532,7 @@
         modes: ['default', 'accept-edits', 'plan'],
         efforts: ['low', 'medium', 'high'],
         sessions: [],
+        sessionBuffers: new Map(), // cid -> SessionVirtualState
         activeTurns: new Map(), // turn_id -> DOM references & raw buffers
         pendingAttachments: [], // [{ name, size, type, data }]
       };
@@ -3592,6 +3658,204 @@
           sendWs({ type: 'copy_clipboard', text: text });
           showToast('Copied to clipboard');
         }
+      }
+
+      // ---------------------------------------------------------------------
+      // Multi-Session Virtual State Store & Deduplication Helpers (v1.4.0)
+      // ---------------------------------------------------------------------
+      const UNREAD_STORAGE_KEY = 'agy_unread_sessions';
+
+      function loadUnreadFromStorage() {
+        try {
+          const raw = localStorage.getItem(UNREAD_STORAGE_KEY);
+          return raw ? JSON.parse(raw) : [];
+        } catch (_) {
+          return [];
+        }
+      }
+
+      function syncUnreadToStorage() {
+        try {
+          const unreadCids = [];
+          for (const [cid, buf] of state.sessionBuffers.entries()) {
+            if (buf.unread) unreadCids.push(cid);
+          }
+          localStorage.setItem(UNREAD_STORAGE_KEY, JSON.stringify(unreadCids));
+        } catch (_) {}
+      }
+
+      function getOrCreateSessionBuffer(cid) {
+        if (!cid) cid = state.conversationId || 'default';
+        if (!state.sessionBuffers.has(cid)) {
+          state.sessionBuffers.set(cid, {
+            conversationId: cid,
+            activeTurns: new Map(), // turnId -> TurnVirtualRecord
+            isRunning: false,
+            waitingInput: false,
+            pendingQuestion: null,
+            currentAction: 'Ready',
+            startTime: 0,
+            unread: false,
+            draftPrompt: '',
+            draftAttachments: [],
+            activeUserPrompt: '',
+            activeUserAttachments: [],
+          });
+        }
+        return state.sessionBuffers.get(cid);
+      }
+
+      function getOrCreateTurnRecord(buf, turnId, model = '') {
+        if (!buf.activeTurns.has(turnId)) {
+          buf.activeTurns.set(turnId, {
+            turnId: turnId,
+            model: model || state.model,
+            rawMarkdown: '',
+            rawThoughts: '',
+            toolCalls: [],
+            startTime: performance.now(),
+            finalized: false,
+          });
+        }
+        return buf.activeTurns.get(turnId);
+      }
+
+      function stripMarkdownSyntax(text) {
+        if (!text) return '';
+        return text
+          .replace(/```[\s\S]*?```/g, '')     // Fenced code blocks
+          .replace(/`([^`]+)`/g, '$1')         // Inline code
+          .replace(/\*\*([^*]+)\*\*/g, '$1')   // Bold
+          .replace(/\*([^*]+)\*/g, '$1')       // Italic
+          .replace(/^#+\s+/gm, '')             // Headers
+          .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // Links
+          .replace(/\s+/g, ' ')
+          .trim();
+      }
+
+      function computeSessionPreview(s) {
+        const rawTitle = (s.title || '').trim();
+        const rawPreview = (s.preview || '').trim();
+        const cid = (s.conversation_id || '').trim();
+
+        if (!rawPreview || rawPreview === cid) {
+          return '';
+        }
+
+        const cleanTitle = stripMarkdownSyntax(rawTitle).toLowerCase();
+        const cleanPreview = stripMarkdownSyntax(rawPreview).toLowerCase();
+
+        // If preview matches title after stripping Markdown
+        if (cleanPreview === cleanTitle) {
+          return '';
+        }
+
+        // If preview starts with title
+        if (cleanPreview.startsWith(cleanTitle)) {
+          const remainder = stripMarkdownSyntax(rawPreview)
+            .slice(cleanTitle.length)
+            .replace(/^[:\s\-—]+/, '')
+            .trim();
+          return remainder.length > 5 ? remainder : '';
+        }
+
+        return stripMarkdownSyntax(rawPreview);
+      }
+
+      function autoResizePrompt() {
+        promptInput.style.height = 'auto';
+        promptInput.style.height = Math.min(promptInput.scrollHeight, 130) + 'px';
+      }
+
+      function syncHeaderAndControlsForSession(buf) {
+        if (buf && buf.isRunning) {
+          state.isRunning = true;
+          btnSend.classList.add('stop');
+          btnSend.innerHTML = `${faIcon('stop')} <span>Stop</span>`;
+          btnSend.title = 'Stop agent turn';
+          if (!liveProgress.active) {
+            startLiveProgress(buf.currentAction || 'Thinking...');
+          } else {
+            setLiveProgress('thinking', buf.currentAction || 'Thinking...');
+          }
+        } else {
+          resetSendButtonToIdle();
+        }
+      }
+
+      function resetSendButtonToIdle() {
+        state.isRunning = false;
+        btnSend.classList.remove('stop');
+        btnSend.innerHTML = `${faIcon('arrow-up')} <span>Send</span>`;
+        btnSend.title = 'Send prompt';
+        stopLiveProgress();
+      }
+
+      function remountActiveTurnCard(turnRecord) {
+        const card = ensureAssistantTurnCard(
+          turnRecord.turnId,
+          turnRecord.model,
+          false
+        );
+        if (!card) return;
+
+        if (turnRecord.rawThoughts) {
+          card.rawThoughts = turnRecord.rawThoughts;
+          card.thoughtContent.textContent = turnRecord.rawThoughts;
+          card.thoughtDetails.style.display = 'block';
+          const approxWords = turnRecord.rawThoughts.trim().split(/\s+/).length;
+          card.thoughtLabel.textContent = `Thought trace (${approxWords} words)`;
+        }
+
+        if (Array.isArray(turnRecord.toolCalls)) {
+          for (const tc of turnRecord.toolCalls) {
+            upsertTurnTool(turnRecord.turnId, tc);
+          }
+        }
+
+        if (turnRecord.rawMarkdown) {
+          card.rawMarkdown = turnRecord.rawMarkdown;
+          card.mdBody.innerHTML = renderMarkdown(turnRecord.rawMarkdown);
+        }
+      }
+
+      function initiateSessionSwitch(newCid) {
+        if (!newCid) return;
+        if (newCid === state.conversationId) {
+          closeOverlays();
+          return;
+        }
+
+        // 1. Preserve current draft prompt & attachments
+        if (state.conversationId) {
+          const curBuf = getOrCreateSessionBuffer(state.conversationId);
+          curBuf.draftPrompt = promptInput.value;
+          curBuf.draftAttachments = [...state.pendingAttachments];
+        }
+
+        // 2. Set new active conversation
+        state.conversationId = newCid;
+        const targetBuf = getOrCreateSessionBuffer(newCid);
+
+        // 3. Clear unread state
+        if (targetBuf.unread) {
+          targetBuf.unread = false;
+          syncUnreadToStorage();
+          renderSessionDrawerList();
+        }
+
+        // 4. Restore target session's draft prompt & attachments
+        promptInput.value = targetBuf.draftPrompt || '';
+        state.pendingAttachments = [...(targetBuf.draftAttachments || [])];
+        renderAttachmentBar();
+        autoResizePrompt();
+
+        // 5. Update header and controls immediately
+        syncHeaderAndControlsForSession(targetBuf);
+
+        // 6. Request canonical transcript from server
+        closeOverlays();
+        sendWs({ type: 'switch_session', conversation_id: newCid });
       }
 
       // ---------------------------------------------------------------------
@@ -3912,23 +4176,13 @@
 
         if (state.isRunning) {
           btnSend.classList.add('stop');
-          btnSend.innerHTML = `
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-              <rect x="6" y="6" width="12" height="12" rx="2"></rect>
-            </svg>
-          `;
+          btnSend.innerHTML = `${faIcon('stop')} <span>Stop</span>`;
+          btnSend.title = 'Stop agent turn';
           if (!liveProgress.active) {
             startLiveProgress(detail || 'Thinking...');
           }
         } else {
-          btnSend.classList.remove('stop');
-          btnSend.innerHTML = `
-            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3">
-              <line x1="12" y1="19" x2="12" y2="5"></line>
-              <polyline points="5 12 12 5 19 12"></polyline>
-            </svg>
-          `;
-          stopLiveProgress();
+          resetSendButtonToIdle();
         }
       }
 
@@ -4019,6 +4273,15 @@
               updateDrawerDefaultWorkspace(msg.default_workspace);
             }
             state.sessions = msg.sessions || [];
+            const savedUnreads = loadUnreadFromStorage();
+            if (Array.isArray(savedUnreads)) {
+              for (const uCid of savedUnreads) {
+                if (uCid !== state.conversationId) {
+                  const b = getOrCreateSessionBuffer(uCid);
+                  b.unread = true;
+                }
+              }
+            }
             renderSessionDrawerList();
             setRuntimeStatus(msg.is_running ? 'running' : 'idle', msg.is_running ? 'Running' : 'Ready');
             if (msg.system_info) {
@@ -4054,8 +4317,35 @@
             updateConfigPills(msg.config);
             break;
 
+          case 'session_status': {
+            const cid = msg.conversation_id;
+            if (cid) {
+              const buf = getOrCreateSessionBuffer(cid);
+              if (msg.state === 'running') {
+                buf.isRunning = true;
+                buf.currentAction = msg.detail || 'Running';
+              } else if (msg.state === 'idle') {
+                buf.isRunning = false;
+                buf.waitingInput = false;
+              }
+              renderSessionDrawerList();
+            }
+            if (!cid || cid === state.conversationId) {
+              setRuntimeStatus(msg.state, msg.detail);
+              if (msg.state === 'idle') {
+                resetSendButtonToIdle();
+              }
+            }
+            break;
+          }
+
           case 'status':
-            setRuntimeStatus(msg.state, msg.detail);
+            if (!msg.conversation_id || msg.conversation_id === state.conversationId) {
+              setRuntimeStatus(msg.state, msg.detail);
+              if (msg.state === 'idle') {
+                resetSendButtonToIdle();
+              }
+            }
             break;
 
           case 'session_list':
@@ -4085,53 +4375,143 @@
             stopLiveProgress();
             renderFullHistory(msg.messages || []);
             renderSessionDrawerList();
+
+            // Re-mount in-flight turns for this session if it is running (AC-2.3)
+            if (msg.conversation_id) {
+              const histBuf = getOrCreateSessionBuffer(msg.conversation_id);
+              if (histBuf.isRunning) {
+                if (histBuf.activeUserPrompt) {
+                  const lastMsg = msg.messages && msg.messages.length ? msg.messages[msg.messages.length - 1] : null;
+                  const lastUserContent = lastMsg && lastMsg.role === 'user' ? cleanPromptText(lastMsg.content) : '';
+                  if (lastUserContent !== cleanPromptText(histBuf.activeUserPrompt)) {
+                    appendUserBubble(histBuf.activeUserPrompt, histBuf.activeUserAttachments);
+                  }
+                }
+                for (const [tId, tRec] of histBuf.activeTurns.entries()) {
+                  if (!tRec.finalized) {
+                    remountActiveTurnCard(tRec);
+                  }
+                }
+                syncHeaderAndControlsForSession(histBuf);
+                scrollToBottom(true);
+              }
+              if (histBuf.pendingQuestion) {
+                handleAskQuestionEvent(histBuf.pendingQuestion);
+              }
+            }
             break;
 
           case 'directory_listing':
             renderDirectoryListing(msg);
             break;
 
-          case 'turn_start':
-            ensureAssistantTurnCard(msg.turn_id, msg.model || state.model);
-            if (!liveProgress.active) {
-              startLiveProgress('Thinking...');
+          case 'turn_start': {
+            const cid = msg.conversation_id || state.conversationId;
+            const buf = getOrCreateSessionBuffer(cid);
+            buf.isRunning = true;
+            buf.currentAction = 'Thinking...';
+            const tRec = getOrCreateTurnRecord(buf, msg.turn_id, msg.model || state.model);
+            tRec.finalized = false;
+            renderSessionDrawerList();
+
+            if (cid === state.conversationId) {
+              state.isRunning = true;
+              btnSend.classList.add('stop');
+              btnSend.innerHTML = `${faIcon('stop')} <span>Stop</span>`;
+              btnSend.title = 'Stop agent turn';
+              ensureAssistantTurnCard(msg.turn_id, msg.model || state.model);
+              if (!liveProgress.active) {
+                startLiveProgress('Thinking...');
+              } else {
+                setLiveProgress('thinking', 'Thinking...');
+              }
+              scrollToBottom(true);
+            }
+            break;
+          }
+
+          case 'agent_thought': {
+            const cid = msg.conversation_id || state.conversationId;
+            const buf = getOrCreateSessionBuffer(cid);
+            const tRec = getOrCreateTurnRecord(buf, msg.turn_id);
+            const delta = msg.delta || '';
+            tRec.rawThoughts += delta;
+
+            if (cid === state.conversationId) {
+              appendTurnThought(msg.turn_id, delta);
+              if (liveProgress.active && !liveProgress.currentAction.startsWith('Thinking')) {
+                setLiveProgress('thought', 'Thinking...');
+              }
+            }
+            break;
+          }
+
+          case 'agent_token': {
+            const cid = msg.conversation_id || state.conversationId;
+            const buf = getOrCreateSessionBuffer(cid);
+            const tRec = getOrCreateTurnRecord(buf, msg.turn_id);
+            const delta = msg.delta || '';
+            // String-only background buffering (AC-2.4 & ARGON-V14-17)
+            tRec.rawMarkdown += delta;
+
+            if (cid === state.conversationId) {
+              appendTurnToken(msg.turn_id, delta);
+              if (liveProgress.active && liveProgress.currentAction !== 'Generating response...') {
+                setLiveProgress('response', 'Generating response...');
+              }
+            }
+            break;
+          }
+
+          case 'tool_call': {
+            const cid = msg.conversation_id || state.conversationId;
+            const buf = getOrCreateSessionBuffer(cid);
+            const tRec = getOrCreateTurnRecord(buf, msg.turn_id);
+            const existingIdx = tRec.toolCalls.findIndex(tc => (tc.tool_id && tc.tool_id === msg.tool_id) || (tc.name === msg.name && !tc.tool_id));
+            if (existingIdx >= 0) {
+              tRec.toolCalls[existingIdx] = msg;
             } else {
-              setLiveProgress('thinking', 'Thinking...');
+              tRec.toolCalls.push(msg);
             }
-            scrollToBottom(true);
-            break;
+            buf.currentAction = formatToolAction(msg);
 
-          case 'agent_thought':
-            appendTurnThought(msg.turn_id, msg.delta || '');
-            if (liveProgress.active && !liveProgress.currentAction.startsWith('Thinking')) {
-              setLiveProgress('thought', 'Thinking...');
+            if (cid === state.conversationId) {
+              upsertTurnTool(msg.turn_id, msg);
             }
             break;
+          }
 
-          case 'agent_token':
-            appendTurnToken(msg.turn_id, msg.delta || '');
-            if (liveProgress.active && liveProgress.currentAction !== 'Generating response...') {
-              setLiveProgress('response', 'Generating response...');
+          case 'turn_complete': {
+            const cid = msg.conversation_id || state.conversationId;
+            const buf = getOrCreateSessionBuffer(cid);
+            buf.isRunning = false;
+            buf.waitingInput = false;
+            buf.pendingQuestion = null;
+            buf.activeUserPrompt = '';
+            buf.activeUserAttachments = [];
+            const tRec = getOrCreateTurnRecord(buf, msg.turn_id);
+            tRec.finalized = true;
+
+            if (cid === state.conversationId) {
+              finalizeTurnCard(msg.turn_id, msg);
+              resetSendButtonToIdle();
+            } else {
+              buf.unread = true;
+              syncUnreadToStorage();
+            }
+            renderSessionDrawerList();
+            break;
+          }
+
+          case 'system_card': {
+            const cid = msg.conversation_id;
+            if (!cid || cid === state.conversationId) {
+              appendSystemCard(msg.title, msg.markdown);
+              stopLiveProgress();
+              scrollToBottom(true);
             }
             break;
-
-          case 'tool_call':
-            upsertTurnTool(msg.turn_id, msg);
-            break;
-
-          case 'turn_complete':
-            finalizeTurnCard(msg.turn_id, msg);
-            if (msg.conversation_id) {
-              state.conversationId = msg.conversation_id;
-            }
-            stopLiveProgress();
-            break;
-
-          case 'system_card':
-            appendSystemCard(msg.title, msg.markdown);
-            stopLiveProgress();
-            scrollToBottom(true);
-            break;
+          }
 
           case 'session_rewound':
             state.activeTurns.clear();
@@ -4326,13 +4706,34 @@
             handleUpdateResult(msg);
             break;
 
-          case 'ask_question':
-            handleAskQuestionEvent(msg);
-            break;
+          case 'ask_question': {
+            const cid = msg.conversation_id || state.conversationId;
+            const buf = getOrCreateSessionBuffer(cid);
+            buf.waitingInput = true;
+            buf.pendingQuestion = msg;
+            renderSessionDrawerList();
 
-          case 'dismiss_question':
-            handleDismissQuestionEvent(msg);
+            if (cid === state.conversationId) {
+              handleAskQuestionEvent(msg);
+            } else {
+              showToast(`Session needs input: ${msg.tool_summary || 'Question ready'}`);
+            }
             break;
+          }
+
+          case 'dismiss_question': {
+            const cid = msg.conversation_id;
+            if (cid) {
+              const buf = getOrCreateSessionBuffer(cid);
+              buf.waitingInput = false;
+              buf.pendingQuestion = null;
+              renderSessionDrawerList();
+            }
+            if (!cid || cid === state.conversationId) {
+              handleDismissQuestionEvent(msg);
+            }
+            break;
+          }
 
           case 'open_external_url':
             if (msg.url) {
@@ -4849,6 +5250,13 @@
 
         appendUserBubble(trimmed, attachments);
 
+        // Record user prompt in active session buffer
+        const buf = getOrCreateSessionBuffer(state.conversationId);
+        buf.activeUserPrompt = trimmed;
+        buf.activeUserAttachments = attachments;
+        buf.unread = false;
+        syncUnreadToStorage();
+
         if (trimmed.startsWith('/')) {
           const firstWord = trimmed.split(/\s+/)[0].toLowerCase();
           const progressLabels = {
@@ -4992,6 +5400,15 @@
       });
 
       document.getElementById('btnNewSession').addEventListener('click', () => {
+        if (state.conversationId) {
+          const curBuf = getOrCreateSessionBuffer(state.conversationId);
+          curBuf.draftPrompt = promptInput.value;
+          curBuf.draftAttachments = [...state.pendingAttachments];
+        }
+        promptInput.value = '';
+        state.pendingAttachments = [];
+        renderAttachmentBar();
+        autoResizePrompt();
         closeOverlays();
         sendWs({ type: 'new_session' });
       });
@@ -5098,13 +5515,32 @@
           const relTime = formatRelativeTime(s.last_modified_time);
           const rawWs = (s.workspaces && s.workspaces.length > 0) ? s.workspaces[0] : '';
           const wsDisplay = rawWs ? formatWorkspacePath(rawWs) : '';
+          const previewText = computeSessionPreview(s);
+          const buf = state.sessionBuffers.get(s.conversation_id);
+          const isRunning = buf ? buf.isRunning : false;
+          const waitingInput = buf ? buf.waitingInput : false;
+          const isUnread = buf ? buf.unread : false;
+
           return `
             <div class="session-card ${isActive ? 'active' : ''}" data-cid="${escapeHtml(s.conversation_id)}" data-idx="${idx}">
               <div class="session-card-header">
-                <div class="session-card-title">${escapeHtml(s.title || 'Untitled Session')}</div>
+                <div class="session-card-title-group">
+                  <div class="session-card-title">${escapeHtml(s.title || 'Untitled Session')}</div>
+                  ${isRunning && !waitingInput ? `
+                    <span class="session-indicator-working" title="Agent is working...">
+                      <span class="status-dot running"></span>
+                    </span>
+                  ` : ''}
+                  ${waitingInput ? `
+                    <span class="session-badge-input" title="Waiting for user input">Needs Input</span>
+                  ` : ''}
+                  ${isUnread ? `
+                    <span class="session-badge-unread" title="New response available">New</span>
+                  ` : ''}
+                </div>
                 <button class="session-menu-btn" data-idx="${idx}" title="Session options">⋯</button>
               </div>
-              <div class="session-card-preview">${escapeHtml(s.preview || s.conversation_id)}</div>
+              ${previewText ? `<div class="session-card-preview">${escapeHtml(previewText)}</div>` : ''}
               <div class="session-card-meta">
                 <span>${s.step_count || 0} steps</span>
                 <span>${escapeHtml(relTime)}</span>
@@ -5177,8 +5613,7 @@
               return;
             }
             const cid = card.getAttribute('data-cid');
-            closeOverlays();
-            sendWs({ type: 'switch_session', conversation_id: cid });
+            initiateSessionSwitch(cid);
           });
 
           const menuBtn = card.querySelector('.session-menu-btn');
@@ -7090,12 +7525,20 @@
       async function submitQuestionResponse(options) {
         if (!activeQuestionData) return;
         const qid = activeQuestionData.question_id;
+        const q_cid = activeQuestionData.conversation_id || state.conversationId;
+        if (q_cid) {
+          const buf = getOrCreateSessionBuffer(q_cid);
+          buf.waitingInput = false;
+          buf.pendingQuestion = null;
+          renderSessionDrawerList();
+        }
 
         if (options && options.skipped) {
           closeQuestionModal();
           try {
             sendWs({
               type: 'question_response',
+              conversation_id: q_cid,
               question_id: qid,
               skipped: true,
             });
@@ -7130,6 +7573,7 @@
         try {
           sendWs({
             type: 'question_response',
+            conversation_id: q_cid,
             question_id: qid,
             skipped: false,
             responses: responsesToSend,
