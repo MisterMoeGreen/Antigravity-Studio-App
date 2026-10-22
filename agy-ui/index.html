@@ -3767,12 +3767,37 @@
         promptInput.style.height = Math.min(promptInput.scrollHeight, 130) + 'px';
       }
 
+      const ICON_SEND_HTML = `
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3">
+          <line x1="12" y1="19" x2="12" y2="5"></line>
+          <polyline points="5 12 12 5 19 12"></polyline>
+        </svg>
+      `;
+
+      const ICON_STOP_HTML = `
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+          <rect x="6" y="6" width="12" height="12" rx="2"></rect>
+        </svg>
+      `;
+
+      function setSendButtonRunning() {
+        state.isRunning = true;
+        btnSend.classList.add('stop');
+        btnSend.innerHTML = ICON_STOP_HTML;
+        btnSend.title = 'Stop agent turn';
+      }
+
+      function resetSendButtonToIdle() {
+        state.isRunning = false;
+        btnSend.classList.remove('stop');
+        btnSend.innerHTML = ICON_SEND_HTML;
+        btnSend.title = 'Send prompt';
+        stopLiveProgress();
+      }
+
       function syncHeaderAndControlsForSession(buf) {
         if (buf && buf.isRunning) {
-          state.isRunning = true;
-          btnSend.classList.add('stop');
-          btnSend.innerHTML = `${faIcon('stop')} <span>Stop</span>`;
-          btnSend.title = 'Stop agent turn';
+          setSendButtonRunning();
           if (!liveProgress.active) {
             startLiveProgress(buf.currentAction || 'Thinking...');
           } else {
@@ -3781,14 +3806,6 @@
         } else {
           resetSendButtonToIdle();
         }
-      }
-
-      function resetSendButtonToIdle() {
-        state.isRunning = false;
-        btnSend.classList.remove('stop');
-        btnSend.innerHTML = `${faIcon('arrow-up')} <span>Send</span>`;
-        btnSend.title = 'Send prompt';
-        stopLiveProgress();
       }
 
       function remountActiveTurnCard(turnRecord) {
@@ -4175,9 +4192,7 @@
         state.isRunning = mode === 'running';
 
         if (state.isRunning) {
-          btnSend.classList.add('stop');
-          btnSend.innerHTML = `${faIcon('stop')} <span>Stop</span>`;
-          btnSend.title = 'Stop agent turn';
+          setSendButtonRunning();
           if (!liveProgress.active) {
             startLiveProgress(detail || 'Thinking...');
           }
@@ -4415,10 +4430,7 @@
             renderSessionDrawerList();
 
             if (cid === state.conversationId) {
-              state.isRunning = true;
-              btnSend.classList.add('stop');
-              btnSend.innerHTML = `${faIcon('stop')} <span>Stop</span>`;
-              btnSend.title = 'Stop agent turn';
+              setSendButtonRunning();
               ensureAssistantTurnCard(msg.turn_id, msg.model || state.model);
               if (!liveProgress.active) {
                 startLiveProgress('Thinking...');
