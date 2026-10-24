@@ -295,7 +295,7 @@ def get_agy_version() -> str:
 
     return _cached_agy_version or os.environ.get("AGY_RUNTIME_VERSION", "1.4.7")
 
-APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.4.3")
+APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.4.4")
 APP_BUILD = os.environ.get("AGY_APP_VERSION_CODE", "22")
 AGY_VERSION = get_agy_version()
 
@@ -1143,7 +1143,7 @@ async def delete_mcp_server(name: str) -> dict[str, Any]:
 
 
 async def check_github_updates() -> dict[str, Any]:
-    installed_version = os.environ.get("AGY_APP_VERSION", "1.4.3")
+    installed_version = os.environ.get("AGY_APP_VERSION", "1.4.4")
     installed_code = int(os.environ.get("AGY_APP_VERSION_CODE", "22"))
     url = "https://api.github.com/repos/MisterMoeGreen/Antigravity-Studio-App/releases/latest"
 
@@ -2586,7 +2586,7 @@ class SessionExecutionContext:
     title: str = ""
     current_action: str = ""
     active_prompt: str = ""
-    model: str = "gemini-3.8-flash-high"
+    model: str = "gemini-3.8-flash"
     mode: str = "default"
     effort: str = "high"
     active_proc: Optional[asyncio.subprocess.Process] = None
@@ -2623,6 +2623,7 @@ class AgyProcessOrchestrator:
         self.active_view_cid: Optional[str] = None
         self._global_auth_lock = asyncio.Lock()
         self._streamed_turn_ids: set[str] = set()
+        self.discovered_models: list[dict[str, Any]] = []
 
         # In-app Google Authentication lifecycle state
         self.is_authenticating: bool = False
@@ -2672,11 +2673,12 @@ class AgyProcessOrchestrator:
         return None
 
     def _active_view_defaults(self) -> tuple[str, str, str]:
-        """Return (model, mode, effort) from the active view session, or hardcoded defaults."""
+        """Return (model, mode, effort) from the active view session, or dynamic defaults."""
         if self.active_view_cid and self.active_view_cid in self._sessions:
             v = self._sessions[self.active_view_cid]
             return v.model, v.mode, v.effort
-        return "gemini-3.8-flash-high", "default", "high"
+        default_model = self.discovered_models[0]["id"] if self.discovered_models else "gemini-3.8-flash"
+        return default_model, "default", "high"
 
     def get_or_create_context(
         self,
@@ -2728,17 +2730,46 @@ class AgyProcessOrchestrator:
         use_persistent_stdio: bool = False,
     ) -> list[str]:
         target_ctx = ctx or self.config
+
+        # Strip any redundant effort suffix from the model name to guarantee clean base model selection
+        clean_model = target_ctx.model
+        model_effort = target_ctx.effort
+        effort_match = re.match(r"^(.*?)-(low|medium|high|xhigh|max)$", target_ctx.model, re.IGNORECASE)
+        if effort_match:
+            clean_model = effort_match.group(1)
+            if not model_effort:
+                model_effort = effort_match.group(2).lower()
+
         args = [
             str(AGY_BIN),
             "--dangerously-skip-permissions",
             "--output-format",
             "stream-json",
             "--model",
-            target_ctx.model,
+            clean_model,
         ]
-        # Only pass --effort for models that explicitly support reasoning effort (Gemini)
-        if "gemini" in target_ctx.model.lower() and target_ctx.effort in ("low", "medium", "high"):
-            args.extend(["--effort", target_ctx.effort])
+
+        # Determine if this model dynamically supports reasoning effort
+        supports_effort = False
+        supported_efforts: list[str] = []
+        default_effort: Optional[str] = None
+        if getattr(self, "discovered_models", None):
+            for dm in self.discovered_models:
+                if dm.get("id") == clean_model:
+                    supported_efforts = dm.get("supported_efforts", [])
+                    default_effort = dm.get("default_effort")
+                    supports_effort = bool(supported_efforts)
+                    break
+        else:
+            # Fallback before discovery: check against VALID_EFFORTS
+            supports_effort = model_effort in VALID_EFFORTS
+
+        if supports_effort and model_effort:
+            if supported_efforts and model_effort not in supported_efforts:
+                fallback_ef = default_effort or supported_efforts[0]
+                args.extend(["--effort", fallback_ef])
+            else:
+                args.extend(["--effort", model_effort])
 
         # Only pass --mode when a specific non-default mode is selected (accept-edits or plan).
         if target_ctx.mode and target_ctx.mode not in ("default", "standard", "auto"):
@@ -4549,6 +4580,10 @@ class AgyWebServer:
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=8.0)
             if proc.returncode == 0:
+                base_models: dict[str, dict[str, Any]] = {}
+                effort_regex = re.compile(r"^(.*?)-(low|medium|high|xhigh|max)$", re.IGNORECASE)
+                label_effort_regex = re.compile(r"\s*\((low|medium|high|xhigh|max)\)$", re.IGNORECASE)
+
                 for line in stdout.decode("utf-8", "ignore").splitlines():
                     line = line.strip()
                     if not line:
@@ -4558,12 +4593,53 @@ class AgyWebServer:
                         continue
                     model_id = parts[0].strip()
                     label = parts[1].strip() if len(parts) > 1 else model_id
-                    provider = "Google" if "gemini" in model_id.lower() else "Anthropic" if "claude" in model_id.lower() else "OpenAI/OSS" if "gpt" in model_id.lower() else "Other"
-                    models.append({
-                        "id": model_id,
-                        "label": label,
-                        "provider": provider,
-                    })
+
+                    m_match = effort_regex.match(model_id)
+                    if m_match:
+                        base_id = m_match.group(1)
+                        effort = m_match.group(2).lower()
+                        clean_label = label_effort_regex.sub("", label).strip()
+                    else:
+                        base_id = model_id
+                        effort = None
+                        clean_label = label.strip()
+
+                    if base_id not in base_models:
+                        mid_lower = base_id.lower()
+                        if "gemini" in mid_lower or "argon" in mid_lower:
+                            provider = "Google"
+                        elif "claude" in mid_lower:
+                            provider = "Anthropic"
+                        elif "gpt" in mid_lower or "openai" in mid_lower or "o1" in mid_lower or "o3" in mid_lower:
+                            provider = "OpenAI/OSS"
+                        elif "deepseek" in mid_lower:
+                            provider = "DeepSeek"
+                        else:
+                            provider = "Other"
+
+                        base_models[base_id] = {
+                            "id": base_id,
+                            "label": clean_label or base_id,
+                            "provider": provider,
+                            "supported_efforts": [],
+                            "default_effort": None,
+                        }
+
+                    if effort and effort not in base_models[base_id]["supported_efforts"]:
+                        base_models[base_id]["supported_efforts"].append(effort)
+
+                effort_order = {"low": 1, "medium": 2, "high": 3, "xhigh": 4, "max": 5}
+                for bm in base_models.values():
+                    if bm["supported_efforts"]:
+                        bm["supported_efforts"].sort(key=lambda x: effort_order.get(x, 99))
+                        if "high" in bm["supported_efforts"]:
+                            bm["default_effort"] = "high"
+                        elif "medium" in bm["supported_efforts"]:
+                            bm["default_effort"] = "medium"
+                        else:
+                            bm["default_effort"] = bm["supported_efforts"][0]
+                    models.append(bm)
+                self.orchestrator.discovered_models = models
             else:
                 logger.info("Dynamic model query returned code %s (likely unauthenticated)", proc.returncode)
         except Exception as exc:
@@ -4572,6 +4648,7 @@ class AgyWebServer:
 
     async def refresh_models(self) -> None:
         self.discovered_models = await self.discover_models()
+        self.orchestrator.discovered_models = self.discovered_models
         if self.discovered_models and not self.orchestrator.config.model:
             self.orchestrator.config.model = self.discovered_models[0]["id"]
         await self.broadcast({
@@ -6515,12 +6592,15 @@ class AgyWebServer:
         if cmd in ("/models", "/model"):
             if not self.discovered_models:
                 self.discovered_models = await self.discover_models()
+                self.orchestrator.discovered_models = self.discovered_models
             if arg:
-                cfg.model = arg
-                for ef in ("low", "medium", "high"):
-                    if cfg.model.endswith(f"-{ef}"):
+                clean_arg = arg
+                for ef in ("low", "medium", "high", "xhigh", "max"):
+                    if arg.endswith(f"-{ef}"):
                         cfg.effort = ef
+                        clean_arg = arg[: -len(f"-{ef}")]
                         break
+                cfg.model = clean_arg
                 await self.broadcast(
                     {
                         "type": "config_updated",
@@ -6544,13 +6624,13 @@ class AgyWebServer:
             else:
                 if self.discovered_models:
                     rows = "\n".join(
-                        f"| `{m['id']}` | {m['label']} | {m['provider']} |"
+                        f"| `{m['id']}` | {m['label']} | {m['provider']} | {', '.join(m.get('supported_efforts', [])) or 'None'} |"
                         for m in self.discovered_models
                     )
                     md = (
-                        f"**Current Model:** `{cfg.model}`\n\n"
-                        "| Model ID | Description | Provider |\n"
-                        "| :--- | :--- | :--- |\n"
+                        f"**Current Model:** `{cfg.model}` (Effort: `{cfg.effort}`)\n\n"
+                        "| Model ID | Description | Provider | Supported Efforts |\n"
+                        "| :--- | :--- | :--- | :--- |\n"
                         f"{rows}\n\n"
                         "*Tip: Tap the Model pill above the keyboard or run `/model <id>` to switch.*"
                     )
@@ -6597,8 +6677,7 @@ class AgyWebServer:
         if cmd == "/effort":
             if arg in VALID_EFFORTS:
                 cfg.effort = arg
-                if cfg.model.startswith("gemini-3.8-flash"):
-                    cfg.model = f"gemini-3.8-flash-{arg}"
+                cfg.model = re.sub(r"-(low|medium|high|xhigh|max)$", "", cfg.model, flags=re.IGNORECASE)
                 await self.broadcast(
                     {
                         "type": "config_updated",
@@ -6615,7 +6694,7 @@ class AgyWebServer:
                 {
                     "type": "system_card",
                     "title": "Reasoning Effort",
-                    "markdown": f"**Active Reasoning Effort:** `{cfg.effort}` (`low` | `medium` | `high`)\n\n*(Applies to Gemini 3.8 Flash)*",
+                    "markdown": f"**Active Reasoning Effort:** `{cfg.effort}` (`low` | `medium` | `high`)\n\n*(Applies to all models supporting reasoning effort)*",
                     "level": "info",
                 }
             )
@@ -6668,16 +6747,15 @@ class AgyWebServer:
                         except Exception as exc:
                             logger.warning("Error reading transcript for /usage: %s", exc)
 
-                model_limits = {
-                    "gemini-3.8-flash-high": 1_000_000,
-                    "gemini-3.8-flash-medium": 1_000_000,
-                    "gemini-3.8-flash-low": 1_000_000,
-                    "gemini-3.8-flash": 1_000_000,
-                    "claude-sonnet-4-6": 200_000,
-                    "claude-opus-4-6-thinking": 200_000,
-                    "gpt-oss-120b-medium": 128_000,
-                }
-                limit = model_limits.get(cfg.model, 1_000_000)
+                clean_model = re.sub(r"-(low|medium|high|xhigh|max)$", "", cfg.model, flags=re.IGNORECASE)
+                if "gemini" in clean_model or "argon" in clean_model:
+                    limit = 1_000_000
+                elif "claude" in clean_model:
+                    limit = 200_000
+                elif "gpt" in clean_model or "oss" in clean_model:
+                    limit = 128_000
+                else:
+                    limit = 1_000_000
                 active_context = latest_input + latest_cached
                 if active_context == 0 and cfg.total_input_tokens > 0:
                     active_context = cfg.total_input_tokens
@@ -6787,15 +6865,15 @@ class AgyWebServer:
                         except Exception as exc:
                             logger.warning("Error reading transcript for /context: %s", exc)
 
-                model_limits = {
-                    "gemini-3.8-flash-high": 1_000_000,
-                    "gemini-3.8-flash-medium": 1_000_000,
-                    "gemini-3.8-flash-low": 1_000_000,
-                    "claude-sonnet-4-6": 200_000,
-                    "claude-opus-4-6-thinking": 200_000,
-                    "gpt-oss-120b-medium": 128_000,
-                }
-                limit = model_limits.get(cfg.model, 1_000_000)
+                clean_model = re.sub(r"-(low|medium|high|xhigh|max)$", "", cfg.model, flags=re.IGNORECASE)
+                if "gemini" in clean_model or "argon" in clean_model:
+                    limit = 1_000_000
+                elif "claude" in clean_model:
+                    limit = 200_000
+                elif "gpt" in clean_model or "oss" in clean_model:
+                    limit = 128_000
+                else:
+                    limit = 1_000_000
                 active_context = latest_input + latest_cached
                 if active_context == 0 and cfg.total_input_tokens > 0:
                     active_context = cfg.total_input_tokens

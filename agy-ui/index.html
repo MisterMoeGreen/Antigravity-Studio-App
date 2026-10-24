@@ -1475,6 +1475,18 @@
       border-color: var(--accent-primary);
       box-shadow: 0 2px 8px rgba(99, 102, 241, 0.35);
     }
+    .sheet-effort-section.disabled {
+      opacity: 0.45;
+      pointer-events: none;
+      filter: grayscale(0.8);
+    }
+    .sheet-effort-btn:disabled,
+    .sheet-effort-btn.disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+      pointer-events: none;
+      border-style: dashed;
+    }
 
 
     /* Attachment bar & chips */
@@ -2714,7 +2726,7 @@
       </div>
       <div class="drawer-footer-row">
         <span>AGY Runtime</span>
-        <span class="drawer-version-val" id="agyVersionText">v1.4.3</span>
+        <span class="drawer-version-val" id="agyVersionText">v1.4.4</span>
       </div>
     </div>
   </aside>
@@ -3519,7 +3531,7 @@
         isRunning: false,
         isAuthenticating: false,
         conversationId: null,
-        model: 'gemini-3.8-flash-high',
+        model: 'gemini-3.8-flash',
         mode: 'default',
         effort: 'high',
         workspace: '~/workspace',
@@ -4248,35 +4260,38 @@
 
       function updateConfigPills(cfg) {
         if (!cfg) return;
-        if (cfg.model) {
-          state.model = cfg.model;
-          let disp = cfg.model.replace('gemini-', '').replace('claude-', '');
-          if (cfg.model.startsWith('gemini-3.8-flash') && state.effort) {
-            disp = `flash · ${state.effort}`;
-          }
-          if (labelModel) labelModel.textContent = disp;
-        }
-        if (cfg.mode) {
-          state.mode = cfg.mode;
-          if (labelMode) labelMode.textContent = cfg.mode;
-        }
-        if (cfg.effort) {
-          state.effort = cfg.effort;
-          if (labelEffort) labelEffort.textContent = cfg.effort;
-          if (state.model.startsWith('gemini-3.8-flash') && labelModel) {
-            labelModel.textContent = `flash · ${state.effort}`;
-          }
-        }
-        if (cfg.workspace) {
-          updateWorkspaceStatusBar(cfg.workspace, cfg.git_branch);
-        } else if (cfg.git_branch !== undefined) {
-          updateWorkspaceStatusBar(null, cfg.git_branch);
-        }
         if (cfg.models) state.models = cfg.models;
         if (cfg.modes) state.modes = cfg.modes;
         if (cfg.efforts) state.efforts = cfg.efforts;
         if ('conversation_id' in cfg) {
           state.conversationId = cfg.conversation_id;
+        }
+        if (cfg.model) {
+          state.model = cfg.model;
+        }
+        if (cfg.effort) {
+          state.effort = cfg.effort;
+          if (labelEffort) labelEffort.textContent = cfg.effort;
+        }
+        if (labelModel && state.model) {
+          const activeBaseId = state.model.replace(/-(low|medium|high|xhigh|max)$/i, '');
+          const currentMeta = (state.models || []).find(m => m.id === activeBaseId);
+          const supported = currentMeta ? (currentMeta.supported_efforts || []) : [];
+          let cleanName = activeBaseId.replace(/^gemini-/, '').replace(/^claude-/, '').replace(/^gpt-/, '');
+          if (supported.length > 0 && state.effort && supported.includes(state.effort)) {
+            labelModel.textContent = `${cleanName} · ${state.effort}`;
+          } else {
+            labelModel.textContent = cleanName;
+          }
+        }
+        if (cfg.mode) {
+          state.mode = cfg.mode;
+          if (labelMode) labelMode.textContent = cfg.mode;
+        }
+        if (cfg.workspace) {
+          updateWorkspaceStatusBar(cfg.workspace, cfg.git_branch);
+        } else if (cfg.git_branch !== undefined) {
+          updateWorkspaceStatusBar(null, cfg.git_branch);
         }
       }
 
@@ -5776,18 +5791,34 @@
       function openModelSheet() {
         sheetTitleText.textContent = 'Model & Reasoning Effort';
 
+        const activeBaseId = (state.model || '').replace(/-(low|medium|high|xhigh|max)$/i, '');
+        const currentModel = (state.models || []).find(m => m.id === activeBaseId) || (state.models && state.models[0]);
+        const supportedEfforts = currentModel ? (currentModel.supported_efforts || []) : ['low', 'medium', 'high'];
+        const hasEffortSupport = supportedEfforts.length > 0;
+        const displayEfforts = ['low', 'medium', 'high', ...supportedEfforts.filter(e => !['low', 'medium', 'high'].includes(e))];
+
+        let effortValDisplay = hasEffortSupport 
+          ? escapeHtml((state.effort || 'high').toUpperCase()) 
+          : '<span style="color:var(--text-muted);font-size:11px;font-weight:500;">UNSUPPORTED</span>';
+
         let effortHtml = `
-          <div class="sheet-effort-section">
+          <div class="sheet-effort-section ${hasEffortSupport ? '' : 'disabled'}">
             <div class="sheet-effort-header">
               <span class="sheet-effort-label">Reasoning Effort (--effort)</span>
-              <span class="sheet-effort-val">${escapeHtml((state.effort || 'high').toUpperCase())}</span>
+              <span class="sheet-effort-val">${effortValDisplay}</span>
             </div>
             <div class="sheet-effort-btns">
-              ${['low', 'medium', 'high'].map(ef => `
-                <button class="sheet-effort-btn ${ef === state.effort ? 'active' : ''}" data-effort="${ef}">
-                  ${ef.charAt(0).toUpperCase() + ef.slice(1)}
-                </button>
-              `).join('')}
+              ${displayEfforts.map(ef => {
+                const isSupported = hasEffortSupport && supportedEfforts.includes(ef);
+                const isActive = hasEffortSupport && ef === state.effort && isSupported;
+                return `
+                  <button class="sheet-effort-btn ${isActive ? 'active' : ''} ${!isSupported ? 'disabled' : ''}" 
+                          data-effort="${ef}" 
+                          ${!isSupported ? 'disabled' : ''}>
+                    ${ef.charAt(0).toUpperCase() + ef.slice(1)}
+                  </button>
+                `;
+              }).join('')}
             </div>
           </div>
         `;
@@ -5803,7 +5834,7 @@
             </div>
           `;
 
-          sheetList.querySelectorAll('.sheet-effort-btn').forEach(btn => {
+          sheetList.querySelectorAll('.sheet-effort-btn:not(:disabled)').forEach(btn => {
             btn.addEventListener('click', (e) => {
               e.stopPropagation();
               const ef = btn.getAttribute('data-effort');
@@ -5826,61 +5857,39 @@
           return;
         }
 
-        const renderedModels = [];
-        let hasGeminiFlash = false;
-        for (const m of state.models) {
-          if (m.id.startsWith('gemini-3.8-flash')) {
-            if (!hasGeminiFlash) {
-              hasGeminiFlash = true;
-              renderedModels.push({
-                id: `gemini-3.8-flash-${state.effort || 'high'}`,
-                baseId: 'gemini-3.8-flash',
-                label: 'Gemini 3.8 Flash',
-                provider: 'Google',
-                detail: `Multimodal reasoning · Adaptive effort (${state.effort || 'high'})`,
-                isGemini: true,
-              });
-            }
-          } else {
-            renderedModels.push({
-              id: m.id,
-              baseId: m.id,
-              label: m.label || m.id,
-              provider: m.provider || '',
-              detail: m.id.includes('claude') ? 'Native Thinking' : m.id.includes('gpt') ? 'Medium reasoning' : '',
-              isGemini: false,
-            });
-          }
-        }
-
-        const isModelSelected = (rm) => {
-          if (rm.isGemini && state.model.startsWith('gemini-3.8-flash')) return true;
-          return state.model === rm.id;
+        const isModelSelected = (m) => {
+          return m.id === activeBaseId;
         };
 
-        const modelsHtml = renderedModels.map(rm => `
-          <div class="sheet-item ${isModelSelected(rm) ? 'selected' : ''}" data-model="${escapeHtml(rm.id)}" data-is-gemini="${rm.isGemini ? '1' : '0'}">
-            <div>
-              <div class="sheet-cmd-name" style="display:flex;align-items:center;gap:6px;">
-                <span>${escapeHtml(rm.label)}</span>
-                <span style="font-size:10.5px;padding:1px 5px;border-radius:4px;background:rgba(255,255,255,0.08);color:var(--text-muted);font-weight:400;">${escapeHtml(rm.provider)}</span>
+        const modelsHtml = state.models.map(m => {
+          const mEfforts = m.supported_efforts || [];
+          let detail = 'Standard execution (no reasoning effort)';
+          if (mEfforts.length > 1) {
+            detail = `Multimodal reasoning · Adaptive effort (${mEfforts.join('/')})`;
+          } else if (mEfforts.length === 1) {
+            detail = `Fixed reasoning effort (${mEfforts[0]})`;
+          }
+          return `
+            <div class="sheet-item ${isModelSelected(m) ? 'selected' : ''}" data-model="${escapeHtml(m.id)}">
+              <div>
+                <div class="sheet-cmd-name" style="display:flex;align-items:center;gap:6px;">
+                  <span>${escapeHtml(m.label)}</span>
+                  <span style="font-size:10.5px;padding:1px 5px;border-radius:4px;background:rgba(255,255,255,0.08);color:var(--text-muted);font-weight:400;">${escapeHtml(m.provider || '')}</span>
+                </div>
+                <div class="sheet-cmd-desc">${escapeHtml(detail)}</div>
               </div>
-              <div class="sheet-cmd-desc">${escapeHtml(rm.detail)}</div>
+              <span style="font-size:16px;color:var(--accent-primary);font-weight:700;">${isModelSelected(m) ? faIcon('check') : ''}</span>
             </div>
-            <span style="font-size:16px;color:var(--accent-primary);font-weight:700;">${isModelSelected(rm) ? faIcon('check') : ''}</span>
-          </div>
-        `).join('');
+          `;
+        }).join('');
 
         sheetList.innerHTML = effortHtml + modelsHtml;
 
-        sheetList.querySelectorAll('.sheet-effort-btn').forEach(btn => {
+        sheetList.querySelectorAll('.sheet-effort-btn:not(:disabled)').forEach(btn => {
           btn.addEventListener('click', (e) => {
             e.stopPropagation();
             const ef = btn.getAttribute('data-effort');
             state.effort = ef;
-            if (state.model.startsWith('gemini-3.8-flash')) {
-              state.model = `gemini-3.8-flash-${ef}`;
-            }
             updateConfigPills({ model: state.model, effort: state.effort });
             sendWs({ type: 'update_config', model: state.model, effort: state.effort });
             openModelSheet();
@@ -5889,12 +5898,16 @@
 
         sheetList.querySelectorAll('.sheet-item').forEach(el => {
           el.addEventListener('click', () => {
-            const isGemini = el.getAttribute('data-is-gemini') === '1';
-            let chosen = el.getAttribute('data-model');
-            if (isGemini) {
-              chosen = `gemini-3.8-flash-${state.effort || 'high'}`;
-            }
+            const chosen = el.getAttribute('data-model');
+            const targetModel = (state.models || []).find(m => m.id === chosen);
             state.model = chosen;
+
+            if (targetModel && targetModel.supported_efforts && targetModel.supported_efforts.length > 0) {
+              if (!targetModel.supported_efforts.includes(state.effort)) {
+                state.effort = targetModel.default_effort || targetModel.supported_efforts[0];
+              }
+            }
+
             updateConfigPills({ model: chosen, effort: state.effort });
             sendWs({ type: 'update_config', model: chosen, effort: state.effort });
             closeOverlays();
