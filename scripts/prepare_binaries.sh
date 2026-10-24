@@ -58,6 +58,41 @@ llvm-strip --strip-unneeded "${JNI_DIR}/libask_question.so" 2>/dev/null || strip
 patchelf --remove-rpath "${JNI_DIR}/libask_question.so" 2>/dev/null || true
 patch_elf_bytes "${JNI_DIR}/libask_question.so"
 
+# 1c. Compile PRoot Anonymous ELF Loader (libproot_loader.so)
+echo "[1c/7] Compiling PRoot Anonymous ELF Loader (libproot_loader.so)..."
+$CC_BIN -shared -fPIC -O2 -Wall \
+  -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384 \
+  -nostdlib -ffreestanding \
+  -I "${PROJECT_ROOT}/app/src/main/cpp/proot/src" \
+  "${PROJECT_ROOT}/app/src/main/cpp/proot/src/loader/loader.c" \
+  "${PROJECT_ROOT}/app/src/main/cpp/proot/src/loader/assembly.S" \
+  -o "${JNI_DIR}/libproot_loader.so"
+llvm-strip --strip-unneeded "${JNI_DIR}/libproot_loader.so" 2>/dev/null || strip --strip-unneeded "${JNI_DIR}/libproot_loader.so"
+patchelf --remove-rpath "${JNI_DIR}/libproot_loader.so" 2>/dev/null || true
+
+# 1d. Compile PRoot Engine (libproot.so)
+echo "[1d/7] Compiling PRoot Engine (libproot.so)..."
+if make -C "${PROJECT_ROOT}/app/src/main/cpp/proot/src" CC="${CC_BIN}" \
+  LDFLAGS="-Wl,-Bstatic -ltalloc -Wl,-Bdynamic -Wl,-z,noexecstack -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384" V=1; then
+  cp "${PROJECT_ROOT}/app/src/main/cpp/proot/src/proot" "${JNI_DIR}/libproot.so"
+  chmod 755 "${JNI_DIR}/libproot.so"
+  llvm-strip --strip-unneeded "${JNI_DIR}/libproot.so" 2>/dev/null || strip --strip-unneeded "${JNI_DIR}/libproot.so"
+  patchelf --remove-rpath "${JNI_DIR}/libproot.so" 2>/dev/null || true
+  patch_elf_bytes "${JNI_DIR}/libproot.so"
+elif [ -f "${PROJECT_ROOT}/app/src/main/jniLibs/arm64-v8a/libproot.so" ]; then
+  echo "Using existing libproot.so..."
+fi
+
+# 1e. Compile agy-sh Multicall Bridge (libagy_sh.so)
+echo "[1e/7] Compiling agy-sh Multicall Bridge (libagy_sh.so)..."
+$CC_BIN -pie -fPIE -O2 -Wall \
+  -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384 \
+  "${PROJECT_ROOT}/app/src/main/cpp/agy_sh.c" \
+  -o "${JNI_DIR}/libagy_sh.so"
+llvm-strip --strip-unneeded "${JNI_DIR}/libagy_sh.so" 2>/dev/null || strip --strip-unneeded "${JNI_DIR}/libagy_sh.so"
+patchelf --remove-rpath "${JNI_DIR}/libagy_sh.so" 2>/dev/null || true
+patch_elf_bytes "${JNI_DIR}/libagy_sh.so"
+
 # 2. Stage & Patch agy.va39 -> libagy.so
 echo "[2/7] Patching agy.va39 -> libagy.so..."
 AGY_VA39_SRC="${SOURCE_PREFIX}/bin/agy.va39"
@@ -225,6 +260,7 @@ for elf in "${JNI_DIR}"/libbash.so "${JNI_DIR}"/libbusybox.so "${JNI_DIR}"/libgi
            "${JNI_DIR}"/libcurl_bin.so "${JNI_DIR}"/libpython3_bin.so \
            "${JNI_DIR}"/libssh_bin.so "${JNI_DIR}"/libssh_keygen.so \
            "${JNI_DIR}"/libask_question.so \
+           "${JNI_DIR}"/libagy_sh.so "${JNI_DIR}"/libproot.so \
            "${JNI_DIR}"/libpyext_*.so; do
   [ -f "$elf" ] && queue+=("$elf")
 done
@@ -267,3 +303,12 @@ rm -rf "$STAGING_DIR"
 echo "=== Binary Preparation Complete ==="
 echo "Total staged jniLibs size: $(du -sh "$JNI_DIR" | cut -f1)"
 echo "Total staged assets size:  $(du -sh "${ASSETS_DIR}/usr-data.tar.zst" | cut -f1)"
+
+# Integrity assertion for critical container subsystem binaries
+for req in libagy_shim.so libask_question.so libproot_loader.so libproot.so libagy_sh.so libagy.so libbash.so; do
+  if [ ! -f "${JNI_DIR}/${req}" ]; then
+    echo "FATAL: Required binary ${req} missing from ${JNI_DIR}!" >&2
+    exit 1
+  fi
+done
+echo "All critical native binaries verified successfully."

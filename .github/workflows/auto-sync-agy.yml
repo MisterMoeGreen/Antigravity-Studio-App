@@ -134,6 +134,17 @@ jobs:
             fi
           fi
 
+          # Verify container bridge libraries in baseline; recover from v1.4.3 if missing
+          if [ ! -f "app/src/main/jniLibs/arm64-v8a/libagy_sh.so" ] || [ ! -f "app/src/main/jniLibs/arm64-v8a/libproot.so" ]; then
+            echo "Container bridge binaries missing from baseline APK! Recovering from v1.4.3..."
+            curl -sSL -f -o v143.apk "https://github.com/${{ github.repository }}/releases/download/v1.4.3/AntigravityStudio-v1.4.3.apk" 2>/dev/null || true
+            if [ -f "v143.apk" ]; then
+              unzip -qo "v143.apk" "lib/arm64-v8a/libagy_sh.so" "lib/arm64-v8a/libproot.so" "lib/arm64-v8a/libproot_loader.so" 2>/dev/null || true
+              cp -u lib/arm64-v8a/* app/src/main/jniLibs/arm64-v8a/ 2>/dev/null || true
+              rm -rf v143.apk lib 2>/dev/null || true
+            fi
+          fi
+
           # If upstream agy version changed, force_build was requested, or baseline is missing/corrupted, download and patch new upstream agy.va39 into libagy.so
           NEW_SHA256=""
           IS_CORRUPT=false
@@ -227,6 +238,15 @@ jobs:
           APK_SRC="app/build/outputs/apk/release/app-release.apk"
           [ ! -f "$APK_SRC" ] && APK_SRC="app/build/outputs/apk/release/app-release-unsigned.apk"
           
+          # Assert presence of critical container subsystem binaries
+          for req in libagy_sh.so libproot.so libproot_loader.so libagy_shim.so libbash.so libagy.so; do
+            if ! unzip -l "$APK_SRC" | grep -q "$req"; then
+              echo "FATAL: $req missing from built APK!" >&2
+              exit 1
+            fi
+          done
+          echo "Verified all critical native libraries inside generated APK."
+
           NEW_NAME="${{ steps.version_bump.outputs.new_name }}"
           cp "$APK_SRC" "AntigravityStudio-v${NEW_NAME}.apk"
           cp "$APK_SRC" "AntigravityStudio.apk"
