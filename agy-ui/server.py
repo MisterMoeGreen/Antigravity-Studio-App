@@ -2583,6 +2583,9 @@ class TurnSnapshot:
 class SessionExecutionContext:
     conversation_id: str
     workspace: str = field(default_factory=get_default_workspace)
+    title: str = ""
+    current_action: str = ""
+    active_prompt: str = ""
     model: str = "gemini-3.8-flash-high"
     mode: str = "default"
     effort: str = "high"
@@ -2632,6 +2635,23 @@ class AgyProcessOrchestrator:
         self._pending_auth_attachments: list[dict[str, Any]] = []
         self._auth_required_detected: bool = False
 
+    def get_all_sessions(self, search_query: str = "", limit: int = 100) -> list[dict[str, Any]]:
+        persisted = self.storage.list_conversations(search_query=search_query, limit=limit)
+        persisted_cids = {p["conversation_id"] for p in persisted}
+        active_entries = []
+        for cid, ctx in self._sessions.items():
+            if cid not in persisted_cids and (ctx.is_running or cid == self.active_view_cid):
+                active_entries.append({
+                    "conversation_id": cid,
+                    "title": ctx.title or ("New Conversation" if not ctx.is_running else "Running Turn"),
+                    "preview": (ctx.current_action or "Agent is working...") if ctx.is_running else "",
+                    "step_count": ctx.turn_count,
+                    "last_modified_time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ctx.last_activity)),
+                    "workspaces": [ctx.workspace],
+                    "status": "RUNNING" if ctx.is_running else "ACTIVE",
+                })
+        return active_entries + persisted
+
     @property
     def config(self) -> SessionExecutionContext:
         return self.get_or_create_context(self.active_view_cid)
@@ -2666,7 +2686,15 @@ class AgyProcessOrchestrator:
     ) -> SessionExecutionContext:
         cid = (conversation_id or "").strip()
         if not cid:
-            cid = f"session-{uuid.uuid4().hex[:12]}"
+            if self.active_view_cid:
+                cid = self.active_view_cid
+            else:
+                latest = self.storage.list_conversations(limit=1)
+                if latest:
+                    cid = latest[0]["conversation_id"]
+                    self.active_view_cid = cid
+                else:
+                    cid = f"session-{uuid.uuid4().hex[:12]}"
         if cid not in self._sessions:
             ws = workspace or get_default_workspace()
             default_model, default_mode, default_effort = self._active_view_defaults()
@@ -2715,7 +2743,7 @@ class AgyProcessOrchestrator:
         if use_persistent_stdio:
             args.extend(["--input-format", "stream-json"])
 
-        if target_ctx.conversation_id:
+        if target_ctx.conversation_id and not target_ctx.conversation_id.startswith("session-"):
             args.extend(["--conversation", target_ctx.conversation_id])
 
         if prompt is not None and not use_persistent_stdio:
@@ -2797,6 +2825,8 @@ class AgyProcessOrchestrator:
             ctx.waiting_input = False
             ctx.pending_question = None
             ctx.is_running = True
+            ctx.current_action = f"Running ({ctx.model})"
+            ctx.active_prompt = prompt
             ctx.active_snapshot = TurnSnapshot(turn_id=turn_id, model=ctx.model)
             self._auth_required_detected = False
 
@@ -2822,6 +2852,12 @@ class AgyProcessOrchestrator:
                     "conversation_id": cid,
                     "turn_id": turn_id,
                     "model": ctx.model,
+                }
+            )
+            await self.broadcast(
+                {
+                    "type": "session_list",
+                    "sessions": self.get_all_sessions(limit=80),
                 }
             )
 
@@ -3049,12 +3085,27 @@ class AgyProcessOrchestrator:
                 ctx.is_running = False
                 ctx.current_turn_id = None
                 ctx.active_snapshot = None
+                ctx.current_action = ""
+                ctx.active_prompt = ""
+                await self.broadcast(
+                    {
+                        "type": "session_status",
+                        "conversation_id": cid,
+                        "state": "idle",
+                        "detail": "Ready",
+                    }
+                )
                 if not self.is_authenticating:
-                    any_running = any(c.is_running for c in self._sessions.values())
-                    if not any_running:
+                    if self.active_view_cid == cid:
                         await self.broadcast(
-                            {"type": "status", "state": "idle", "detail": "Ready"}
+                            {"type": "status", "conversation_id": cid, "state": "idle", "detail": "Ready"}
                         )
+                await self.broadcast(
+                    {
+                        "type": "session_list",
+                        "sessions": self.get_all_sessions(limit=80),
+                    }
+                )
                 self._gc_idle_sessions()
 
     _SESSION_IDLE_TTL = 30 * 60  # 30 minutes
@@ -3742,8 +3793,28 @@ class AgyProcessOrchestrator:
         # 5. Handle Antigravity Native "init" event
         if etype == "init":
             cid = event.get("conversation_id")
-            if cid and not ctx.conversation_id:
-                ctx.conversation_id = cid
+            if cid and (not ctx.conversation_id or ctx.conversation_id.startswith("session-")):
+                old_cid = ctx.conversation_id
+                if old_cid != cid:
+                    ctx.conversation_id = cid
+                    self._sessions[cid] = ctx
+                    if old_cid:
+                        self._sessions.pop(old_cid, None)
+                    if self.active_view_cid == old_cid:
+                        self.active_view_cid = cid
+                    await self.broadcast(
+                        {
+                            "type": "conversation_assigned",
+                            "old_conversation_id": old_cid,
+                            "conversation_id": cid,
+                        }
+                    )
+                    await self.broadcast(
+                        {
+                            "type": "session_list",
+                            "sessions": self.get_all_sessions(limit=80),
+                        }
+                    )
             return emitted
 
         # 6. Handle Anthropic/Gemini style content_block_delta events
@@ -4087,6 +4158,12 @@ class AgyWebServer:
         self.orchestrator = AgyProcessOrchestrator(self.storage, self.broadcast)
         self.orchestrator.on_auth_success_cb = self.refresh_models
         self.default_workspace = get_default_workspace()
+
+        # Attach active view to most recent session on cold start
+        latest = self.storage.list_conversations(limit=1)
+        if latest:
+            self.orchestrator.active_view_cid = latest[0]["conversation_id"]
+
         self.orchestrator.config.workspace = self.default_workspace
         self.discovered_models: list[dict[str, Any]] = []
         self._cached_quotas: Optional[list[dict[str, str]]] = None
@@ -4094,6 +4171,9 @@ class AgyWebServer:
         self._pending_questions: dict[str, dict[str, Any]] = {}
         self.ipc_sock_path: Path = GEMINI_DIR / "ask_question.sock"
         self.ipc_server: Optional[asyncio.AbstractServer] = None
+
+    def get_all_sessions(self, search_query: str = "", limit: int = 100) -> list[dict[str, Any]]:
+        return self.orchestrator.get_all_sessions(search_query=search_query, limit=limit)
 
     async def start_ipc_server(self) -> None:
         GEMINI_DIR.mkdir(parents=True, exist_ok=True)
@@ -4895,13 +4975,16 @@ class AgyWebServer:
             if self.discovered_models and not self.orchestrator.config.model:
                 self.orchestrator.config.model = self.discovered_models[0]["id"]
 
-            sessions = self.storage.list_conversations(limit=80)
-            # If no active conversation_id is set yet, attach to most recent session
-            if not self.orchestrator.config.conversation_id and sessions:
-                self.orchestrator.config.conversation_id = sessions[0]["conversation_id"]
+            if not self.orchestrator.active_view_cid:
+                latest = self.storage.list_conversations(limit=1)
+                if latest:
+                    self.orchestrator.active_view_cid = latest[0]["conversation_id"]
 
-            if self.orchestrator.config.conversation_id:
-                meta = self.storage.get_conversation_meta(self.orchestrator.config.conversation_id)
+            sessions = self.get_all_sessions(limit=80)
+            active_cid = self.orchestrator.active_view_cid
+
+            if active_cid:
+                meta = self.storage.get_conversation_meta(active_cid)
                 if meta.get("workspaces"):
                     ws_candidate = meta["workspaces"][0]
                     if Path(ws_candidate).is_dir():
@@ -4915,7 +4998,7 @@ class AgyWebServer:
                         "type": "init_state",
                         "default_workspace": self.default_workspace,
                         "config": {
-                            "conversation_id": self.orchestrator.config.conversation_id,
+                            "conversation_id": active_cid,
                             "model": self.orchestrator.config.model,
                             "mode": self.orchestrator.config.mode,
                             "effort": self.orchestrator.config.effort,
@@ -4938,20 +5021,29 @@ class AgyWebServer:
             )
 
             # Hydrate current conversation transcript if one is selected
-            if self.orchestrator.config.conversation_id:
-                cid = self.orchestrator.config.conversation_id
-                meta = self.storage.get_conversation_meta(cid)
-                history = self.storage.load_transcript(cid)
+            if active_cid:
+                meta = self.storage.get_conversation_meta(active_cid)
+                history = self.storage.load_transcript(active_cid)
+                ctx = self.orchestrator.get_or_create_context(active_cid)
                 await websocket.send(
                     json.dumps(
                         {
                             "type": "session_history",
-                            "conversation_id": cid,
-                            "title": meta["title"],
+                            "conversation_id": active_cid,
+                            "title": meta.get("title") or ctx.title or "Conversation",
                             "meta": meta,
-                            "workspace": self.orchestrator.config.workspace,
+                            "workspace": ctx.workspace,
                             "git_branch": branch,
                             "messages": history,
+                            "is_running": ctx.is_running,
+                            "current_action": ctx.current_action,
+                            "active_turn": {
+                                "turn_id": ctx.active_snapshot.turn_id,
+                                "model": ctx.active_snapshot.model,
+                                "raw_markdown": ctx.active_snapshot.raw_markdown,
+                                "raw_thoughts": ctx.active_snapshot.raw_thoughts,
+                                "tool_calls": ctx.active_snapshot.tool_calls,
+                            } if (ctx.is_running and ctx.active_snapshot) else None,
                         }
                     )
                 )
@@ -5241,10 +5333,14 @@ class AgyWebServer:
             new_cid = f"session-{uuid.uuid4().hex[:12]}"
             self.orchestrator.active_view_cid = new_cid
             ctx = self.orchestrator.get_or_create_context(new_cid, workspace=self.orchestrator.config.workspace)
+            ctx.title = f"Skill: {s_name}"
             ctx.total_input_tokens = 0
             ctx.total_output_tokens = 0
             ctx.total_thinking_tokens = 0
             ctx.turn_count = 0
+            ctx.is_running = True
+            ctx.current_action = f"Running ({ctx.model})"
+            ctx.active_prompt = ai_prompt
             branch = get_git_branch(ctx.workspace)
             await self.broadcast({
                 "type": "session_history",
@@ -5260,6 +5356,8 @@ class AgyWebServer:
                 "history": [],
                 "workspace": ctx.workspace,
                 "git_branch": branch,
+                "is_running": True,
+                "current_action": f"Running ({ctx.model})",
                 "config": {
                     "conversation_id": new_cid,
                     "model": ctx.model,
@@ -5268,6 +5366,10 @@ class AgyWebServer:
                     "workspace": ctx.workspace,
                     "git_branch": branch,
                 },
+            })
+            await self.broadcast({
+                "type": "session_list",
+                "sessions": self.get_all_sessions(limit=80),
             })
             asyncio.create_task(
                 self.orchestrator.execute_turn(
@@ -5290,10 +5392,14 @@ class AgyWebServer:
             new_cid = f"session-{uuid.uuid4().hex[:12]}"
             self.orchestrator.active_view_cid = new_cid
             ctx = self.orchestrator.get_or_create_context(new_cid, workspace=self.orchestrator.config.workspace)
+            ctx.title = f"Edit: {s_name}"
             ctx.total_input_tokens = 0
             ctx.total_output_tokens = 0
             ctx.total_thinking_tokens = 0
             ctx.turn_count = 0
+            ctx.is_running = True
+            ctx.current_action = f"Running ({ctx.model})"
+            ctx.active_prompt = ai_prompt
             branch = get_git_branch(ctx.workspace)
             await self.broadcast({
                 "type": "session_history",
@@ -5309,6 +5415,8 @@ class AgyWebServer:
                 "history": [],
                 "workspace": ctx.workspace,
                 "git_branch": branch,
+                "is_running": True,
+                "current_action": f"Running ({ctx.model})",
                 "config": {
                     "conversation_id": new_cid,
                     "model": ctx.model,
@@ -5317,6 +5425,10 @@ class AgyWebServer:
                     "workspace": ctx.workspace,
                     "git_branch": branch,
                 },
+            })
+            await self.broadcast({
+                "type": "session_list",
+                "sessions": self.get_all_sessions(limit=80),
             })
             asyncio.create_task(
                 self.orchestrator.execute_turn(
@@ -5450,10 +5562,14 @@ class AgyWebServer:
             new_cid = f"session-{uuid.uuid4().hex[:12]}"
             self.orchestrator.active_view_cid = new_cid
             ctx = self.orchestrator.get_or_create_context(new_cid, workspace=self.orchestrator.config.workspace)
+            ctx.title = f"Setup MCP: {name or brief[:16]}"
             ctx.total_input_tokens = 0
             ctx.total_output_tokens = 0
             ctx.total_thinking_tokens = 0
             ctx.turn_count = 0
+            ctx.is_running = True
+            ctx.current_action = f"Running ({ctx.model})"
+            ctx.active_prompt = ai_prompt
             branch = get_git_branch(ctx.workspace)
             await self.broadcast({
                 "type": "session_history",
@@ -5469,6 +5585,8 @@ class AgyWebServer:
                 "history": [],
                 "workspace": ctx.workspace,
                 "git_branch": branch,
+                "is_running": True,
+                "current_action": f"Running ({ctx.model})",
                 "config": {
                     "conversation_id": new_cid,
                     "model": ctx.model,
@@ -5477,6 +5595,10 @@ class AgyWebServer:
                     "workspace": ctx.workspace,
                     "git_branch": branch,
                 },
+            })
+            await self.broadcast({
+                "type": "session_list",
+                "sessions": self.get_all_sessions(limit=80),
             })
             asyncio.create_task(
                 self.orchestrator.execute_turn(
@@ -5629,10 +5751,14 @@ class AgyWebServer:
             new_cid = f"session-{uuid.uuid4().hex[:12]}"
             self.orchestrator.active_view_cid = new_cid
             ctx = self.orchestrator.get_or_create_context(new_cid, workspace=self.orchestrator.config.workspace)
+            ctx.title = f"Install: {clean_query[:20]}"
             ctx.total_input_tokens = 0
             ctx.total_output_tokens = 0
             ctx.total_thinking_tokens = 0
             ctx.turn_count = 0
+            ctx.is_running = True
+            ctx.current_action = f"Running ({ctx.model})"
+            ctx.active_prompt = ai_prompt
             branch = get_git_branch(ctx.workspace)
             await self.broadcast({
                 "type": "session_history",
@@ -5648,6 +5774,8 @@ class AgyWebServer:
                 "history": [],
                 "workspace": ctx.workspace,
                 "git_branch": branch,
+                "is_running": True,
+                "current_action": f"Running ({ctx.model})",
                 "config": {
                     "conversation_id": new_cid,
                     "model": ctx.model,
@@ -5656,6 +5784,10 @@ class AgyWebServer:
                     "workspace": ctx.workspace,
                     "git_branch": branch,
                 },
+            })
+            await self.broadcast({
+                "type": "session_list",
+                "sessions": self.get_all_sessions(limit=80),
             })
             asyncio.create_task(
                 self.orchestrator.execute_turn(
@@ -5787,7 +5919,7 @@ class AgyWebServer:
 
         if mtype == "list_sessions":
             query = str(data.get("query") or "")
-            sessions = self.storage.list_conversations(search_query=query, limit=100)
+            sessions = self.get_all_sessions(search_query=query, limit=100)
             await websocket.send(
                 json.dumps({"type": "session_list", "sessions": sessions})
             )
@@ -5806,16 +5938,32 @@ class AgyWebServer:
                     ws = ws_candidate
             ctx = self.orchestrator.get_or_create_context(cid, workspace=ws)
             history = self.storage.load_transcript(cid)
+            if ctx.is_running and ctx.active_prompt:
+                if not history or history[-1].get("role") != "user" or history[-1].get("content") != ctx.active_prompt:
+                    history = list(history) + [{
+                        "role": "user",
+                        "content": ctx.active_prompt,
+                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    }]
             branch = get_git_branch(ctx.workspace)
             await self.broadcast(
                 {
                     "type": "session_history",
                     "conversation_id": cid,
-                    "title": meta.get("title") or "Conversation",
+                    "title": meta.get("title") or ctx.title or "Conversation",
                     "meta": meta,
                     "workspace": ctx.workspace,
                     "git_branch": branch,
                     "messages": history,
+                    "is_running": ctx.is_running,
+                    "current_action": ctx.current_action,
+                    "active_turn": {
+                        "turn_id": ctx.active_snapshot.turn_id,
+                        "model": ctx.active_snapshot.model,
+                        "raw_markdown": ctx.active_snapshot.raw_markdown,
+                        "raw_thoughts": ctx.active_snapshot.raw_thoughts,
+                        "tool_calls": ctx.active_snapshot.tool_calls,
+                    } if (ctx.is_running and ctx.active_snapshot) else None,
                 }
             )
             await self.broadcast(
@@ -5838,6 +5986,7 @@ class AgyWebServer:
             new_cid = f"session-{uuid.uuid4().hex[:12]}"
             self.orchestrator.active_view_cid = new_cid
             ctx = self.orchestrator.get_or_create_context(new_cid, workspace=self.default_workspace)
+            ctx.title = "New Conversation"
             ctx.total_input_tokens = 0
             ctx.total_output_tokens = 0
             ctx.total_thinking_tokens = 0
@@ -5852,6 +6001,7 @@ class AgyWebServer:
                     "workspace": self.default_workspace,
                     "git_branch": branch,
                     "messages": [],
+                    "is_running": False,
                 }
             )
             await self.broadcast(
@@ -5866,6 +6016,12 @@ class AgyWebServer:
                         "workspace": self.default_workspace,
                         "git_branch": branch,
                     },
+                }
+            )
+            await self.broadcast(
+                {
+                    "type": "session_list",
+                    "sessions": self.get_all_sessions(limit=80),
                 }
             )
             return

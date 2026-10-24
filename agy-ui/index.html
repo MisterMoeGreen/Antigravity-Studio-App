@@ -3798,12 +3798,17 @@
       function syncHeaderAndControlsForSession(buf) {
         if (buf && buf.isRunning) {
           setSendButtonRunning();
+          statusDot.className = 'status-dot running';
+          statusText.textContent = buf.currentAction || 'Running...';
+          state.isRunning = true;
           if (!liveProgress.active) {
             startLiveProgress(buf.currentAction || 'Thinking...');
           } else {
             setLiveProgress('thinking', buf.currentAction || 'Thinking...');
           }
         } else {
+          statusDot.className = 'status-dot';
+          statusText.textContent = 'Ready';
           resetSendButtonToIdle();
         }
       }
@@ -4298,7 +4303,6 @@
               }
             }
             renderSessionDrawerList();
-            setRuntimeStatus(msg.is_running ? 'running' : 'idle', msg.is_running ? 'Running' : 'Ready');
             if (msg.system_info) {
               if (msg.system_info.app_version) {
                 state.appVersion = msg.system_info.app_version;
@@ -4387,14 +4391,36 @@
               updateWorkspaceStatusBar(msg.workspace, msg.git_branch);
             }
             state.activeTurns.clear();
-            stopLiveProgress();
             renderFullHistory(msg.messages || []);
             renderSessionDrawerList();
 
             // Re-mount in-flight turns for this session if it is running (AC-2.3)
             if (msg.conversation_id) {
               const histBuf = getOrCreateSessionBuffer(msg.conversation_id);
+              if (msg.is_running !== undefined) {
+                histBuf.isRunning = !!msg.is_running;
+              }
+              if (msg.current_action) {
+                histBuf.currentAction = msg.current_action;
+              }
+              if (msg.active_turn) {
+                const at = msg.active_turn;
+                const tRec = getOrCreateTurnRecord(histBuf, at.turn_id, at.model || state.model);
+                tRec.finalized = false;
+                if (at.raw_markdown) tRec.rawMarkdown = at.raw_markdown;
+                if (at.raw_thoughts) tRec.rawThoughts = at.raw_thoughts;
+                if (at.tool_calls) tRec.toolCalls = at.tool_calls;
+              }
+
               if (histBuf.isRunning) {
+                if (!histBuf.activeUserPrompt && msg.messages && msg.messages.length) {
+                  for (let i = msg.messages.length - 1; i >= 0; i--) {
+                    if (msg.messages[i].role === 'user') {
+                      histBuf.activeUserPrompt = msg.messages[i].content;
+                      break;
+                    }
+                  }
+                }
                 if (histBuf.activeUserPrompt) {
                   const lastMsg = msg.messages && msg.messages.length ? msg.messages[msg.messages.length - 1] : null;
                   const lastUserContent = lastMsg && lastMsg.role === 'user' ? cleanPromptText(lastMsg.content) : '';
@@ -4409,10 +4435,14 @@
                 }
                 syncHeaderAndControlsForSession(histBuf);
                 scrollToBottom(true);
+              } else {
+                syncHeaderAndControlsForSession(null);
               }
               if (histBuf.pendingQuestion) {
                 handleAskQuestionEvent(histBuf.pendingQuestion);
               }
+            } else {
+              syncHeaderAndControlsForSession(null);
             }
             break;
 
@@ -4425,11 +4455,15 @@
               if (state.conversationId === msg.old_conversation_id) {
                 state.conversationId = msg.conversation_id;
               }
-              if (sessionBuffers.has(msg.old_conversation_id)) {
-                const oldBuf = sessionBuffers.get(msg.old_conversation_id);
-                sessionBuffers.delete(msg.old_conversation_id);
+              if (state.sessionBuffers.has(msg.old_conversation_id)) {
+                const oldBuf = state.sessionBuffers.get(msg.old_conversation_id);
+                state.sessionBuffers.delete(msg.old_conversation_id);
                 oldBuf.conversationId = msg.conversation_id;
-                sessionBuffers.set(msg.conversation_id, oldBuf);
+                state.sessionBuffers.set(msg.conversation_id, oldBuf);
+              }
+              const sCard = state.sessions.find(s => s.conversation_id === msg.old_conversation_id);
+              if (sCard) {
+                sCard.conversation_id = msg.conversation_id;
               }
               renderSessionDrawerList();
             }
@@ -4526,11 +4560,15 @@
               if (state.conversationId === msg.old_conversation_id) {
                 state.conversationId = msg.conversation_id;
               }
-              if (sessionBuffers.has(msg.old_conversation_id)) {
-                const oldBuf = sessionBuffers.get(msg.old_conversation_id);
-                sessionBuffers.delete(msg.old_conversation_id);
+              if (state.sessionBuffers.has(msg.old_conversation_id)) {
+                const oldBuf = state.sessionBuffers.get(msg.old_conversation_id);
+                state.sessionBuffers.delete(msg.old_conversation_id);
                 oldBuf.conversationId = msg.conversation_id;
-                sessionBuffers.set(msg.conversation_id, oldBuf);
+                state.sessionBuffers.set(msg.conversation_id, oldBuf);
+              }
+              const sCard = state.sessions.find(s => s.conversation_id === msg.old_conversation_id);
+              if (sCard) {
+                sCard.conversation_id = msg.conversation_id;
               }
             }
             const cid = msg.conversation_id || state.conversationId;
@@ -4546,6 +4584,8 @@
             if (cid === state.conversationId) {
               finalizeTurnCard(msg.turn_id, msg);
               resetSendButtonToIdle();
+              statusDot.className = 'status-dot';
+              statusText.textContent = 'Ready';
             } else {
               buf.unread = true;
               syncUnreadToStorage();
@@ -5553,24 +5593,53 @@
       });
 
       function renderSessionDrawerList() {
-        if (!state.sessions.length) {
+        const sessionMap = new Map();
+        for (const [cid, buf] of state.sessionBuffers.entries()) {
+          if (buf.isRunning || (cid === state.conversationId && state.conversationId)) {
+            sessionMap.set(cid, {
+              conversation_id: cid,
+              title: (cid === state.conversationId && sessionTitle.textContent !== 'Antigravity Studio' ? sessionTitle.textContent : null) || (buf.isRunning ? 'Running Turn' : 'Active Session'),
+              preview: buf.isRunning ? (buf.currentAction || 'Agent is working...') : '',
+              step_count: buf.activeTurns ? buf.activeTurns.size : 0,
+              last_modified_time: new Date().toISOString(),
+              workspaces: [state.workspace || '~/workspace'],
+              is_synthetic: true,
+              status: buf.isRunning ? 'RUNNING' : 'ACTIVE',
+            });
+          }
+        }
+        for (const s of state.sessions) {
+          const existing = sessionMap.get(s.conversation_id);
+          if (existing && existing.is_synthetic) {
+            sessionMap.set(s.conversation_id, {
+              ...s,
+              title: s.title || existing.title,
+              status: existing.status === 'RUNNING' ? 'RUNNING' : s.status,
+              preview: existing.preview || s.preview,
+            });
+          } else {
+            sessionMap.set(s.conversation_id, s);
+          }
+        }
+        const displayList = Array.from(sessionMap.values());
+        if (!displayList.length) {
           sessionListContainer.innerHTML = `
             <div style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px;">
-              No conversations found in conversation_summaries.db
+              No conversations found
             </div>
           `;
           return;
         }
-        sessionListContainer.innerHTML = state.sessions.map((s, idx) => {
+        sessionListContainer.innerHTML = displayList.map((s, idx) => {
           const isActive = s.conversation_id === state.conversationId;
           const relTime = formatRelativeTime(s.last_modified_time);
           const rawWs = (s.workspaces && s.workspaces.length > 0) ? s.workspaces[0] : '';
           const wsDisplay = rawWs ? formatWorkspacePath(rawWs) : '';
-          const previewText = computeSessionPreview(s);
           const buf = state.sessionBuffers.get(s.conversation_id);
-          const isRunning = buf ? buf.isRunning : false;
-          const waitingInput = buf ? buf.waitingInput : false;
+          const isRunning = (buf && buf.isRunning) || s.status === 'RUNNING';
+          const waitingInput = (buf && buf.waitingInput) || s.status === 'WAITING_INPUT';
           const isUnread = buf ? buf.unread : false;
+          const previewText = computeSessionPreview(s) || (isRunning ? (s.preview || 'Agent is working...') : '');
 
           return `
             <div class="session-card ${isActive ? 'active' : ''}" data-cid="${escapeHtml(s.conversation_id)}" data-idx="${idx}">
@@ -5608,7 +5677,7 @@
 
         sessionListContainer.querySelectorAll('.session-card').forEach(card => {
           const idx = Number(card.getAttribute('data-idx'));
-          const s = state.sessions[idx];
+          const s = displayList[idx];
           if (!s) return;
 
           let touchStartX = 0, touchStartY = 0;
