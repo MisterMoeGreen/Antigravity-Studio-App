@@ -293,10 +293,10 @@ def get_agy_version() -> str:
     except Exception:
         pass
 
-    return _cached_agy_version or os.environ.get("AGY_RUNTIME_VERSION", "1.4.3")
+    return _cached_agy_version or os.environ.get("AGY_RUNTIME_VERSION", "1.4.7")
 
-APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.4.1")
-APP_BUILD = os.environ.get("AGY_APP_VERSION_CODE", "20")
+APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.4.3")
+APP_BUILD = os.environ.get("AGY_APP_VERSION_CODE", "22")
 AGY_VERSION = get_agy_version()
 
 logging.basicConfig(
@@ -1143,8 +1143,8 @@ async def delete_mcp_server(name: str) -> dict[str, Any]:
 
 
 async def check_github_updates() -> dict[str, Any]:
-    installed_version = os.environ.get("AGY_APP_VERSION", "1.4.1")
-    installed_code = int(os.environ.get("AGY_APP_VERSION_CODE", "20"))
+    installed_version = os.environ.get("AGY_APP_VERSION", "1.4.3")
+    installed_code = int(os.environ.get("AGY_APP_VERSION_CODE", "22"))
     url = "https://api.github.com/repos/MisterMoeGreen/Antigravity-Studio-App/releases/latest"
 
     cmd = ["curl", "-sSL", "-H", f"User-Agent: AntigravityStudio/{APP_VERSION}", url]
@@ -3152,6 +3152,8 @@ class AgyProcessOrchestrator:
         if self.auth_waiter_task and not self.auth_waiter_task.done():
             self.auth_waiter_task.cancel()
         self.auth_waiter_task = None
+        self.auth_turn_id = None
+        self.auth_cid = None
 
     def _sync_oauth_token(self) -> None:
         token_src = HOME_DIR / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"
@@ -3172,6 +3174,7 @@ class AgyProcessOrchestrator:
         turn_id = self.auth_turn_id or "auth"
         pending_prompt = self._pending_auth_prompt
         pending_attachments = self._pending_auth_attachments
+        target_cid = self.auth_cid
         self._pending_auth_prompt = None
         self._pending_auth_attachments = []
 
@@ -3180,6 +3183,7 @@ class AgyProcessOrchestrator:
         await self.broadcast(
             {
                 "type": "agent_token",
+                "conversation_id": target_cid,
                 "turn_id": turn_id,
                 "delta": "\n\n**Google Sign-In Successful!** Authentication credentials saved. You are ready to use Antigravity Studio.\n",
             }
@@ -3187,12 +3191,13 @@ class AgyProcessOrchestrator:
         await self.broadcast(
             {
                 "type": "turn_complete",
+                "conversation_id": target_cid,
                 "turn_id": turn_id,
                 "metrics": {},
             }
         )
         await self.broadcast({"type": "auth_success"})
-        await self.broadcast({"type": "status", "state": "idle", "detail": "Ready"})
+        await self.broadcast({"type": "status", "conversation_id": target_cid, "state": "idle", "detail": "Ready"})
         if self.on_auth_success_cb:
             try:
                 cb_res = self.on_auth_success_cb()
@@ -3202,11 +3207,12 @@ class AgyProcessOrchestrator:
                 logger.warning("Error in on_auth_success_cb: %s", exc)
 
         if pending_prompt:
-            logger.info("Resuming pending prompt after successful authentication: %s", pending_prompt[:60])
+            logger.info("Resuming pending prompt after successful authentication on [%s]: %s", target_cid or "active", pending_prompt[:60])
             await asyncio.sleep(0.5)
             asyncio.create_task(
                 self.execute_turn(
                     pending_prompt,
+                    conversation_id=target_cid,
                     attachments=pending_attachments,
                 )
             )
@@ -3353,6 +3359,7 @@ class AgyProcessOrchestrator:
     async def trigger_in_app_login(
         self,
         turn_id: str,
+        conversation_id: Optional[str] = None,
         original_prompt: Optional[str] = None,
         original_attachments: Optional[list[dict[str, Any]]] = None,
     ) -> None:
@@ -3369,6 +3376,7 @@ class AgyProcessOrchestrator:
         # Clean up any existing auth session
         self._cleanup_auth()
 
+        self.auth_cid = conversation_id
         self._pending_auth_prompt = original_prompt
         self._pending_auth_attachments = original_attachments or []
 
@@ -3384,6 +3392,7 @@ class AgyProcessOrchestrator:
         await self.broadcast(
             {
                 "type": "agent_token",
+                "conversation_id": conversation_id,
                 "turn_id": turn_id,
                 "delta": "\n> **Google Sign-In Required:** Initializing authentication session...\n",
             }
@@ -3468,12 +3477,14 @@ class AgyProcessOrchestrator:
                 self.auth_proc = proc
                 self.auth_master = master
                 self.auth_turn_id = turn_id
+                self.auth_cid = conversation_id
 
                 logger.info("Captured OAuth URL: %s...", auth_url[:60])
                 await self.broadcast({"type": "open_external_url", "url": auth_url})
                 await self.broadcast(
                     {
                         "type": "auth_required",
+                        "conversation_id": conversation_id,
                         "url": auth_url,
                         "turn_id": turn_id,
                     }
@@ -3481,6 +3492,7 @@ class AgyProcessOrchestrator:
                 await self.broadcast(
                     {
                         "type": "agent_token",
+                        "conversation_id": conversation_id,
                         "turn_id": turn_id,
                         "delta": (
                             f"\n[**Click Here to Sign In with Google**]({auth_url})\n\n"
@@ -3517,14 +3529,16 @@ class AgyProcessOrchestrator:
                 await self.broadcast(
                     {
                         "type": "agent_token",
+                        "conversation_id": conversation_id,
                         "turn_id": turn_id,
                         "delta": "\nCould not automatically generate Google OAuth session. Please retry.\n",
                     }
                 )
-                await self.broadcast({"type": "auth_failed"})
+                await self.broadcast({"type": "auth_failed", "conversation_id": conversation_id})
                 await self.broadcast(
                     {
                         "type": "turn_complete",
+                        "conversation_id": conversation_id,
                         "turn_id": turn_id,
                         "status": "ERROR",
                     }
@@ -3536,14 +3550,16 @@ class AgyProcessOrchestrator:
             await self.broadcast(
                 {
                     "type": "agent_token",
+                    "conversation_id": conversation_id,
                     "turn_id": turn_id,
                     "delta": f"\n**Sign-in initialization error:** `{err_msg}`\n",
                 }
             )
-            await self.broadcast({"type": "auth_failed"})
+            await self.broadcast({"type": "auth_failed", "conversation_id": conversation_id})
             await self.broadcast(
                 {
                     "type": "turn_complete",
+                    "conversation_id": conversation_id,
                     "turn_id": turn_id,
                     "status": "ERROR",
                 }
