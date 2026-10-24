@@ -13,17 +13,22 @@
 #define LOADER_SO APP_FILES "/usr/lib/libproot_loader.so"
 
 int main(int argc, char *argv[]) {
-    /* 1. Prevent recursive container re-entry if already inside rootfs */
-    if (access("/etc/alpine-release", F_OK) == 0 && access(PROOT_BIN, F_OK) != 0) {
-        execv("/bin/sh", argv);
-        return 127;
-    }
-
-    /* 2. Determine invocation mode from binary name (multicall dispatch) */
+    /* 1. Determine invocation mode from binary name (multicall dispatch) */
     const char *prog = strrchr(argv[0], '/');
     prog = prog ? prog + 1 : argv[0];
     int is_shell = (strcmp(prog, "agy-sh") == 0 || strcmp(prog, "libagy_sh.so") == 0 ||
                     strcmp(prog, "sh") == 0 || strcmp(prog, "bash") == 0);
+
+    /* 2. Prevent recursive container re-entry if already inside rootfs */
+    if (access("/etc/alpine-release", F_OK) == 0 && access(PROOT_BIN, F_OK) != 0) {
+        if (!is_shell) {
+            execvp(prog, argv);
+            return 127;
+        }
+        argv[0] = "/bin/sh";
+        execv("/bin/sh", argv);
+        return 127;
+    }
 
     /* Guard against headless hanging when invoked without arguments */
     if (is_shell && argc <= 1) {
@@ -38,9 +43,9 @@ int main(int argc, char *argv[]) {
     unsetenv("LD_PRELOAD");
     unsetenv("PYTHONHOME");
     unsetenv("PYTHONPATH");
+    unsetenv("PROOT_NO_SECCOMP"); /* Ensure seccomp acceleration is enabled by default */
     setenv("PROOT_TMP_DIR", APP_FILES "/usr/tmp", 1);
     setenv("PROOT_LOADER", LOADER_SO, 0);
-    setenv("PROOT_NO_SECCOMP", "0", 0);
 
     /* 4. Propagate v1.2.0 interactive question IPC socket */
     setenv("AGY_QUESTION_SOCK", APP_FILES "/home/.gemini/antigravity-cli/ask_question.sock", 1);
@@ -54,14 +59,20 @@ int main(int argc, char *argv[]) {
     setenv("NODE_OPTIONS", "--max-old-space-size=1536", 0);
     setenv("HOME", "/root", 1);
 
-    /* 6. Resolve current working directory with safe fallback */
+    /* 6. Resolve current working directory with safe fallback and canonical normalization */
     char cwd[PATH_MAX];
     if (!getcwd(cwd, sizeof(cwd))) {
         snprintf(cwd, sizeof(cwd), "%s", APP_FILES "/home/workspace");
     }
+    char normalized_cwd[PATH_MAX];
+    if (strncmp(cwd, "/data/user/0/ai.agy.app", 23) == 0) {
+        snprintf(normalized_cwd, sizeof(normalized_cwd), "/data/data/ai.agy.app%s", cwd + 23);
+    } else {
+        snprintf(normalized_cwd, sizeof(normalized_cwd), "%s", cwd);
+    }
 
     /* 7. Construct proot argv with 1:1 host path identity mounts */
-    char **new_argv = calloc((size_t)argc + 40, sizeof(char *));
+    char **new_argv = calloc((size_t)argc + 42, sizeof(char *));
     if (!new_argv) return 127;
 
     int k = 0;
@@ -81,6 +92,9 @@ int main(int argc, char *argv[]) {
     new_argv[k++] = "-b"; new_argv[k++] = APP_FILES "/usr/tmp:/dev/shm";
     /* Preserve BOTH 1:1 host path (/data/data/ai.agy.app/files/home/...) AND /root/workspace */
     new_argv[k++] = "-b"; new_argv[k++] = APP_FILES "/home:" APP_FILES "/home";
+    if (access("/data/user/0/ai.agy.app/files/home", F_OK) == 0) {
+        new_argv[k++] = "-b"; new_argv[k++] = "/data/user/0/ai.agy.app/files/home:/data/user/0/ai.agy.app/files/home";
+    }
     new_argv[k++] = "-b"; new_argv[k++] = APP_FILES "/home/workspace:/root/workspace";
     new_argv[k++] = "-b"; new_argv[k++] = APP_FILES "/home/.ssh:/root/.ssh";
     /* Bridge v1.2.0 ask_question tool into container */
@@ -90,7 +104,7 @@ int main(int argc, char *argv[]) {
         new_argv[k++] = "-b"; new_argv[k++] = "/storage/emulated/0:/storage/emulated/0";
     }
     new_argv[k++] = "-w";
-    new_argv[k++] = cwd;
+    new_argv[k++] = normalized_cwd;
     /* Clean guest PATH and unset LD_LIBRARY_PATH inside the Alpine musl guest */
     new_argv[k++] = "/usr/bin/env";
     new_argv[k++] = "-u";

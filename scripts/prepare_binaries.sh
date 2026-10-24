@@ -62,13 +62,12 @@ patch_elf_bytes "${JNI_DIR}/libask_question.so"
 echo "[1c/7] Compiling PRoot Anonymous ELF Loader (libproot_loader.so)..."
 $CC_BIN -shared -fPIC -O2 -Wall \
   -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384 \
-  -nostdlib -ffreestanding \
+  -Wl,-e,_start -nostdlib -ffreestanding \
   -I "${PROJECT_ROOT}/app/src/main/cpp/proot/src" \
   "${PROJECT_ROOT}/app/src/main/cpp/proot/src/loader/loader.c" \
   "${PROJECT_ROOT}/app/src/main/cpp/proot/src/loader/assembly.S" \
   -o "${JNI_DIR}/libproot_loader.so"
 llvm-strip --strip-unneeded "${JNI_DIR}/libproot_loader.so" 2>/dev/null || strip --strip-unneeded "${JNI_DIR}/libproot_loader.so"
-patchelf --remove-rpath "${JNI_DIR}/libproot_loader.so" 2>/dev/null || true
 
 # 1d. Compile PRoot Engine (libproot.so)
 echo "[1d/7] Compiling PRoot Engine (libproot.so)..."
@@ -79,8 +78,9 @@ if make -C "${PROJECT_ROOT}/app/src/main/cpp/proot/src" CC="${CC_BIN}" \
   llvm-strip --strip-unneeded "${JNI_DIR}/libproot.so" 2>/dev/null || strip --strip-unneeded "${JNI_DIR}/libproot.so"
   patchelf --remove-rpath "${JNI_DIR}/libproot.so" 2>/dev/null || true
   patch_elf_bytes "${JNI_DIR}/libproot.so"
-elif [ -f "${PROJECT_ROOT}/app/src/main/jniLibs/arm64-v8a/libproot.so" ]; then
-  echo "Using existing libproot.so..."
+else
+  echo "FATAL: Failed to build libproot.so!" >&2
+  exit 1
 fi
 
 # 1e. Compile agy-sh Multicall Bridge (libagy_sh.so)

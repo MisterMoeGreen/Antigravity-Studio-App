@@ -135,7 +135,7 @@ jobs:
           fi
 
           # Verify container bridge libraries in baseline; recover from v1.4.3 if missing
-          if [ ! -f "app/src/main/jniLibs/arm64-v8a/libagy_sh.so" ] || [ ! -f "app/src/main/jniLibs/arm64-v8a/libproot.so" ]; then
+          if [ ! -f "app/src/main/jniLibs/arm64-v8a/libagy_sh.so" ] || [ ! -f "app/src/main/jniLibs/arm64-v8a/libproot.so" ] || [ ! -f "app/src/main/jniLibs/arm64-v8a/libproot_loader.so" ]; then
             echo "Container bridge binaries missing from baseline APK! Recovering from v1.4.3..."
             curl -sSL -f -o v143.apk "https://github.com/${{ github.repository }}/releases/download/v1.4.3/AntigravityStudio-v1.4.3.apk" 2>/dev/null || true
             if [ -f "v143.apk" ]; then
@@ -239,7 +239,7 @@ jobs:
           [ ! -f "$APK_SRC" ] && APK_SRC="app/build/outputs/apk/release/app-release-unsigned.apk"
           
           # Assert presence of critical container subsystem binaries
-          for req in libagy_sh.so libproot.so libproot_loader.so libagy_shim.so libbash.so libagy.so; do
+          for req in libagy_sh.so libproot.so libproot_loader.so libagy_shim.so libask_question.so libbash.so libagy.so; do
             if ! unzip -l "$APK_SRC" | grep -q "$req"; then
               echo "FATAL: $req missing from built APK!" >&2
               exit 1
