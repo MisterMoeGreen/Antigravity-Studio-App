@@ -2619,6 +2619,7 @@ class AgyProcessOrchestrator:
         self.storage = storage
         self.broadcast = broadcast_cb
         self._sessions: dict[str, SessionExecutionContext] = {}
+        self._migrated_cids: dict[str, str] = {}
         self.active_view_cid: Optional[str] = None
         self._global_auth_lock = asyncio.Lock()
         self._streamed_turn_ids: set[str] = set()
@@ -2685,6 +2686,8 @@ class AgyProcessOrchestrator:
         effort: Optional[str] = None,
     ) -> SessionExecutionContext:
         cid = (conversation_id or "").strip()
+        if cid in self._migrated_cids:
+            cid = self._migrated_cids[cid]
         if not cid:
             if self.active_view_cid:
                 cid = self.active_view_cid
@@ -2972,17 +2975,22 @@ class AgyProcessOrchestrator:
                 else:
                     status_str = "SUCCESS"
 
-                # If conversation_id was newly created, discover it from SQLite summaries
-                old_cid = ctx.conversation_id
+                # Synchronize local `cid` if `_handle_stream_event` ("init") migrated `ctx.conversation_id`
+                old_cid = cid
                 assigned_new_cid = False
-                if not ctx.conversation_id or ctx.conversation_id.startswith("session-"):
+                if ctx.conversation_id and ctx.conversation_id != cid:
+                    cid = ctx.conversation_id
+                    assigned_new_cid = True
+                elif not ctx.conversation_id or ctx.conversation_id.startswith("session-"):
                     latest = self.storage.list_conversations(limit=1)
                     if latest:
                         discovered_cid = latest[0]["conversation_id"]
-                        if old_cid != discovered_cid:
+                        if old_cid != discovered_cid and discovered_cid not in self._sessions:
                             ctx.conversation_id = discovered_cid
                             self._sessions[discovered_cid] = ctx
                             self._sessions.pop(old_cid, None)
+                            if old_cid:
+                                self._migrated_cids[old_cid] = discovered_cid
                             if self.active_view_cid == old_cid:
                                 self.active_view_cid = discovered_cid
                             cid = discovered_cid
@@ -3081,6 +3089,7 @@ class AgyProcessOrchestrator:
                 )
             finally:
                 self._streamed_turn_ids.discard(turn_id)
+                final_cid = ctx.conversation_id or cid
                 ctx.active_proc = None
                 ctx.is_running = False
                 ctx.current_turn_id = None
@@ -3090,15 +3099,15 @@ class AgyProcessOrchestrator:
                 await self.broadcast(
                     {
                         "type": "session_status",
-                        "conversation_id": cid,
+                        "conversation_id": final_cid,
                         "state": "idle",
                         "detail": "Ready",
                     }
                 )
                 if not self.is_authenticating:
-                    if self.active_view_cid == cid:
+                    if self.active_view_cid in (final_cid, cid):
                         await self.broadcast(
-                            {"type": "status", "conversation_id": cid, "state": "idle", "detail": "Ready"}
+                            {"type": "status", "conversation_id": final_cid, "state": "idle", "detail": "Ready"}
                         )
                 await self.broadcast(
                     {
@@ -3800,6 +3809,7 @@ class AgyProcessOrchestrator:
                     self._sessions[cid] = ctx
                     if old_cid:
                         self._sessions.pop(old_cid, None)
+                        self._migrated_cids[old_cid] = cid
                     if self.active_view_cid == old_cid:
                         self.active_view_cid = cid
                     await self.broadcast(
@@ -3993,6 +4003,8 @@ class AgyProcessOrchestrator:
 
     async def abort_turn(self, conversation_id: Optional[str] = None) -> bool:
         target_cid = conversation_id or self.active_view_cid
+        if target_cid and target_cid in self._migrated_cids:
+            target_cid = self._migrated_cids[target_cid]
         if not target_cid or target_cid not in self._sessions:
             for c in self._sessions.values():
                 if c.is_running and c.active_proc:
@@ -5025,6 +5037,13 @@ class AgyWebServer:
                 meta = self.storage.get_conversation_meta(active_cid)
                 history = self.storage.load_transcript(active_cid)
                 ctx = self.orchestrator.get_or_create_context(active_cid)
+                if ctx.is_running and ctx.active_prompt:
+                    if not history or history[-1].get("role") != "user" or history[-1].get("content") != ctx.active_prompt:
+                        history = list(history) + [{
+                            "role": "user",
+                            "content": ctx.active_prompt,
+                            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        }]
                 await websocket.send(
                     json.dumps(
                         {
@@ -5338,7 +5357,6 @@ class AgyWebServer:
             ctx.total_output_tokens = 0
             ctx.total_thinking_tokens = 0
             ctx.turn_count = 0
-            ctx.is_running = True
             ctx.current_action = f"Running ({ctx.model})"
             ctx.active_prompt = ai_prompt
             branch = get_git_branch(ctx.workspace)
@@ -5397,7 +5415,6 @@ class AgyWebServer:
             ctx.total_output_tokens = 0
             ctx.total_thinking_tokens = 0
             ctx.turn_count = 0
-            ctx.is_running = True
             ctx.current_action = f"Running ({ctx.model})"
             ctx.active_prompt = ai_prompt
             branch = get_git_branch(ctx.workspace)
@@ -5567,7 +5584,6 @@ class AgyWebServer:
             ctx.total_output_tokens = 0
             ctx.total_thinking_tokens = 0
             ctx.turn_count = 0
-            ctx.is_running = True
             ctx.current_action = f"Running ({ctx.model})"
             ctx.active_prompt = ai_prompt
             branch = get_git_branch(ctx.workspace)
@@ -5756,7 +5772,6 @@ class AgyWebServer:
             ctx.total_output_tokens = 0
             ctx.total_thinking_tokens = 0
             ctx.turn_count = 0
-            ctx.is_running = True
             ctx.current_action = f"Running ({ctx.model})"
             ctx.active_prompt = ai_prompt
             branch = get_git_branch(ctx.workspace)
