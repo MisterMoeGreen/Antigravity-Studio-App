@@ -2635,6 +2635,7 @@ class AgyProcessOrchestrator:
         self._pending_auth_prompt: Optional[str] = None
         self._pending_auth_attachments: list[dict[str, Any]] = []
         self._auth_required_detected: bool = False
+        self._secure_oauth_token()
 
     def get_all_sessions(self, search_query: str = "", limit: int = 100) -> list[dict[str, Any]]:
         persisted = self.storage.list_conversations(search_query=search_query, limit=limit)
@@ -3155,20 +3156,31 @@ class AgyProcessOrchestrator:
         self.auth_turn_id = None
         self.auth_cid = None
 
-    def _sync_oauth_token(self) -> None:
-        token_src = HOME_DIR / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"
+    def _secure_oauth_token(self) -> None:
+        token_dir = HOME_DIR / ".gemini" / "antigravity-cli"
+        try:
+            token_dir.mkdir(parents=True, exist_ok=True)
+            token_dir.chmod(0o700)
+        except Exception:
+            pass
+        token_src = token_dir / "antigravity-oauth-token"
         if token_src.exists():
-            backup_candidates = [
-                Path("/storage/emulated/0/Documents/AgyStudio/antigravity-oauth-token"),
-                Path("/storage/emulated/0/Documents/antigravity-oauth-token"),
-            ]
-            for bp in backup_candidates:
-                try:
-                    bp.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(token_src, bp)
-                    logger.info("Synced oauth token to %s", bp)
-                except Exception as exc:
-                    logger.debug("Could not sync oauth token to %s: %s", bp, exc)
+            try:
+                token_src.chmod(0o600)
+            except Exception:
+                pass
+        # Strictly purge any insecure legacy copies on shared storage
+        legacy_candidates = [
+            Path("/storage/emulated/0/Documents/AgyStudio/antigravity-oauth-token"),
+            Path("/storage/emulated/0/Documents/antigravity-oauth-token"),
+        ]
+        for bp in legacy_candidates:
+            try:
+                if bp.exists():
+                    bp.unlink()
+                    logger.info("Purged insecure legacy oauth token from %s", bp)
+            except Exception:
+                pass
 
     async def _on_auth_success(self) -> None:
         turn_id = self.auth_turn_id or "auth"
@@ -3178,7 +3190,7 @@ class AgyProcessOrchestrator:
         self._pending_auth_prompt = None
         self._pending_auth_attachments = []
 
-        self._sync_oauth_token()
+        self._secure_oauth_token()
         self._cleanup_auth()
         await self.broadcast(
             {

@@ -32,7 +32,29 @@ class MainActivity : AppCompatActivity() {
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { /* Notification permission status */ }
+    ) { isGranted ->
+        if (isGranted) {
+            refreshForegroundNotification()
+        }
+    }
+
+    private fun refreshForegroundNotification() {
+        val serviceIntent = Intent(this, AgyForegroundService::class.java).apply {
+            action = AgyForegroundService.ACTION_UPDATE_NOTIFICATION
+        }
+        try {
+            startService(serviceIntent)
+        } catch (_: Exception) {}
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                refreshForegroundNotification()
+            }
+        }
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {

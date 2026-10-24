@@ -198,37 +198,41 @@ object EnvironmentBootstrapper {
             )
         }
 
-        // 4. Seed and synchronize Antigravity OAuth Token with shared storage
+        // 4. Secure internal Antigravity OAuth Token and purge legacy shared storage leaks
         val appGeminiDir = File(homeDir, ".gemini/antigravity-cli")
         appGeminiDir.mkdirs()
+        try {
+            // Strict 0700 directory permissions to prevent traversal during atomic file creation
+            android.system.Os.chmod(appGeminiDir.absolutePath, 0b111_000_000)
+        } catch (_: Exception) {}
+
         val appTokenFile = File(appGeminiDir, "antigravity-oauth-token")
-
-        val candidateTokenPaths = listOf(
-            File("/storage/emulated/0/Documents/AgyStudio/antigravity-oauth-token"),
-            File("/storage/emulated/0/Documents/antigravity-oauth-token"),
-            File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOCUMENTS), "AgyStudio/antigravity-oauth-token")
-        )
-
-        for (candidate in candidateTokenPaths) {
+        if (appTokenFile.exists()) {
             try {
-                if (candidate.exists() && candidate.length() > 0) {
-                    if (!appTokenFile.exists() || candidate.lastModified() > appTokenFile.lastModified()) {
-                        candidate.copyTo(appTokenFile, overwrite = true)
-                        Log.i(TAG, "Successfully seeded antigravity-oauth-token from ${candidate.absolutePath}")
-                    }
-                    break
-                }
+                // Strict 0600 POSIX permissions inside private internal storage sandbox
+                android.system.Os.chmod(appTokenFile.absolutePath, 0b110_000_000)
             } catch (_: Exception) {}
         }
 
-        // Mirror active token back to shared storage for seamless retention across reinstalls
-        try {
-            val backupDest = File("/storage/emulated/0/Documents/AgyStudio/antigravity-oauth-token")
-            if (appTokenFile.exists() && (!backupDest.exists() || appTokenFile.lastModified() > backupDest.lastModified())) {
-                backupDest.parentFile?.mkdirs()
-                appTokenFile.copyTo(backupDest, overwrite = true)
-            }
-        } catch (_: Exception) {}
+        // Strictly purge legacy shared storage copies to prevent credential leakage
+        val legacySharedTokenPaths = listOf(
+            File("/storage/emulated/0/Documents/AgyStudio/antigravity-oauth-token"),
+            File("/storage/emulated/0/Documents/antigravity-oauth-token"),
+            File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOCUMENTS), "AgyStudio/antigravity-oauth-token"),
+            File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOCUMENTS), "antigravity-oauth-token")
+        )
+        for (legacy in legacySharedTokenPaths) {
+            try {
+                if (legacy.exists()) {
+                    legacy.delete()
+                    Log.i(TAG, "Purged insecure legacy OAuth token from shared storage: ${legacy.absolutePath}")
+                    val parent = legacy.parentFile
+                    if (parent != null && parent.name == "AgyStudio" && parent.list()?.isEmpty() == true) {
+                        parent.delete()
+                    }
+                }
+            } catch (_: Exception) {}
+        }
 
         // 5. Seed and synchronize default_app_prompt.md -> ~/.gemini/config/GEMINI.md
         try {

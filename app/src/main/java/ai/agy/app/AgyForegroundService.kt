@@ -29,6 +29,7 @@ class AgyForegroundService : Service() {
         const val CHANNEL_ID = "agy_daemon_channel"
         const val NOTIFICATION_ID = 2001
         const val ACTION_STOP_SERVICE = "ai.agy.app.action.STOP_SERVICE"
+        const val ACTION_UPDATE_NOTIFICATION = "ai.agy.app.action.UPDATE_NOTIFICATION"
 
         private val _readyPortFlow = MutableStateFlow<Int?>(null)
         val readyPortFlow: StateFlow<Int?> = _readyPortFlow.asStateFlow()
@@ -38,10 +39,17 @@ class AgyForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP_SERVICE) {
-            Log.i(TAG, "Stop action requested via notification")
-            stopServiceGracefully()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_STOP_SERVICE -> {
+                Log.i(TAG, "Stop action requested via notification")
+                stopServiceGracefully()
+                return START_NOT_STICKY
+            }
+            ACTION_UPDATE_NOTIFICATION -> {
+                val port = _readyPortFlow.value ?: 8081
+                startStickyNotification(port)
+                return START_STICKY
+            }
         }
         return START_STICKY
     }
@@ -112,6 +120,7 @@ class AgyForegroundService : Service() {
             .setContentIntent(pendingIntent)
             .addAction(stopAction)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
             .build()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -123,6 +132,9 @@ class AgyForegroundService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
+        try {
+            nm.notify(NOTIFICATION_ID, notification)
+        } catch (_: Exception) {}
     }
 
     private fun startPythonDaemon(port: Int, token: String) {
