@@ -2916,6 +2916,7 @@ class AgyProcessOrchestrator:
                     "conversation_id": cid,
                     "turn_id": turn_id,
                     "model": ctx.model,
+                    "start_time": ctx.active_snapshot.start_time if ctx.active_snapshot else time.time(),
                 }
             )
             await self.broadcast(
@@ -5113,6 +5114,37 @@ class AgyWebServer:
             body,
         )
 
+    def prepare_session_history_messages(
+        self, ctx: SessionExecutionContext, raw_history: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        history = list(raw_history)
+        if not (ctx.is_running and ctx.active_prompt):
+            return history
+
+        cleaned_active = self.storage._clean_user_prompt(ctx.active_prompt).strip()
+        last_user_idx = None
+        for i in range(len(history) - 1, -1, -1):
+            if history[i].get("role") == "user":
+                last_user_idx = i
+                break
+
+        if last_user_idx is not None:
+            last_user_content = self.storage._clean_user_prompt(history[last_user_idx].get("content", "")).strip()
+            if last_user_content == cleaned_active:
+                # Active prompt is already present at last_user_idx.
+                # Truncate any partial assistant message written to transcript for this in-flight turn,
+                # because the in-flight turn is dynamically provided via active_turn (active_snapshot).
+                return history[:last_user_idx + 1]
+
+        # Active prompt was not yet recorded in transcript.jsonl.
+        # Append the active prompt as the latest user message.
+        history.append({
+            "role": "user",
+            "content": cleaned_active or ctx.active_prompt,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        })
+        return history
+
     async def ws_handler(self, websocket: ServerConnection) -> None:
         self.clients.add(websocket)
         logger.info("Client connected (%d active)", len(self.clients))
@@ -5173,15 +5205,9 @@ class AgyWebServer:
             # Hydrate current conversation transcript if one is selected
             if active_cid:
                 meta = self.storage.get_conversation_meta(active_cid)
-                history = self.storage.load_transcript(active_cid)
+                raw_history = self.storage.load_transcript(active_cid)
                 ctx = self.orchestrator.get_or_create_context(active_cid)
-                if ctx.is_running and ctx.active_prompt:
-                    if not history or history[-1].get("role") != "user" or history[-1].get("content") != ctx.active_prompt:
-                        history = list(history) + [{
-                            "role": "user",
-                            "content": ctx.active_prompt,
-                            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        }]
+                history = self.prepare_session_history_messages(ctx, raw_history)
                 await websocket.send(
                     json.dumps(
                         {
@@ -5200,6 +5226,7 @@ class AgyWebServer:
                                 "raw_markdown": ctx.active_snapshot.raw_markdown,
                                 "raw_thoughts": ctx.active_snapshot.raw_thoughts,
                                 "tool_calls": ctx.active_snapshot.tool_calls,
+                                "start_time": ctx.active_snapshot.start_time,
                             } if (ctx.is_running and ctx.active_snapshot) else None,
                         }
                     )
@@ -6205,14 +6232,8 @@ class AgyWebServer:
                 if Path(ws_candidate).is_dir():
                     ws = ws_candidate
             ctx = self.orchestrator.get_or_create_context(cid, workspace=ws)
-            history = self.storage.load_transcript(cid)
-            if ctx.is_running and ctx.active_prompt:
-                if not history or history[-1].get("role") != "user" or history[-1].get("content") != ctx.active_prompt:
-                    history = list(history) + [{
-                        "role": "user",
-                        "content": ctx.active_prompt,
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    }]
+            raw_history = self.storage.load_transcript(cid)
+            history = self.prepare_session_history_messages(ctx, raw_history)
             branch = get_git_branch(ctx.workspace)
             await self.broadcast(
                 {
@@ -6231,6 +6252,7 @@ class AgyWebServer:
                         "raw_markdown": ctx.active_snapshot.raw_markdown,
                         "raw_thoughts": ctx.active_snapshot.raw_thoughts,
                         "tool_calls": ctx.active_snapshot.tool_calls,
+                        "start_time": ctx.active_snapshot.start_time,
                     } if (ctx.is_running and ctx.active_snapshot) else None,
                 }
             )

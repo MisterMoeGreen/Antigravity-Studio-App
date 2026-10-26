@@ -3813,11 +3813,8 @@
           statusDot.className = 'status-dot running';
           statusText.textContent = buf.currentAction || 'Running...';
           state.isRunning = true;
-          if (!liveProgress.active) {
-            startLiveProgress(buf.currentAction || 'Thinking...');
-          } else {
-            setLiveProgress('thinking', buf.currentAction || 'Thinking...');
-          }
+          const st = (buf.startTime && buf.startTime > 0) ? buf.startTime : performance.now();
+          startLiveProgress(buf.currentAction || 'Thinking...', st);
         } else {
           statusDot.className = 'status-dot';
           statusText.textContent = 'Ready';
@@ -4129,22 +4126,14 @@
         currentAction: 'Thinking...',
       };
 
-      function startLiveProgress(initialAction = 'Thinking...') {
-        liveProgress.active = true;
-        liveProgress.startTime = performance.now();
-        liveProgress.currentAction = initialAction;
-
-        if (liveProgress.intervalId) {
-          clearInterval(liveProgress.intervalId);
-        }
-
-        clearWelcomeIfPresent();
-
+      function ensureLiveProgressRow(initialAction = 'Thinking...') {
         let row = document.getElementById('liveProgressRow');
-        if (!row) {
-          row = document.createElement('div');
-          row.id = 'liveProgressRow';
-          row.className = 'live-progress-row';
+        if (!row || !chatViewport.contains(row)) {
+          if (!row) {
+            row = document.createElement('div');
+            row.id = 'liveProgressRow';
+            row.className = 'live-progress-row';
+          }
           row.innerHTML = `
             <div class="live-progress-pill">
               <div class="live-progress-icon-wrap">
@@ -4156,21 +4145,38 @@
               </div>
             </div>
           `;
+          chatViewport.appendChild(row);
         }
-        chatViewport.appendChild(row);
         row.style.display = 'flex';
+        return row;
+      }
 
+      function startLiveProgress(initialAction = 'Thinking...', startTime = 0) {
+        liveProgress.active = true;
+        liveProgress.startTime = (startTime && startTime > 0)
+          ? startTime
+          : (liveProgress.startTime > 0 && liveProgress.active ? liveProgress.startTime : performance.now());
+        liveProgress.currentAction = initialAction;
+
+        if (liveProgress.intervalId) {
+          clearInterval(liveProgress.intervalId);
+        }
+
+        clearWelcomeIfPresent();
+
+        const row = ensureLiveProgressRow(initialAction);
         const actionEl = row.querySelector('.live-progress-action');
         const timerEl = row.querySelector('.live-progress-timer');
         if (actionEl) actionEl.textContent = initialAction;
-        if (timerEl) timerEl.textContent = '0.0s';
 
-        liveProgress.intervalId = setInterval(() => {
+        const updateTimer = () => {
           if (!liveProgress.active) return;
-          const elapsed = ((performance.now() - liveProgress.startTime) / 1000).toFixed(1);
+          const elapsed = Math.max(0, (performance.now() - liveProgress.startTime) / 1000).toFixed(1);
           const tEl = document.querySelector('#liveProgressRow .live-progress-timer');
           if (tEl) tEl.textContent = `${elapsed}s`;
-        }, 100);
+        };
+        updateTimer();
+        liveProgress.intervalId = setInterval(updateTimer, 100);
 
         scrollToBottom(true);
       }
@@ -4181,7 +4187,8 @@
           return;
         }
         liveProgress.currentAction = actionText;
-        const actionEl = document.querySelector('#liveProgressRow .live-progress-action');
+        const row = ensureLiveProgressRow(actionText);
+        const actionEl = row.querySelector('.live-progress-action');
         if (actionEl) {
           actionEl.textContent = actionText;
         }
@@ -4190,6 +4197,7 @@
 
       function stopLiveProgress() {
         liveProgress.active = false;
+        liveProgress.startTime = 0;
         if (liveProgress.intervalId) {
           clearInterval(liveProgress.intervalId);
           liveProgress.intervalId = null;
@@ -4210,9 +4218,9 @@
 
         if (state.isRunning) {
           setSendButtonRunning();
-          if (!liveProgress.active) {
-            startLiveProgress(detail || 'Thinking...');
-          }
+          const buf = state.conversationId ? state.sessionBuffers.get(state.conversationId) : null;
+          const st = (buf && buf.startTime > 0) ? buf.startTime : performance.now();
+          startLiveProgress(detail || 'Thinking...', st);
         } else {
           resetSendButtonToIdle();
         }
@@ -4430,23 +4438,32 @@
                 if (at.raw_markdown) tRec.rawMarkdown = at.raw_markdown;
                 if (at.raw_thoughts) tRec.rawThoughts = at.raw_thoughts;
                 if (at.tool_calls) tRec.toolCalls = at.tool_calls;
+                if (at.start_time) {
+                  const elapsedSec = Math.max(0, Date.now() / 1000 - at.start_time);
+                  histBuf.startTime = performance.now() - (elapsedSec * 1000);
+                  tRec.startTime = histBuf.startTime;
+                } else if (!histBuf.startTime) {
+                  histBuf.startTime = performance.now();
+                }
               }
 
               if (histBuf.isRunning) {
-                if (!histBuf.activeUserPrompt && msg.messages && msg.messages.length) {
+                let hasActiveUserPromptInHistory = false;
+                if (msg.messages && msg.messages.length) {
                   for (let i = msg.messages.length - 1; i >= 0; i--) {
                     if (msg.messages[i].role === 'user') {
-                      histBuf.activeUserPrompt = msg.messages[i].content;
+                      if (!histBuf.activeUserPrompt) {
+                        histBuf.activeUserPrompt = msg.messages[i].content;
+                      }
+                      if (cleanPromptText(msg.messages[i].content) === cleanPromptText(histBuf.activeUserPrompt)) {
+                        hasActiveUserPromptInHistory = true;
+                      }
                       break;
                     }
                   }
                 }
-                if (histBuf.activeUserPrompt) {
-                  const lastMsg = msg.messages && msg.messages.length ? msg.messages[msg.messages.length - 1] : null;
-                  const lastUserContent = lastMsg && lastMsg.role === 'user' ? cleanPromptText(lastMsg.content) : '';
-                  if (lastUserContent !== cleanPromptText(histBuf.activeUserPrompt)) {
-                    appendUserBubble(histBuf.activeUserPrompt, histBuf.activeUserAttachments);
-                  }
+                if (histBuf.activeUserPrompt && !hasActiveUserPromptInHistory) {
+                  appendUserBubble(histBuf.activeUserPrompt, histBuf.activeUserAttachments);
                 }
                 for (const [tId, tRec] of histBuf.activeTurns.entries()) {
                   if (!tRec.finalized) {
@@ -4498,18 +4515,21 @@
             const buf = getOrCreateSessionBuffer(cid);
             buf.isRunning = true;
             buf.currentAction = 'Thinking...';
+            if (msg.start_time) {
+              const elapsedSec = Math.max(0, Date.now() / 1000 - msg.start_time);
+              buf.startTime = performance.now() - (elapsedSec * 1000);
+            } else if (!buf.startTime) {
+              buf.startTime = performance.now();
+            }
             const tRec = getOrCreateTurnRecord(buf, msg.turn_id, msg.model || state.model);
             tRec.finalized = false;
+            tRec.startTime = buf.startTime;
             renderSessionDrawerList();
 
             if (cid === state.conversationId) {
               setSendButtonRunning();
               ensureAssistantTurnCard(msg.turn_id, msg.model || state.model);
-              if (!liveProgress.active) {
-                startLiveProgress('Thinking...');
-              } else {
-                setLiveProgress('thinking', 'Thinking...');
-              }
+              startLiveProgress('Thinking...', buf.startTime);
               scrollToBottom(true);
             }
             break;
@@ -4598,6 +4618,7 @@
             buf.pendingQuestion = null;
             buf.activeUserPrompt = '';
             buf.activeUserAttachments = [];
+            buf.startTime = 0;
             const tRec = getOrCreateTurnRecord(buf, msg.turn_id);
             tRec.finalized = true;
 
@@ -5368,6 +5389,8 @@
         const buf = getOrCreateSessionBuffer(state.conversationId);
         buf.activeUserPrompt = trimmed;
         buf.activeUserAttachments = attachments;
+        buf.isRunning = true;
+        buf.startTime = performance.now();
         buf.unread = false;
         syncUnreadToStorage();
 
@@ -5381,9 +5404,11 @@
             '/context': 'Calculating context window usage...',
             '/version': 'Checking runtime versions...',
           };
-          startLiveProgress(progressLabels[firstWord] || ('Running ' + firstWord + '...'));
+          buf.currentAction = progressLabels[firstWord] || ('Running ' + firstWord + '...');
+          startLiveProgress(buf.currentAction, buf.startTime);
         } else {
-          startLiveProgress('Thinking...');
+          buf.currentAction = 'Thinking...';
+          startLiveProgress('Thinking...', buf.startTime);
         }
         sendWs({
           type: 'user_prompt',
