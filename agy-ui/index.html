@@ -3595,6 +3595,7 @@
         pendingAttachments: [], // [{ name, size, type, data }]
         wsInitialized: false,
         pendingDeepLinkCid: null,
+        ignoreNextInitialHistory: false,
       };
 
       const SLASH_COMMANDS = [
@@ -4517,6 +4518,7 @@
             );
             state.pendingDeepLinkCid = null;
             if (pendingCid) {
+              state.ignoreNextInitialHistory = true;
               initiateSessionSwitch(pendingCid);
             } else if (!msg.config?.conversation_id) {
               renderEmptyWelcome();
@@ -4584,8 +4586,11 @@
             break;
 
           case 'session_history':
-            if (state.conversationId && msg.conversation_id !== state.conversationId) {
-              break;
+            if (state.ignoreNextInitialHistory) {
+              state.ignoreNextInitialHistory = false;
+              if (msg.conversation_id !== state.conversationId) {
+                break;
+              }
             }
             state.conversationId = msg.conversation_id;
             sessionTitle.textContent = msg.title || 'New Conversation';
@@ -4598,6 +4603,9 @@
             state.activeTurns.clear();
             renderFullHistory(msg.messages || []);
             renderSessionDrawerList();
+            if (window.AndroidApp && typeof window.AndroidApp.setActiveSession === 'function') {
+              window.AndroidApp.setActiveSession(msg.conversation_id);
+            }
 
             // Re-mount in-flight turns for this session if it is running (AC-2.3)
             if (msg.conversation_id) {
@@ -5753,6 +5761,11 @@
         renderAttachmentBar();
         autoResizePrompt();
         closeOverlays();
+        state.conversationId = null;
+        if (window.AndroidApp && typeof window.AndroidApp.setActiveSession === 'function') {
+          window.AndroidApp.setActiveSession(null);
+        }
+        updatePinButtonState(false);
         sendWs({
           type: 'new_session',
           model: state.model,
