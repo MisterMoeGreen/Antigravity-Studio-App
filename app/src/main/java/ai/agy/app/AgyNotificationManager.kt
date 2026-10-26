@@ -25,7 +25,7 @@ object AgyNotificationManager {
     const val TAG = "AgyNotifMgr"
 
     const val CHANNEL_ID_COMPLETION = "agy_completion_channel"
-    const val CHANNEL_ID_PROGRESS = "agy_progress_channel"
+    const val CHANNEL_ID_PROGRESS = "agy_progress_channel_v2"
 
     const val NOTIF_ID_COMPLETION = 3001
     const val NOTIF_ID_LIVE_PROGRESS = 4001
@@ -91,14 +91,18 @@ object AgyNotificationManager {
             }
             nm.createNotificationChannel(compChannel)
 
+            try {
+                nm.deleteNotificationChannel("agy_progress_channel")
+            } catch (_: Exception) {}
+
             val progChannel = NotificationChannel(
                 CHANNEL_ID_PROGRESS,
                 "Agent Live Progress",
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_DEFAULT
             ).apply {
-                description = "Silent real-time execution status, elapsed time, and tool calls for pinned sessions"
+                description = "Prominent live execution status, elapsed time, and tool calls for pinned sessions"
                 enableLights(false)
-                enableVibration(false)
+                enableVibration(true)
                 setShowBadge(false)
             }
             nm.createNotificationChannel(progChannel)
@@ -353,7 +357,7 @@ object AgyNotificationManager {
             )
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
             .build()
 
