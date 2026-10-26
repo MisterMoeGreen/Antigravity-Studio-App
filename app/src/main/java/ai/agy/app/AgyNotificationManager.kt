@@ -298,28 +298,32 @@ object AgyNotificationManager {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra(EXTRA_CONVERSATION_ID, cid)
         }
-        val openPendingIntent = PendingIntent.getActivity(context, 0, openIntent, pendingFlags)
+        val openReqCode = (cid.hashCode() and 0x0FFFFFFF) or 0x20000000
+        val openPendingIntent = PendingIntent.getActivity(context, openReqCode, openIntent, pendingFlags)
 
         val hideIntent = Intent(context, NotificationActionReceiver::class.java).apply {
             action = ACTION_HIDE_LIVE_NOTIFICATION
             data = Uri.parse("agy://notif/hide/${Uri.encode(cid)}")
             putExtra(EXTRA_CONVERSATION_ID, cid)
         }
-        val hidePendingIntent = PendingIntent.getBroadcast(context, 0, hideIntent, pendingFlags)
+        val hideReqCode = (cid.hashCode() and 0x0FFFFFFF) or 0x30000000
+        val hidePendingIntent = PendingIntent.getBroadcast(context, hideReqCode, hideIntent, pendingFlags)
 
         val dismissIntent = Intent(context, NotificationActionReceiver::class.java).apply {
             action = ACTION_DISMISS_LIVE_NOTIFICATION
             data = Uri.parse("agy://notif/dismiss/${Uri.encode(cid)}")
             putExtra(EXTRA_CONVERSATION_ID, cid)
         }
-        val dismissPendingIntent = PendingIntent.getBroadcast(context, 0, dismissIntent, pendingFlags)
+        val dismissReqCode = (cid.hashCode() and 0x0FFFFFFF) or 0x40000000
+        val dismissPendingIntent = PendingIntent.getBroadcast(context, dismissReqCode, dismissIntent, pendingFlags)
 
         val stopIntent = Intent(context, NotificationActionReceiver::class.java).apply {
             action = ACTION_STOP_AGENT
             data = Uri.parse("agy://notif/stop/${Uri.encode(cid)}")
             putExtra(EXTRA_CONVERSATION_ID, cid)
         }
-        val stopPendingIntent = PendingIntent.getBroadcast(context, 0, stopIntent, pendingFlags)
+        val stopReqCode = (cid.hashCode() and 0x0FFFFFFF) or 0x50000000
+        val stopPendingIntent = PendingIntent.getBroadcast(context, stopReqCode, stopIntent, pendingFlags)
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID_PROGRESS)
             .setSmallIcon(R.drawable.ic_stat_agy)
@@ -409,9 +413,10 @@ object AgyNotificationManager {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra(EXTRA_CONVERSATION_ID, conversationId)
         }
+        val compReqCode = (conversationId.hashCode() and 0x0FFFFFFF) or 0x10000000
         val contentPendingIntent = PendingIntent.getActivity(
             context,
-            0,
+            compReqCode,
             clickIntent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )

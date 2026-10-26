@@ -3900,8 +3900,8 @@
 
       function initiateSessionSwitch(newCid) {
         if (!newCid) return;
+        closeOverlays();
         if (newCid === state.conversationId) {
-          closeOverlays();
           return;
         }
 
@@ -3940,13 +3940,13 @@
         updatePinButtonState(Boolean(targetBuf && targetBuf.isPinned));
 
         // 6. Request canonical transcript from server
-        closeOverlays();
         sendWs({ type: 'switch_session', conversation_id: newCid });
       }
 
       window.loadSessionFromNotification = function(cid) {
         if (!cid) return false;
-        if (!ws || ws.readyState !== WebSocket.OPEN || !state.wsInitialized) {
+        console.log('[Notification] loadSessionFromNotification requested for:', cid);
+        if (!state.ws || state.ws.readyState !== WebSocket.OPEN || !state.wsInitialized) {
           state.pendingDeepLinkCid = cid;
           return true;
         }
@@ -4584,6 +4584,9 @@
             break;
 
           case 'session_history':
+            if (state.conversationId && msg.conversation_id !== state.conversationId) {
+              break;
+            }
             state.conversationId = msg.conversation_id;
             sessionTitle.textContent = msg.title || 'New Conversation';
             if (msg.config) {

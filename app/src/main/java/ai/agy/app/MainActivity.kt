@@ -107,10 +107,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun captureDeepLinkIntent(intent: Intent?) {
-        val cid = intent?.getStringExtra(AgyNotificationManager.EXTRA_CONVERSATION_ID)
+        if (intent == null) return
+        val cidFromExtra = intent.getStringExtra(AgyNotificationManager.EXTRA_CONVERSATION_ID)
+        val cidFromData = intent.data?.lastPathSegment
+        val cid = (cidFromExtra ?: cidFromData)
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
             ?: return
+        android.util.Log.i("MainActivity", "Captured deep link for session: $cid (action=${intent.action}, data=${intent.data})")
         AgyNotificationManager.clearCompletionNotification(this, cid)
         AgyNotificationManager.pendingDeepLinkConversationId = cid
         intent.removeExtra(AgyNotificationManager.EXTRA_CONVERSATION_ID)
@@ -121,7 +125,7 @@ class MainActivity : AppCompatActivity() {
         val quotedCid = org.json.JSONObject.quote(cid)
         runOnUiThread {
             webView.evaluateJavascript(
-                "(function(){ if (window.loadSessionFromNotification) { window.loadSessionFromNotification($quotedCid); return true; } return false; })();"
+                "(function(){ try { if (window.loadSessionFromNotification) { return Boolean(window.loadSessionFromNotification($quotedCid)); } } catch (e) { console.error('loadSessionFromNotification error', e); } return false; })();"
             ) { result ->
                 if (result?.trim()?.equals("true", ignoreCase = true) == true) {
                     if (AgyNotificationManager.pendingDeepLinkConversationId == cid) {
