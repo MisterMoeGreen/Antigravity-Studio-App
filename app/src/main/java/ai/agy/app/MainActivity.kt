@@ -21,6 +21,32 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
 
+    companion object {
+        @Volatile private var activeInstance: MainActivity? = null
+
+        fun notifyLiveNotificationHidden(conversationId: String) {
+            val act = activeInstance ?: return
+            val quotedCid = org.json.JSONObject.quote(conversationId)
+            act.runOnUiThread {
+                act.webView.evaluateJavascript(
+                    "window.onLiveNotificationHidden && window.onLiveNotificationHidden($quotedCid);",
+                    null
+                )
+            }
+        }
+
+        fun notifySessionAbort(conversationId: String) {
+            val act = activeInstance ?: return
+            val quotedCid = org.json.JSONObject.quote(conversationId)
+            act.runOnUiThread {
+                act.webView.evaluateJavascript(
+                    "window.onNotificationSessionAbort && window.onNotificationSessionAbort($quotedCid);",
+                    null
+                )
+            }
+        }
+    }
+
     private val fileChooserLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -49,9 +75,59 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        activeInstance = this
+        AgyNotificationManager.isAppForeground = true
+        AgyNotificationManager.activeConversationId?.let { cid ->
+            AgyNotificationManager.clearCompletionNotification(this, cid)
+        }
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 refreshForegroundNotification()
+            }
+        }
+        dispatchPendingDeepLinkToWebView()
+    }
+
+    override fun onPause() {
+        AgyNotificationManager.isAppForeground = false
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        if (activeInstance === this) activeInstance = null
+        AgyNotificationManager.isAppForeground = false
+        super.onDestroy()
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        captureDeepLinkIntent(intent)
+        dispatchPendingDeepLinkToWebView()
+    }
+
+    private fun captureDeepLinkIntent(intent: Intent?) {
+        val cid = intent?.getStringExtra(AgyNotificationManager.EXTRA_CONVERSATION_ID)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: return
+        AgyNotificationManager.clearCompletionNotification(this, cid)
+        AgyNotificationManager.pendingDeepLinkConversationId = cid
+        intent.removeExtra(AgyNotificationManager.EXTRA_CONVERSATION_ID)
+    }
+
+    private fun dispatchPendingDeepLinkToWebView() {
+        val cid = AgyNotificationManager.pendingDeepLinkConversationId ?: return
+        val quotedCid = org.json.JSONObject.quote(cid)
+        runOnUiThread {
+            webView.evaluateJavascript(
+                "(function(){ if (window.loadSessionFromNotification) { window.loadSessionFromNotification($quotedCid); return true; } return false; })();"
+            ) { result ->
+                if (result?.trim()?.equals("true", ignoreCase = true) == true) {
+                    if (AgyNotificationManager.pendingDeepLinkConversationId == cid) {
+                        AgyNotificationManager.pendingDeepLinkConversationId = null
+                    }
+                }
             }
         }
     }
@@ -59,6 +135,9 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        activeInstance = this
+        AgyNotificationManager.initChannels(this)
+        captureDeepLinkIntent(intent)
 
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
@@ -67,8 +146,6 @@ class MainActivity : AppCompatActivity() {
 
         val serviceIntent = Intent(this, AgyForegroundService::class.java)
         startForegroundService(serviceIntent)
-
-        // Non-blocking background check for repository updates disabled in v1.1.0 in favor of on-demand check in Settings Hub
 
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
@@ -98,6 +175,11 @@ class MainActivity : AppCompatActivity() {
                         } catch (_: Exception) {}
                     }
                     return true
+                }
+
+                override fun onPageFinished(view: WebView?, url: String?) {
+                    super.onPageFinished(view, url)
+                    dispatchPendingDeepLinkToWebView()
                 }
             }
 
@@ -185,6 +267,77 @@ class MainActivity : AppCompatActivity() {
     }
 
     inner class AndroidAppInterface {
+        @JavascriptInterface
+        fun consumePendingDeepLink(): String? {
+            val cid = AgyNotificationManager.pendingDeepLinkConversationId
+            AgyNotificationManager.pendingDeepLinkConversationId = null
+            return cid
+        }
+
+        @JavascriptInterface
+        fun setActiveSession(conversationId: String?) {
+            AgyNotificationManager.onActiveSessionChanged(this@MainActivity, conversationId)
+        }
+
+        @JavascriptInterface
+        fun notifyTurnComplete(conversationId: String, sessionTitle: String, previewText: String, turnStatus: String?) {
+            AgyNotificationManager.postCompletionNotification(
+                this@MainActivity,
+                conversationId,
+                sessionTitle,
+                previewText,
+                turnStatus ?: "COMPLETED"
+            )
+        }
+
+        @JavascriptInterface
+        fun pinLiveNotification(conversationId: String, sessionTitle: String, initialStatus: String): Boolean {
+            if (!AgyNotificationManager.hasNotificationPermission(this@MainActivity)) {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                    runOnUiThread {
+                        notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                }
+                return false
+            }
+            return AgyNotificationManager.pinSession(this@MainActivity, conversationId, sessionTitle, initialStatus)
+        }
+
+        @JavascriptInterface
+        fun unpinLiveNotification(conversationId: String) {
+            AgyNotificationManager.unpinSession(this@MainActivity, conversationId)
+        }
+
+        @JavascriptInterface
+        fun isLiveNotificationPinned(conversationId: String): Boolean {
+            return AgyNotificationManager.isPinned(conversationId)
+        }
+
+        @JavascriptInterface
+        fun updateLiveProgress(
+            conversationId: String,
+            sessionTitle: String,
+            statusText: String,
+            elapsedSeconds: Double,
+            lastToolCall: String,
+            totalToolCalls: Int
+        ) {
+            AgyNotificationManager.updateLiveProgress(
+                this@MainActivity,
+                conversationId,
+                sessionTitle,
+                statusText,
+                elapsedSeconds,
+                lastToolCall,
+                totalToolCalls
+            )
+        }
+
+        @JavascriptInterface
+        fun clearLiveNotification(conversationId: String) {
+            AgyNotificationManager.clearLiveProgressNotification(this@MainActivity, conversationId)
+        }
+
         @JavascriptInterface
         fun triggerUpdateCheck(force: Boolean) {
             lifecycleScope.launch(Dispatchers.IO) {

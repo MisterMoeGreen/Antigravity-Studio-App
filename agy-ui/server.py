@@ -99,8 +99,8 @@ def is_request_authorized(request: Request) -> bool:
         if params.get("auth") == AUTH_TOKEN:
             return True
 
-    # 2. Check X-Agy-Auth header
-    if request.headers.get("X-Agy-Auth") == AUTH_TOKEN:
+    # 2. Check X-Agy-Auth or X-Auth-Token header
+    if request.headers.get("X-Agy-Auth") == AUTH_TOKEN or request.headers.get("X-Auth-Token") == AUTH_TOKEN:
         return True
 
     # 3. Check Authorization header
@@ -110,6 +110,15 @@ def is_request_authorized(request: Request) -> bool:
             return True
 
     return False
+
+
+def emit_native_notif_event(payload: dict) -> None:
+    """Emit structured event to AgyForegroundService stdout pipe for background-safe notifications (ARGON-V15-01)."""
+    try:
+        sys.stdout.write(f"__AGY_NOTIFY__:{json.dumps(payload, ensure_ascii=False)}\n")
+        sys.stdout.flush()
+    except Exception:
+        pass
 
 
 def load_app_settings() -> dict[str, Any]:
@@ -2919,6 +2928,16 @@ class AgyProcessOrchestrator:
                     "start_time": ctx.active_snapshot.start_time if ctx.active_snapshot else time.time(),
                 }
             )
+            meta = self.storage.get_conversation_meta(cid)
+            s_title = meta.get("title") or f"Session {cid[:8]}"
+            emit_native_notif_event(
+                {
+                    "event": "turn_start",
+                    "conversation_id": cid,
+                    "title": s_title,
+                    "status": "Thinking...",
+                }
+            )
             await self.broadcast(
                 {
                     "type": "session_list",
@@ -3103,6 +3122,18 @@ class AgyProcessOrchestrator:
                         "sessions": self.storage.list_conversations(limit=80),
                     }
                 )
+                meta = self.storage.get_conversation_meta(cid)
+                s_title = meta.get("title") or f"Session {cid[:8]}"
+                raw_preview = ctx.active_snapshot.raw_markdown if ctx.active_snapshot else ""
+                emit_native_notif_event(
+                    {
+                        "event": "turn_complete",
+                        "conversation_id": cid,
+                        "title": s_title,
+                        "preview": raw_preview,
+                        "status": status_str,
+                    }
+                )
 
             except asyncio.CancelledError:
                 await self.broadcast(
@@ -3120,6 +3151,17 @@ class AgyProcessOrchestrator:
                         "conversation_id": cid,
                         "state": "idle",
                         "detail": "Interrupted",
+                    }
+                )
+                meta = self.storage.get_conversation_meta(cid)
+                s_title = meta.get("title") or f"Session {cid[:8]}"
+                emit_native_notif_event(
+                    {
+                        "event": "turn_complete",
+                        "conversation_id": cid,
+                        "title": s_title,
+                        "preview": "Turn interrupted.",
+                        "status": "INTERRUPTED",
                     }
                 )
             except Exception as exc:
@@ -3147,6 +3189,17 @@ class AgyProcessOrchestrator:
                         "conversation_id": cid,
                         "state": "idle",
                         "detail": "Error",
+                    }
+                )
+                meta = self.storage.get_conversation_meta(cid)
+                s_title = meta.get("title") or f"Session {cid[:8]}"
+                emit_native_notif_event(
+                    {
+                        "event": "turn_complete",
+                        "conversation_id": cid,
+                        "title": s_title,
+                        "preview": str(exc),
+                        "status": "ERROR",
                     }
                 )
             finally:
@@ -3833,6 +3886,19 @@ class AgyProcessOrchestrator:
                         **tool_record,
                     }
                 )
+                if ctx.active_snapshot:
+                    meta = self.storage.get_conversation_meta(ctx.conversation_id)
+                    emit_native_notif_event(
+                        {
+                            "event": "live_progress",
+                            "conversation_id": ctx.conversation_id,
+                            "title": meta.get("title") or f"Session {ctx.conversation_id[:8]}",
+                            "status": f"Tool: {t_name}",
+                            "elapsed": time.time() - ctx.active_snapshot.start_time,
+                            "last_tool": f"{t_name}: {str(t_args)[:60]}",
+                            "tool_count": len(ctx.active_snapshot.tool_calls),
+                        }
+                    )
 
             return emitted
 
@@ -4004,6 +4070,19 @@ class AgyProcessOrchestrator:
                     **tool_record,
                 }
             )
+            if ctx.active_snapshot:
+                meta = self.storage.get_conversation_meta(ctx.conversation_id)
+                emit_native_notif_event(
+                    {
+                        "event": "live_progress",
+                        "conversation_id": ctx.conversation_id,
+                        "title": meta.get("title") or f"Session {ctx.conversation_id[:8]}",
+                        "status": f"Tool: {tool_record.get('name')}",
+                        "elapsed": time.time() - ctx.active_snapshot.start_time,
+                        "last_tool": f"{tool_record.get('name')}: {str(tool_record.get('args'))[:60]}",
+                        "tool_count": len(ctx.active_snapshot.tool_calls),
+                    }
+                )
             return emitted
 
         # 6. Handle structured assistant message envelope
@@ -4046,6 +4125,19 @@ class AgyProcessOrchestrator:
                                 **t_rec,
                             }
                         )
+                        if ctx.active_snapshot:
+                            meta = self.storage.get_conversation_meta(ctx.conversation_id)
+                            emit_native_notif_event(
+                                {
+                                    "event": "live_progress",
+                                    "conversation_id": ctx.conversation_id,
+                                    "title": meta.get("title") or f"Session {ctx.conversation_id[:8]}",
+                                    "status": f"Tool: {t_rec.get('name')}",
+                                    "elapsed": time.time() - ctx.active_snapshot.start_time,
+                                    "last_tool": f"{t_rec.get('name')}: {str(t_rec.get('args'))[:60]}",
+                                    "tool_count": len(ctx.active_snapshot.tool_calls),
+                                }
+                            )
                     elif btype == "text" and block.get("text"):
                         emitted = True
                         if ctx.active_snapshot:
@@ -4781,6 +4873,67 @@ class AgyWebServer:
             return None  # Proceed with authorized WebSocket handshake
 
         path = request.path.split("?", 1)[0]
+
+        if path == "/api/session/abort":
+            if not is_request_authorized(request):
+                return Response(
+                    int(HTTPStatus.UNAUTHORIZED),
+                    "Unauthorized",
+                    Headers([("Content-Type", "text/plain; charset=utf-8")]),
+                    b"Unauthorized",
+                )
+
+            qs = ""
+            if "?" in request.path:
+                qs = request.path.split("?", 1)[1]
+            params = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
+            import urllib.parse
+            cid = urllib.parse.unquote(params.get("cid", "")).strip()
+
+            if not cid:
+                return Response(
+                    int(HTTPStatus.BAD_REQUEST),
+                    "Bad Request",
+                    Headers([("Content-Type", "application/json")]),
+                    b'{"error":"missing_cid"}',
+                )
+
+            try:
+                stopped = await self.orchestrator.abort_turn(conversation_id=cid)
+                await self._cancel_all_pending_questions(conversation_id=cid, reason="notification_abort")
+                await self.broadcast({
+                    "type": "session_status",
+                    "conversation_id": cid,
+                    "state": "idle",
+                    "detail": "Interrupted" if stopped else "Ready",
+                })
+                await self.broadcast({
+                    "type": "turn_complete",
+                    "conversation_id": cid,
+                    "status": "INTERRUPTED",
+                })
+                meta = self.storage.get_conversation_meta(cid)
+                emit_native_notif_event({
+                    "event": "turn_complete",
+                    "conversation_id": cid,
+                    "title": meta.get("title") or f"Session {cid[:8]}",
+                    "preview": "Turn interrupted.",
+                    "status": "INTERRUPTED",
+                })
+                return Response(
+                    int(HTTPStatus.OK),
+                    "OK",
+                    Headers([("Content-Type", "application/json")]),
+                    b'{"status":"aborted"}',
+                )
+            except Exception as exc:
+                logger.warning("Error processing HTTP abort request for %s: %s", cid, exc)
+                return Response(
+                    int(HTTPStatus.INTERNAL_SERVER_ERROR),
+                    "Error",
+                    Headers([("Content-Type", "application/json")]),
+                    b'{"error":"abort_failed"}',
+                )
 
         if path in ("/", "/index.html"):
             if not INDEX_HTML_PATH.exists():

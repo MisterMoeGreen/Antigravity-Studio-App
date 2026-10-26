@@ -692,6 +692,52 @@
       color: var(--text-primary);
       max-width: 92%;
     }
+    .live-pin-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: var(--surface-secondary, rgba(255, 255, 255, 0.08));
+      border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.15));
+      border-radius: 9999px;
+      padding: 3px 9px;
+      color: var(--text-secondary, #a0aec0);
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-left: 8px;
+      transition: all 0.18s ease;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .live-pin-btn:hover {
+      background: var(--surface-hover, rgba(255, 255, 255, 0.15));
+      color: var(--text-primary, #ffffff);
+    }
+    .live-pin-btn.pinned {
+      background: rgba(0, 163, 255, 0.22);
+      border-color: rgba(0, 163, 255, 0.6);
+      color: #00a3ff;
+      box-shadow: 0 0 8px rgba(0, 163, 255, 0.3);
+    }
+    .live-pin-btn.pinned .pin-icon {
+      transform: rotate(-30deg);
+      color: #00a3ff;
+    }
+    .live-pin-btn .pin-icon {
+      width: 11px;
+      height: 11px;
+      transition: transform 0.2s ease;
+    }
+    html.light .live-pin-btn {
+      background: rgba(0, 0, 0, 0.05);
+      border-color: rgba(0, 0, 0, 0.12);
+      color: #4a5568;
+    }
+    html.light .live-pin-btn.pinned {
+      background: rgba(0, 163, 255, 0.15);
+      border-color: rgba(0, 163, 255, 0.5);
+      color: #0077cc;
+    }
     .live-progress-icon-wrap {
       display: flex;
       align-items: center;
@@ -3883,11 +3929,42 @@
 
         // 5. Update header and controls immediately
         syncHeaderAndControlsForSession(targetBuf);
+        if (window.AndroidApp && typeof window.AndroidApp.setActiveSession === 'function') {
+          window.AndroidApp.setActiveSession(newCid);
+        }
+        updatePinButtonState(Boolean(targetBuf.isPinned));
 
         // 6. Request canonical transcript from server
         closeOverlays();
         sendWs({ type: 'switch_session', conversation_id: newCid });
       }
+
+      window.loadSessionFromNotification = function(cid) {
+        if (!cid) return;
+        initiateSessionSwitch(cid);
+      };
+
+      window.onLiveNotificationHidden = function(cid) {
+        if (state.sessionBuffers.has(cid)) {
+          state.sessionBuffers.get(cid).isPinned = false;
+        }
+        if (state.conversationId === cid) {
+          updatePinButtonState(false);
+        }
+      };
+
+      window.onNotificationSessionAbort = function(cid) {
+        if (state.sessionBuffers.has(cid)) {
+          const buf = state.sessionBuffers.get(cid);
+          buf.isRunning = false;
+          buf.isPinned = false;
+        }
+        if (state.conversationId === cid) {
+          updatePinButtonState(false);
+          stopLiveProgress();
+          resetSendButtonToIdle();
+        }
+      };
 
       // ---------------------------------------------------------------------
       // Markdown & Code Highlighting Engine (with Offline Fallback)
@@ -4126,6 +4203,38 @@
         currentAction: 'Thinking...',
       };
 
+      function updatePinButtonState(isPinned) {
+        const btn = document.getElementById('btnPinLiveNotif');
+        if (!btn) return;
+        const textSpan = btn.querySelector('.pin-text');
+        if (isPinned) {
+          btn.classList.add('pinned');
+          if (textSpan) textSpan.textContent = 'Pinned';
+          btn.title = 'Unpin live progress notification';
+        } else {
+          btn.classList.remove('pinned');
+          if (textSpan) textSpan.textContent = 'Pin';
+          btn.title = 'Pin live progress to notifications';
+        }
+      }
+
+      function forwardLiveProgressToNative(cid, statusText, lastTool, toolCount) {
+        if (!window.AndroidApp || typeof window.AndroidApp.updateLiveProgress !== 'function') return;
+        const buf = cid ? state.sessionBuffers.get(cid) : null;
+        if (!buf || !buf.isPinned || !buf.isRunning) return;
+        const sCard = state.sessions.find(s => s.conversation_id === cid);
+        const sTitle = (sCard && sCard.title) || ('Session ' + cid.slice(0, 8));
+        const elapsed = buf.startTime > 0 ? (performance.now() - buf.startTime) / 1000 : 0.0;
+        window.AndroidApp.updateLiveProgress(
+          cid,
+          sTitle,
+          statusText || 'Thinking...',
+          elapsed,
+          lastTool || '',
+          toolCount || 0
+        );
+      }
+
       function ensureLiveProgressRow(initialAction = 'Thinking...') {
         let row = document.getElementById('liveProgressRow');
         if (!row) {
@@ -4141,13 +4250,48 @@
                 <span class="live-progress-action">${escapeHtml(initialAction)}</span>
                 <span class="live-progress-timer">0.0s</span>
               </div>
+              <button class="live-pin-btn" id="btnPinLiveNotif" title="Pin live progress to notifications" aria-label="Pin live progress notification">
+                <svg class="fa-icon pin-icon" viewBox="0 0 384 512" aria-hidden="true" focusable="false">
+                  <path fill="currentColor" d="M32 32C32 14.3 46.3 0 64 0L320 0c17.7 0 32 14.3 32 32s-14.3 32-32 32l-11 0 0 142.1c28.2 40 43 87.7 43 136.6 0 10.1-4.7 19.6-12.8 25.6s-18.4 7.9-28.2 5.1L224 340.8l0 107.2c0 17.7-14.3 32-32 32s-32-14.3-32-32l0-107.2L63 371.4c-9.8 2.8-20.1 .9-28.2-5.1S22 350.8 22 340.7c0-48.9 14.8-96.6 43-136.6L65 64 54 64C36.3 64 22 49.7 22 32z"/>
+                </svg>
+                <span class="pin-text">Pin</span>
+              </button>
             </div>
           `;
+          const pinBtn = row.querySelector('#btnPinLiveNotif');
+          if (pinBtn) {
+            pinBtn.addEventListener('click', (e) => {
+              e.stopPropagation();
+              const cid = state.conversationId;
+              const buf = cid ? state.sessionBuffers.get(cid) : null;
+              if (!cid || !buf || !buf.isRunning || !window.AndroidApp) return;
+
+              if (buf.isPinned) {
+                if (typeof window.AndroidApp.unpinLiveNotification === 'function') {
+                  window.AndroidApp.unpinLiveNotification(cid);
+                }
+                buf.isPinned = false;
+                updatePinButtonState(false);
+              } else {
+                const sCard = state.sessions.find(s => s.conversation_id === cid);
+                const title = (sCard && sCard.title) || ('Session ' + cid.slice(0, 8));
+                const status = liveProgress.currentAction || 'Thinking...';
+                let pinnedOk = true;
+                if (typeof window.AndroidApp.pinLiveNotification === 'function') {
+                  pinnedOk = window.AndroidApp.pinLiveNotification(cid, title, status);
+                }
+                buf.isPinned = Boolean(pinnedOk);
+                updatePinButtonState(buf.isPinned);
+              }
+            });
+          }
         }
         if (row.parentNode !== chatViewport || chatViewport.lastElementChild !== row) {
           chatViewport.appendChild(row);
         }
         row.style.display = 'flex';
+        const curBuf = state.conversationId ? state.sessionBuffers.get(state.conversationId) : null;
+        updatePinButtonState(Boolean(curBuf && curBuf.isPinned));
         return row;
       }
 
@@ -4174,6 +4318,9 @@
           const elapsed = Math.max(0, (performance.now() - liveProgress.startTime) / 1000).toFixed(1);
           const tEl = document.querySelector('#liveProgressRow .live-progress-timer');
           if (tEl) tEl.textContent = `${elapsed}s`;
+          if (state.conversationId) {
+            forwardLiveProgressToNative(state.conversationId, liveProgress.currentAction, '', 0);
+          }
         };
         updateTimer();
         liveProgress.intervalId = setInterval(updateTimer, 100);
@@ -4192,6 +4339,9 @@
         if (actionEl) {
           actionEl.textContent = actionText;
         }
+        if (state.conversationId) {
+          forwardLiveProgressToNative(state.conversationId, actionText, '', 0);
+        }
         scrollToBottom(false);
       }
 
@@ -4202,6 +4352,7 @@
           clearInterval(liveProgress.intervalId);
           liveProgress.intervalId = null;
         }
+        updatePinButtonState(false);
         const row = document.getElementById('liveProgressRow');
         if (row) {
           row.style.display = 'none';
@@ -4348,6 +4499,12 @@
             }
             if (!msg.config?.conversation_id) {
               renderEmptyWelcome();
+            }
+            if (window.AndroidApp && typeof window.AndroidApp.consumePendingDeepLink === 'function') {
+              const pendingCid = window.AndroidApp.consumePendingDeepLink();
+              if (pendingCid) {
+                initiateSessionSwitch(pendingCid);
+              }
             }
             break;
 
@@ -4594,6 +4751,10 @@
             if (cid === state.conversationId) {
               upsertTurnTool(msg.turn_id, msg);
             }
+            if (buf && buf.isPinned) {
+              const lastTool = msg.name ? `${msg.name}: ${JSON.stringify(msg.args || {}).slice(0, 50)}` : '';
+              forwardLiveProgressToNative(cid, `Tool: ${msg.name || 'tool'}`, lastTool, tRec.toolCalls.length);
+            }
             break;
           }
 
@@ -4624,14 +4785,28 @@
             const tRec = getOrCreateTurnRecord(buf, msg.turn_id);
             tRec.finalized = true;
 
+            buf.isPinned = false;
             if (cid === state.conversationId) {
               finalizeTurnCard(msg.turn_id, msg);
               resetSendButtonToIdle();
               statusDot.className = 'status-dot';
               statusText.textContent = 'Ready';
+              updatePinButtonState(false);
             } else {
               buf.unread = true;
               syncUnreadToStorage();
+            }
+
+            if (window.AndroidApp) {
+              if (typeof window.AndroidApp.clearLiveNotification === 'function') {
+                window.AndroidApp.clearLiveNotification(cid);
+              }
+              if (typeof window.AndroidApp.notifyTurnComplete === 'function') {
+                const sCard = state.sessions.find(s => s.conversation_id === cid);
+                const sTitle = (sCard && sCard.title) || ('Session ' + cid.slice(0, 8));
+                const preview = (tRec && tRec.rawMarkdown) || '';
+                window.AndroidApp.notifyTurnComplete(cid, sTitle, preview, msg.status || 'COMPLETED');
+              }
             }
             renderSessionDrawerList();
             break;

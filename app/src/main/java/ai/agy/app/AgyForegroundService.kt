@@ -56,6 +56,7 @@ class AgyForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        AgyNotificationManager.initChannels(this)
         acquireWakeLock()
         startStickyNotification(8081)
 
@@ -200,8 +201,14 @@ class AgyForegroundService : Service() {
                     logFile.bufferedWriter().use { writer ->
                         var line: String?
                         while (reader.readLine().also { line = it } != null) {
-                            Log.d("AgyServer", line!!)
-                            writer.write(line)
+                            val currentLine = line ?: continue
+                            if (currentLine.startsWith("__AGY_NOTIFY__:")) {
+                                val jsonPayload = currentLine.removePrefix("__AGY_NOTIFY__:").trim()
+                                AgyNotificationManager.handleDaemonEvent(this@AgyForegroundService, jsonPayload)
+                                continue
+                            }
+                            Log.d("AgyServer", currentLine)
+                            writer.write(currentLine)
                             writer.newLine()
                             writer.flush()
                         }

@@ -26,6 +26,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|keyboardHidden|uiMode"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
@@ -33,6 +34,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <receiver
+            android:name=".NotificationActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="ai.agy.app.action.HIDE_LIVE_NOTIFICATION" />
+                <action android:name="ai.agy.app.action.DISMISS_LIVE_NOTIFICATION" />
+                <action android:name="ai.agy.app.action.STOP_AGENT" />
+            </intent-filter>
+        </receiver>
 
         <service
             android:name=".AgyForegroundService"
