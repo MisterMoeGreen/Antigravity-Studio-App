@@ -3593,6 +3593,8 @@
         sessionBuffers: new Map(), // cid -> SessionVirtualState
         activeTurns: new Map(), // turn_id -> DOM references & raw buffers
         pendingAttachments: [], // [{ name, size, type, data }]
+        wsInitialized: false,
+        pendingDeepLinkCid: null,
       };
 
       const SLASH_COMMANDS = [
@@ -3932,7 +3934,10 @@
         if (window.AndroidApp && typeof window.AndroidApp.setActiveSession === 'function') {
           window.AndroidApp.setActiveSession(newCid);
         }
-        updatePinButtonState(Boolean(targetBuf.isPinned));
+        if (targetBuf && window.AndroidApp && typeof window.AndroidApp.isLiveNotificationPinned === 'function') {
+          targetBuf.isPinned = Boolean(window.AndroidApp.isLiveNotificationPinned(newCid));
+        }
+        updatePinButtonState(Boolean(targetBuf && targetBuf.isPinned));
 
         // 6. Request canonical transcript from server
         closeOverlays();
@@ -3940,8 +3945,14 @@
       }
 
       window.loadSessionFromNotification = function(cid) {
-        if (!cid) return;
+        if (!cid) return false;
+        if (!ws || ws.readyState !== WebSocket.OPEN || !state.wsInitialized) {
+          state.pendingDeepLinkCid = cid;
+          return true;
+        }
+        state.pendingDeepLinkCid = null;
         initiateSessionSwitch(cid);
+        return true;
       };
 
       window.onLiveNotificationHidden = function(cid) {
@@ -4089,6 +4100,7 @@
         };
 
         ws.onclose = () => {
+          state.wsInitialized = false;
           setRuntimeStatus('offline', 'Reconnecting...');
           setTimeout(connectWebSocket, 1800);
         };
@@ -4218,20 +4230,20 @@
         }
       }
 
-      function forwardLiveProgressToNative(cid, statusText, lastTool, toolCount) {
+      function forwardLiveProgressToNative(cid, statusText, lastTool = '', toolCount = -1) {
         if (!window.AndroidApp || typeof window.AndroidApp.updateLiveProgress !== 'function') return;
         const buf = cid ? state.sessionBuffers.get(cid) : null;
         if (!buf || !buf.isPinned || !buf.isRunning) return;
         const sCard = state.sessions.find(s => s.conversation_id === cid);
         const sTitle = (sCard && sCard.title) || ('Session ' + cid.slice(0, 8));
-        const elapsed = buf.startTime > 0 ? (performance.now() - buf.startTime) / 1000 : 0.0;
+        const elapsed = liveProgress.startTime > 0 ? (performance.now() - liveProgress.startTime) / 1000 : -1.0;
         window.AndroidApp.updateLiveProgress(
           cid,
           sTitle,
           statusText || 'Thinking...',
           elapsed,
           lastTool || '',
-          toolCount || 0
+          typeof toolCount === 'number' ? toolCount : -1
         );
       }
 
@@ -4291,6 +4303,9 @@
         }
         row.style.display = 'flex';
         const curBuf = state.conversationId ? state.sessionBuffers.get(state.conversationId) : null;
+        if (curBuf && window.AndroidApp && typeof window.AndroidApp.isLiveNotificationPinned === 'function') {
+          curBuf.isPinned = Boolean(window.AndroidApp.isLiveNotificationPinned(state.conversationId));
+        }
         updatePinButtonState(Boolean(curBuf && curBuf.isPinned));
         return row;
       }
@@ -4318,9 +4333,6 @@
           const elapsed = Math.max(0, (performance.now() - liveProgress.startTime) / 1000).toFixed(1);
           const tEl = document.querySelector('#liveProgressRow .live-progress-timer');
           if (tEl) tEl.textContent = `${elapsed}s`;
-          if (state.conversationId) {
-            forwardLiveProgressToNative(state.conversationId, liveProgress.currentAction, '', 0);
-          }
         };
         updateTimer();
         liveProgress.intervalId = setInterval(updateTimer, 100);
@@ -4340,7 +4352,7 @@
           actionEl.textContent = actionText;
         }
         if (state.conversationId) {
-          forwardLiveProgressToNative(state.conversationId, actionText, '', 0);
+          forwardLiveProgressToNative(state.conversationId, actionText, '', -1);
         }
         scrollToBottom(false);
       }
@@ -4497,14 +4509,17 @@
             if (msg.is_authenticating) {
               state.isAuthenticating = true;
             }
-            if (!msg.config?.conversation_id) {
+            state.wsInitialized = true;
+            const pendingCid = state.pendingDeepLinkCid || (
+              window.AndroidApp && typeof window.AndroidApp.consumePendingDeepLink === 'function'
+                ? window.AndroidApp.consumePendingDeepLink()
+                : null
+            );
+            state.pendingDeepLinkCid = null;
+            if (pendingCid) {
+              initiateSessionSwitch(pendingCid);
+            } else if (!msg.config?.conversation_id) {
               renderEmptyWelcome();
-            }
-            if (window.AndroidApp && typeof window.AndroidApp.consumePendingDeepLink === 'function') {
-              const pendingCid = window.AndroidApp.consumePendingDeepLink();
-              if (pendingCid) {
-                initiateSessionSwitch(pendingCid);
-              }
             }
             break;
 

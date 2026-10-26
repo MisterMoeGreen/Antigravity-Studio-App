@@ -39,6 +39,16 @@ object AgyNotificationManager {
     private const val MIN_STATE_UPDATE_INTERVAL_MS = 250L
     private const val MIN_TIMER_UPDATE_INTERVAL_MS = 1000L
 
+    private val RE_CODE_FENCE_BLOCK = Regex("```[\\s\\S]*?```")
+    private val RE_CODE_FENCE_UNCLOSED = Regex("```[\\s\\S]*$")
+    private val RE_MARKDOWN_IMAGE = Regex("!\\[[^\\]]*]\\([^)]*\\)")
+    private val RE_MARKDOWN_LINK = Regex("\\[([^\\]]+)]\\([^)]*\\)")
+    private val RE_INLINE_CODE = Regex("`([^`]+)`")
+    private val RE_HEADERS = Regex("(?m)^#{1,6}\\s+")
+    private val RE_BLOCKQUOTES = Regex("(?m)^>\\s?")
+    private val RE_EMPHASIS = Regex("(\\*\\*|__|\\*|_|~~)")
+    private val RE_MULTI_WHITESPACE = Regex("\\s+")
+
     data class SessionLiveState(
         val conversationId: String,
         var sessionTitle: String = "Active Session",
@@ -51,6 +61,7 @@ object AgyNotificationManager {
         var isPinned: Boolean = false,
         var abortedByUser: Boolean = false,
         var lastNotifiedAtMs: Long = 0L,
+        var lastCompletionNotifiedAtMs: Long = 0L,
         var lastSignature: String = ""
     )
 
@@ -137,9 +148,11 @@ object AgyNotificationManager {
             state.abortedByUser = false
             if (sessionTitle.isNotBlank()) state.sessionTitle = sessionTitle
             if (initialStatus.isNotBlank()) state.statusText = initialStatus
-            if (state.startElapsedRealtimeMs == 0L) {
-                state.startElapsedRealtimeMs = SystemClock.elapsedRealtime()
+            val nowRealtime = SystemClock.elapsedRealtime()
+            if (state.startElapsedRealtimeMs <= 0L) {
+                state.startElapsedRealtimeMs = nowRealtime
             }
+            state.elapsedSeconds = ((nowRealtime - state.startElapsedRealtimeMs).coerceAtLeast(0L)) / 1000.0
             dispatchLiveNotificationLocked(context, state, force = true)
             ensureTickerRunning(context.applicationContext)
         }
@@ -218,6 +231,9 @@ object AgyNotificationManager {
                                 ((nowRealtime - state.startElapsedRealtimeMs).coerceAtLeast(0L)) / 1000.0
                             dispatchLiveNotificationLocked(appContext, state, force = false)
                         }
+                    }
+                    if (!anyPinned) {
+                        tickerJob = null
                     }
                 }
                 if (!anyPinned) break
@@ -356,18 +372,21 @@ object AgyNotificationManager {
         turnStatus: String = "COMPLETED"
     ) {
         val wasAbortedByUser: Boolean
+        val isDuplicateCompletion: Boolean
         synchronized(stateLock) {
-            val state = sessionStates[conversationId]
-            wasAbortedByUser = state?.abortedByUser == true
-            state?.isRunning = false
-            state?.isPinned = false
-            state?.abortedByUser = false
-            state?.lastSignature = ""
+            val now = SystemClock.elapsedRealtime()
+            val state = sessionStates.getOrPut(conversationId) { SessionLiveState(conversationId) }
+            wasAbortedByUser = state.abortedByUser
+            isDuplicateCompletion = !state.isRunning && (now - state.lastCompletionNotifiedAtMs) < 1500L
+            state.isRunning = false
+            state.isPinned = false
+            state.lastSignature = ""
+            state.lastCompletionNotifiedAtMs = now
             val nm = context.getSystemService(NotificationManager::class.java)
             nm?.cancel(conversationId, NOTIF_ID_LIVE_PROGRESS)
         }
 
-        if (wasAbortedByUser || turnStatus.equals("INTERRUPTED", ignoreCase = true)) {
+        if (wasAbortedByUser || isDuplicateCompletion || turnStatus.equals("INTERRUPTED", ignoreCase = true)) {
             return
         }
 
@@ -498,8 +517,8 @@ object AgyNotificationManager {
                 val url = URL("http://127.0.0.1:$port/api/session/abort?cid=$encodedCid")
                 val conn = (url.openConnection() as HttpURLConnection).apply {
                     requestMethod = "GET"
-                    connectTimeout = 1500
-                    readTimeout = 1500
+                    connectTimeout = 4000
+                    readTimeout = 4000
                     setRequestProperty("X-Auth-Token", token)
                 }
                 val code = conn.responseCode
@@ -517,15 +536,15 @@ object AgyNotificationManager {
     fun sanitizeMarkdownPreview(markdown: String): String {
         if (markdown.isBlank()) return ""
         var text = markdown.take(2000).trim()
-        text = text.replace(Regex("```[\\s\\S]*?```"), " [code] ")
-        text = text.replace(Regex("```[\\s\\S]*$"), " [code] ")
-        text = text.replace(Regex("!\\[[^\\]]*]\\([^)]*\\)"), "")
-        text = text.replace(Regex("\\[([^\\]]+)]\\([^)]*\\)"), "$1")
-        text = text.replace(Regex("`([^`]+)`"), "$1")
-        text = text.replace(Regex("(?m)^#{1,6}\\s+"), "")
-        text = text.replace(Regex("(?m)^>\\s?"), "")
-        text = text.replace(Regex("(\\*\\*|__|\\*|_|~~)"), "")
-        text = text.replace(Regex("\\s+"), " ").trim()
+        text = text.replace(RE_CODE_FENCE_BLOCK, " [code] ")
+        text = text.replace(RE_CODE_FENCE_UNCLOSED, " [code] ")
+        text = text.replace(RE_MARKDOWN_IMAGE, "")
+        text = text.replace(RE_MARKDOWN_LINK, "$1")
+        text = text.replace(RE_INLINE_CODE, "$1")
+        text = text.replace(RE_HEADERS, "")
+        text = text.replace(RE_BLOCKQUOTES, "")
+        text = text.replace(RE_EMPHASIS, "")
+        text = text.replace(RE_MULTI_WHITESPACE, " ").trim()
         if (text.length > 180) {
             val sub = text.substring(0, 180)
             val lastSpace = sub.lastIndexOf(' ')

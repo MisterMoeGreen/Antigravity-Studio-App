@@ -4907,11 +4907,16 @@ class AgyWebServer:
                     "state": "idle",
                     "detail": "Interrupted" if stopped else "Ready",
                 })
-                await self.broadcast({
+                ctx = self.orchestrator._sessions.get(cid)
+                turn_id = ctx.current_turn_id if ctx else None
+                turn_complete_msg = {
                     "type": "turn_complete",
                     "conversation_id": cid,
                     "status": "INTERRUPTED",
-                })
+                }
+                if turn_id:
+                    turn_complete_msg["turn_id"] = turn_id
+                await self.broadcast(turn_complete_msg)
                 meta = self.storage.get_conversation_meta(cid)
                 emit_native_notif_event({
                     "event": "turn_complete",
