@@ -4128,12 +4128,10 @@
 
       function ensureLiveProgressRow(initialAction = 'Thinking...') {
         let row = document.getElementById('liveProgressRow');
-        if (!row || !chatViewport.contains(row)) {
-          if (!row) {
-            row = document.createElement('div');
-            row.id = 'liveProgressRow';
-            row.className = 'live-progress-row';
-          }
+        if (!row) {
+          row = document.createElement('div');
+          row.id = 'liveProgressRow';
+          row.className = 'live-progress-row';
           row.innerHTML = `
             <div class="live-progress-pill">
               <div class="live-progress-icon-wrap">
@@ -4145,6 +4143,8 @@
               </div>
             </div>
           `;
+        }
+        if (row.parentNode !== chatViewport || chatViewport.lastElementChild !== row) {
           chatViewport.appendChild(row);
         }
         row.style.display = 'flex';
@@ -4371,6 +4371,8 @@
               } else if (msg.state === 'idle') {
                 buf.isRunning = false;
                 buf.waitingInput = false;
+                buf.startTime = 0;
+                buf.activeUserPrompt = '';
               }
               renderSessionDrawerList();
             }
@@ -5430,6 +5432,12 @@
         if (state.isRunning) {
           sendWs({ type: 'abort_generation', conversation_id: state.conversationId });
           stopLiveProgress();
+          const buf = state.conversationId ? state.sessionBuffers.get(state.conversationId) : null;
+          if (buf) {
+            buf.isRunning = false;
+            buf.startTime = 0;
+            buf.activeUserPrompt = '';
+          }
           return;
         }
         const val = promptInput.value.trim();

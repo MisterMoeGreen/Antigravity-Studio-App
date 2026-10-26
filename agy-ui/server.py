@@ -5131,10 +5131,18 @@ class AgyWebServer:
         if last_user_idx is not None:
             last_user_content = self.storage._clean_user_prompt(history[last_user_idx].get("content", "")).strip()
             if last_user_content == cleaned_active:
-                # Active prompt is already present at last_user_idx.
-                # Truncate any partial assistant message written to transcript for this in-flight turn,
-                # because the in-flight turn is dynamically provided via active_turn (active_snapshot).
-                return history[:last_user_idx + 1]
+                has_in_flight_activity = bool(
+                    ctx.active_snapshot
+                    and (
+                        ctx.active_snapshot.raw_markdown
+                        or ctx.active_snapshot.raw_thoughts
+                        or ctx.active_snapshot.tool_calls
+                    )
+                )
+                # If last_user_idx is already the final message, or if the current turn has
+                # active output that flushed partial assistant steps after it, truncate there.
+                if last_user_idx == len(history) - 1 or has_in_flight_activity:
+                    return history[:last_user_idx + 1]
 
         # Active prompt was not yet recorded in transcript.jsonl.
         # Append the active prompt as the latest user message.
