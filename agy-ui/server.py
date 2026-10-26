@@ -3083,6 +3083,13 @@ class AgyProcessOrchestrator:
                                     "conversation_id": discovered_cid,
                                 }
                             )
+                            emit_native_notif_event(
+                                {
+                                    "event": "conversation_assigned",
+                                    "old_conversation_id": old_cid,
+                                    "conversation_id": discovered_cid,
+                                }
+                            )
 
                 # Accumulate session telemetry
                 ctx.total_input_tokens += usage_summary["input_tokens"]
@@ -3970,6 +3977,13 @@ class AgyProcessOrchestrator:
                     await self.broadcast(
                         {
                             "type": "conversation_assigned",
+                            "old_conversation_id": old_cid,
+                            "conversation_id": cid,
+                        }
+                    )
+                    emit_native_notif_event(
+                        {
+                            "event": "conversation_assigned",
                             "old_conversation_id": old_cid,
                             "conversation_id": cid,
                         }
@@ -6390,6 +6404,8 @@ class AgyWebServer:
             cid = str(data.get("conversation_id") or "").strip()
             if not cid:
                 return
+            if cid in self.orchestrator._migrated_cids:
+                cid = self.orchestrator._migrated_cids[cid]
             self.orchestrator.active_view_cid = cid
             meta = self.storage.get_conversation_meta(cid)
             ws = self.default_workspace

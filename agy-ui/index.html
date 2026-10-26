@@ -4666,6 +4666,9 @@
 
           case 'conversation_assigned': {
             if (msg.old_conversation_id && msg.conversation_id) {
+              if (window.AndroidApp && typeof window.AndroidApp.migrateSession === 'function') {
+                window.AndroidApp.migrateSession(msg.old_conversation_id, msg.conversation_id);
+              }
               if (state.conversationId === msg.old_conversation_id) {
                 state.conversationId = msg.conversation_id;
               }

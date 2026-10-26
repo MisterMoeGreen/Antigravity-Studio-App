@@ -343,6 +343,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         @JavascriptInterface
+        fun migrateSession(oldCid: String, newCid: String) {
+            AgyNotificationManager.migrateSession(this@MainActivity, oldCid, newCid)
+        }
+
+        @JavascriptInterface
         fun triggerUpdateCheck(force: Boolean) {
             lifecycleScope.launch(Dispatchers.IO) {
                 InAppUpdateManager.checkForUpdates(this@MainActivity, force = force)

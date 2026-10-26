@@ -191,6 +191,37 @@ object AgyNotificationManager {
         nm.cancel(conversationId, NOTIF_ID_COMPLETION)
     }
 
+    fun migrateSession(context: Context, oldConversationId: String, newConversationId: String) {
+        val oldCid = oldConversationId.trim()
+        val newCid = newConversationId.trim()
+        if (oldCid.isEmpty() || newCid.isEmpty() || oldCid == newCid) return
+
+        synchronized(stateLock) {
+            Log.i(TAG, "Migrating notification session $oldCid -> $newCid")
+            val oldState = sessionStates.remove(oldCid)
+            val nm = context.getSystemService(NotificationManager::class.java)
+            nm?.cancel(oldCid, NOTIF_ID_LIVE_PROGRESS)
+            nm?.cancel(oldCid, NOTIF_ID_COMPLETION)
+
+            if (activeConversationId == oldCid) {
+                activeConversationId = newCid
+            }
+            if (pendingDeepLinkConversationId == oldCid) {
+                pendingDeepLinkConversationId = newCid
+            }
+
+            if (oldState != null) {
+                val newState = oldState.copy(conversationId = newCid)
+                newState.lastSignature = ""
+                sessionStates[newCid] = newState
+                if (newState.isRunning && newState.isPinned) {
+                    dispatchLiveNotificationLocked(context, newState, force = true)
+                    ensureTickerRunning(context.applicationContext)
+                }
+            }
+        }
+    }
+
     fun updateLiveProgress(
         context: Context,
         conversationId: String,
@@ -486,6 +517,11 @@ object AgyNotificationManager {
                         lastToolCall = obj.optString("last_tool", ""),
                         totalToolCalls = obj.optInt("tool_count", -1)
                     )
+                }
+                "conversation_assigned" -> {
+                    val oldCid = obj.optString("old_conversation_id", "").trim()
+                    val newCid = obj.optString("conversation_id", "").trim()
+                    migrateSession(context, oldCid, newCid)
                 }
                 "turn_complete" -> {
                     postCompletionNotification(
