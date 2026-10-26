@@ -2722,7 +2722,7 @@
     <div class="drawer-footer" id="drawerFooter">
       <div class="drawer-footer-row">
         <span>App Version</span>
-        <span class="drawer-version-val" id="appVersionText">v1.3.3</span>
+        <span class="drawer-version-val" id="appVersionText">v1.4.6</span>
       </div>
       <div class="drawer-footer-row">
         <span>AGY Runtime</span>
@@ -3531,9 +3531,9 @@
         isRunning: false,
         isAuthenticating: false,
         conversationId: null,
-        model: 'gemini-3.8-flash',
+        model: localStorage.getItem('agy_user_model') || 'gemini-3.8-flash',
         mode: 'default',
-        effort: 'high',
+        effort: localStorage.getItem('agy_user_effort') || 'high',
         workspace: '~/workspace',
         defaultWorkspace: '',
         folderPickerMode: 'session',
@@ -4268,9 +4268,11 @@
         }
         if (cfg.model) {
           state.model = cfg.model;
+          try { localStorage.setItem('agy_user_model', cfg.model); } catch (e) {}
         }
         if (cfg.effort) {
           state.effort = cfg.effort;
+          try { localStorage.setItem('agy_user_effort', cfg.effort); } catch (e) {}
           if (labelEffort) labelEffort.textContent = cfg.effort;
         }
         if (labelModel && state.model) {
@@ -4402,6 +4404,9 @@
           case 'session_history':
             state.conversationId = msg.conversation_id;
             sessionTitle.textContent = msg.title || 'New Conversation';
+            if (msg.config) {
+              updateConfigPills(msg.config);
+            }
             if (msg.workspace) {
               updateWorkspaceStatusBar(msg.workspace, msg.git_branch);
             }
@@ -4660,7 +4665,10 @@
           case 'models_updated':
             state.models = msg.models || [];
             if (state.models.length > 0 && !state.model) {
-              state.model = state.models[0].id;
+              const savedModel = localStorage.getItem('agy_user_model');
+              const hasSaved = savedModel && state.models.some(m => m.id === savedModel);
+              const hasFlash = state.models.some(m => m.id === 'gemini-3.8-flash');
+              state.model = hasSaved ? savedModel : (hasFlash ? 'gemini-3.8-flash' : state.models[0].id);
               updateConfigPills({ model: state.model });
             }
             break;
@@ -5516,7 +5524,12 @@
         renderAttachmentBar();
         autoResizePrompt();
         closeOverlays();
-        sendWs({ type: 'new_session' });
+        sendWs({
+          type: 'new_session',
+          model: state.model,
+          effort: state.effort,
+          mode: state.mode
+        });
       });
 
       sessionSearch.addEventListener('input', () => {
@@ -6702,7 +6715,9 @@
             name: name,
             purpose: purpose,
             trigger: trigger,
-            scope: currentAISkillScope
+            scope: currentAISkillScope,
+            model: state.model,
+            effort: state.effort
           });
         });
       }
@@ -6814,7 +6829,9 @@
               sendWs({
                 type: 'edit_skill_prompt',
                 name: s.name,
-                path: s.path
+                path: s.path,
+                model: state.model,
+                effort: state.effort
               });
             });
           }
@@ -6957,7 +6974,9 @@
             sendWs({
               type: 'setup_mcp_prompt',
               name: name,
-              details: details
+              details: details,
+              model: state.model,
+              effort: state.effort
             });
             return;
           }
@@ -7261,7 +7280,12 @@
           }
           closeInstallPackageModal();
           closeSettingsHub();
-          sendWs({ type: 'install_package_prompt', package_query: val });
+          sendWs({
+            type: 'install_package_prompt',
+            package_query: val,
+            model: state.model,
+            effort: state.effort
+          });
         });
       }
 

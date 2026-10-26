@@ -295,8 +295,8 @@ def get_agy_version() -> str:
 
     return _cached_agy_version or os.environ.get("AGY_RUNTIME_VERSION", "1.4.7")
 
-APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.4.4")
-APP_BUILD = os.environ.get("AGY_APP_VERSION_CODE", "22")
+APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.4.6")
+APP_BUILD = os.environ.get("AGY_APP_VERSION_CODE", "25")
 AGY_VERSION = get_agy_version()
 
 logging.basicConfig(
@@ -1143,8 +1143,8 @@ async def delete_mcp_server(name: str) -> dict[str, Any]:
 
 
 async def check_github_updates() -> dict[str, Any]:
-    installed_version = os.environ.get("AGY_APP_VERSION", "1.4.4")
-    installed_code = int(os.environ.get("AGY_APP_VERSION_CODE", "22"))
+    installed_version = os.environ.get("AGY_APP_VERSION", "1.4.6")
+    installed_code = int(os.environ.get("AGY_APP_VERSION_CODE", "25"))
     url = "https://api.github.com/repos/MisterMoeGreen/Antigravity-Studio-App/releases/latest"
 
     cmd = ["curl", "-sSL", "-H", f"User-Agent: AntigravityStudio/{APP_VERSION}", url]
@@ -2625,6 +2625,12 @@ class AgyProcessOrchestrator:
         self._streamed_turn_ids: set[str] = set()
         self.discovered_models: list[dict[str, Any]] = []
 
+        # Load persisted defaults from app_settings.json
+        settings = load_app_settings()
+        self.default_model: Optional[str] = settings.get("default_model")
+        self.default_mode: str = settings.get("default_mode", "default")
+        self.default_effort: str = settings.get("default_effort", "high")
+
         # In-app Google Authentication lifecycle state
         self.is_authenticating: bool = False
         self.auth_proc: Optional[asyncio.subprocess.Process] = None
@@ -2673,12 +2679,35 @@ class AgyProcessOrchestrator:
         return None
 
     def _active_view_defaults(self) -> tuple[str, str, str]:
-        """Return (model, mode, effort) from the active view session, or dynamic defaults."""
+        """Return (model, mode, effort) from the active view session, persistent defaults, or dynamic discovery."""
         if self.active_view_cid and self.active_view_cid in self._sessions:
             v = self._sessions[self.active_view_cid]
-            return v.model, v.mode, v.effort
-        default_model = self.discovered_models[0]["id"] if self.discovered_models else "gemini-3.8-flash"
-        return default_model, "default", "high"
+            if v.model:
+                return v.model, v.mode or self.default_mode, v.effort or self.default_effort
+
+        if self.default_model:
+            return self.default_model, self.default_mode, self.default_effort
+
+        settings = load_app_settings()
+        saved_model = settings.get("default_model")
+        saved_effort = settings.get("default_effort")
+        saved_mode = settings.get("default_mode")
+        if saved_model:
+            self.default_model = saved_model
+            if saved_effort:
+                self.default_effort = saved_effort
+            if saved_mode:
+                self.default_mode = saved_mode
+            return self.default_model, self.default_mode, self.default_effort
+
+        default_model = "gemini-3.8-flash"
+        if self.discovered_models:
+            model_ids = [m["id"] for m in self.discovered_models]
+            if "gemini-3.8-flash" in model_ids:
+                default_model = "gemini-3.8-flash"
+            else:
+                default_model = self.discovered_models[0]["id"]
+        return default_model, self.default_mode, self.default_effort
 
     def get_or_create_context(
         self,
@@ -4649,8 +4678,10 @@ class AgyWebServer:
     async def refresh_models(self) -> None:
         self.discovered_models = await self.discover_models()
         self.orchestrator.discovered_models = self.discovered_models
-        if self.discovered_models and not self.orchestrator.config.model:
-            self.orchestrator.config.model = self.discovered_models[0]["id"]
+        if not self.orchestrator.config.model:
+            d_model, d_mode, d_effort = self.orchestrator._active_view_defaults()
+            self.orchestrator.config.model = d_model
+            self.orchestrator.config.effort = d_effort
         await self.broadcast({
             "type": "models_updated",
             "models": self.discovered_models,
@@ -5089,8 +5120,10 @@ class AgyWebServer:
         try:
             if not self.discovered_models:
                 self.discovered_models = await self.discover_models()
-            if self.discovered_models and not self.orchestrator.config.model:
-                self.orchestrator.config.model = self.discovered_models[0]["id"]
+            if not self.orchestrator.config.model:
+                d_model, d_mode, d_effort = self.orchestrator._active_view_defaults()
+                self.orchestrator.config.model = d_model
+                self.orchestrator.config.effort = d_effort
 
             if not self.orchestrator.active_view_cid:
                 latest = self.storage.list_conversations(limit=1)
@@ -5439,7 +5472,12 @@ class AgyWebServer:
             s_what = str(data.get("what") or data.get("purpose") or "").strip()
             s_when = str(data.get("when") or data.get("trigger") or "").strip()
             s_scope = str(data.get("scope") or "global").strip()
-            target_path = f"{self.orchestrator.config.workspace}/.agents/skills/{s_name}/SKILL.md" if s_scope.lower() == "workspace" else f"{GLOBAL_SKILLS_DIR}/{s_name}/SKILL.md"
+            req_model = str(data.get("model") or "").strip() or None
+            raw_effort = str(data.get("effort") or "").strip().lower()
+            req_effort = raw_effort if raw_effort in VALID_EFFORTS else None
+
+            current_ws = self.orchestrator.config.workspace if self.orchestrator.active_view_cid else self.default_workspace
+            target_path = f"{current_ws}/.agents/skills/{s_name}/SKILL.md" if s_scope.lower() == "workspace" else f"{GLOBAL_SKILLS_DIR}/{s_name}/SKILL.md"
 
             ai_prompt = (
                 f"The user wants to create a new Antigravity skill:\n"
@@ -5453,10 +5491,18 @@ class AgyWebServer:
                 f"- Android Sandbox Rule: If the skill includes helper scripts, always instruct the agent to run them via `bash <script>` or `python3 <script>`, never `./<script>` (due to Android SELinux W^X restrictions).\n\n"
                 f"Please design the complete SKILL.md. If any parameters, scripts, or edge cases are unclear, interview the user first. Once aligned, create the skill directory and write SKILL.md."
             )
-            # Create a dedicated session context for this AI setup turn
+            def_model, def_mode, def_effort = self.orchestrator._active_view_defaults()
+            use_model = req_model or def_model
+            use_effort = req_effort or def_effort
+
             new_cid = f"session-{uuid.uuid4().hex[:12]}"
+            ctx = self.orchestrator.get_or_create_context(
+                new_cid,
+                workspace=current_ws,
+                model=use_model,
+                effort=use_effort,
+            )
             self.orchestrator.active_view_cid = new_cid
-            ctx = self.orchestrator.get_or_create_context(new_cid, workspace=self.orchestrator.config.workspace)
             ctx.title = f"Skill: {s_name}"
             ctx.total_input_tokens = 0
             ctx.total_output_tokens = 0
@@ -5491,6 +5537,18 @@ class AgyWebServer:
                 },
             })
             await self.broadcast({
+                "type": "config_updated",
+                "conversation_id": new_cid,
+                "config": {
+                    "conversation_id": new_cid,
+                    "model": ctx.model,
+                    "mode": ctx.mode,
+                    "effort": ctx.effort,
+                    "workspace": ctx.workspace,
+                    "git_branch": branch,
+                },
+            })
+            await self.broadcast({
                 "type": "session_list",
                 "sessions": self.get_all_sessions(limit=80),
             })
@@ -5508,13 +5566,26 @@ class AgyWebServer:
         if mtype == "edit_skill_prompt":
             path_str = str(data.get("path") or "").strip()
             s_name = str(data.get("name") or (Path(path_str).parent.name if Path(path_str).name == "SKILL.md" else Path(path_str).stem) or "Skill").strip()
+            req_model = str(data.get("model") or "").strip() or None
+            raw_effort = str(data.get("effort") or "").strip().lower()
+            req_effort = raw_effort if raw_effort in VALID_EFFORTS else None
             ai_prompt = (
                 f"The user wants to edit this skill: {path_str}.\n"
                 f"Study the existing SKILL.md and associated files in detail, then ask the user how they would like to modify it."
             )
+            current_ws = self.orchestrator.config.workspace if self.orchestrator.active_view_cid else self.default_workspace
+            def_model, def_mode, def_effort = self.orchestrator._active_view_defaults()
+            use_model = req_model or def_model
+            use_effort = req_effort or def_effort
+
             new_cid = f"session-{uuid.uuid4().hex[:12]}"
+            ctx = self.orchestrator.get_or_create_context(
+                new_cid,
+                workspace=current_ws,
+                model=use_model,
+                effort=use_effort,
+            )
             self.orchestrator.active_view_cid = new_cid
-            ctx = self.orchestrator.get_or_create_context(new_cid, workspace=self.orchestrator.config.workspace)
             ctx.title = f"Edit: {s_name}"
             ctx.total_input_tokens = 0
             ctx.total_output_tokens = 0
@@ -5539,6 +5610,18 @@ class AgyWebServer:
                 "git_branch": branch,
                 "is_running": True,
                 "current_action": f"Running ({ctx.model})",
+                "config": {
+                    "conversation_id": new_cid,
+                    "model": ctx.model,
+                    "mode": ctx.mode,
+                    "effort": ctx.effort,
+                    "workspace": ctx.workspace,
+                    "git_branch": branch,
+                },
+            })
+            await self.broadcast({
+                "type": "config_updated",
+                "conversation_id": new_cid,
                 "config": {
                     "conversation_id": new_cid,
                     "model": ctx.model,
@@ -5665,6 +5748,9 @@ class AgyWebServer:
             brief = str(data.get("brief") or "").strip()
             name = str(data.get("name") or "").strip()
             details = str(data.get("details") or "").strip()
+            req_model = str(data.get("model") or "").strip() or None
+            raw_effort = str(data.get("effort") or "").strip().lower()
+            req_effort = raw_effort if raw_effort in VALID_EFFORTS else None
             if not brief and (name or details):
                 brief = f"{name}: {details}".strip(": ") if details else name
             active_keys = list(load_api_keys_store().get("keys", {}).keys())
@@ -5680,10 +5766,19 @@ class AgyWebServer:
                 f"- Pre-configured environment API keys available: {keys_hint}.\n\n"
                 f"Please configure this server, verify ~/.gemini/config/mcp_config.json is valid JSON with 0600 permissions, and test readiness with `agy mcp list`."
             )
-            # Create a dedicated session context for this AI setup turn
+            current_ws = self.orchestrator.config.workspace if self.orchestrator.active_view_cid else self.default_workspace
+            def_model, def_mode, def_effort = self.orchestrator._active_view_defaults()
+            use_model = req_model or def_model
+            use_effort = req_effort or def_effort
+
             new_cid = f"session-{uuid.uuid4().hex[:12]}"
+            ctx = self.orchestrator.get_or_create_context(
+                new_cid,
+                workspace=current_ws,
+                model=use_model,
+                effort=use_effort,
+            )
             self.orchestrator.active_view_cid = new_cid
-            ctx = self.orchestrator.get_or_create_context(new_cid, workspace=self.orchestrator.config.workspace)
             ctx.title = f"Setup MCP: {name or brief[:16]}"
             ctx.total_input_tokens = 0
             ctx.total_output_tokens = 0
@@ -5708,6 +5803,18 @@ class AgyWebServer:
                 "git_branch": branch,
                 "is_running": True,
                 "current_action": f"Running ({ctx.model})",
+                "config": {
+                    "conversation_id": new_cid,
+                    "model": ctx.model,
+                    "mode": ctx.mode,
+                    "effort": ctx.effort,
+                    "workspace": ctx.workspace,
+                    "git_branch": branch,
+                },
+            })
+            await self.broadcast({
+                "type": "config_updated",
+                "conversation_id": new_cid,
                 "config": {
                     "conversation_id": new_cid,
                     "model": ctx.model,
@@ -5831,6 +5938,9 @@ class AgyWebServer:
             clean_query = re.sub(r"[\r\n\t`]", " ", raw_query).strip()[:100]
             if not clean_query:
                 return
+            req_model = str(data.get("model") or "").strip() or None
+            raw_effort = str(data.get("effort") or "").strip().lower()
+            req_effort = raw_effort if raw_effort in VALID_EFFORTS else None
 
             ai_prompt = (
                 f'The user wants to install the package: "{clean_query}" in the Antigravity Studio Alpine Linux container.\n\n'
@@ -5869,9 +5979,19 @@ class AgyWebServer:
                 f"   - Run a quick verification of the installed binary to confirm readiness."
             )
 
+            current_ws = self.orchestrator.config.workspace if self.orchestrator.active_view_cid else self.default_workspace
+            def_model, def_mode, def_effort = self.orchestrator._active_view_defaults()
+            use_model = req_model or def_model
+            use_effort = req_effort or def_effort
+
             new_cid = f"session-{uuid.uuid4().hex[:12]}"
+            ctx = self.orchestrator.get_or_create_context(
+                new_cid,
+                workspace=current_ws,
+                model=use_model,
+                effort=use_effort,
+            )
             self.orchestrator.active_view_cid = new_cid
-            ctx = self.orchestrator.get_or_create_context(new_cid, workspace=self.orchestrator.config.workspace)
             ctx.title = f"Install: {clean_query[:20]}"
             ctx.total_input_tokens = 0
             ctx.total_output_tokens = 0
@@ -5896,6 +6016,18 @@ class AgyWebServer:
                 "git_branch": branch,
                 "is_running": True,
                 "current_action": f"Running ({ctx.model})",
+                "config": {
+                    "conversation_id": new_cid,
+                    "model": ctx.model,
+                    "mode": ctx.mode,
+                    "effort": ctx.effort,
+                    "workspace": ctx.workspace,
+                    "git_branch": branch,
+                },
+            })
+            await self.broadcast({
+                "type": "config_updated",
+                "conversation_id": new_cid,
                 "config": {
                     "conversation_id": new_cid,
                     "model": ctx.model,
@@ -5982,16 +6114,32 @@ class AgyWebServer:
 
             # Update session execution context if sent with prompt
             ctx = self.orchestrator.get_or_create_context(cid)
+            settings = load_app_settings()
+            settings_changed = False
             if data.get("model"):
                 ctx.model = str(data["model"])
+                self.orchestrator.default_model = ctx.model
+                settings["default_model"] = ctx.model
+                settings_changed = True
             if data.get("mode"):
                 chosen_mode = str(data["mode"])
                 if chosen_mode in ("default", "accept-edits", "plan"):
                     ctx.mode = chosen_mode
+                    self.orchestrator.default_mode = chosen_mode
+                    settings["default_mode"] = chosen_mode
+                    settings_changed = True
                 elif chosen_mode in ("auto", "standard"):
                     ctx.mode = "default"
+                    self.orchestrator.default_mode = "default"
+                    settings["default_mode"] = "default"
+                    settings_changed = True
             if data.get("effort") in VALID_EFFORTS:
                 ctx.effort = str(data["effort"])
+                self.orchestrator.default_effort = ctx.effort
+                settings["default_effort"] = ctx.effort
+                settings_changed = True
+            if settings_changed:
+                save_app_settings(settings)
 
             # Check if prompt is a built-in slash command (only if no attachments)
             if not saved_attachments and prompt.startswith("/"):
@@ -6103,9 +6251,24 @@ class AgyWebServer:
             return
 
         if mtype == "new_session":
+            req_model = str(data.get("model") or "").strip() or None
+            raw_effort = str(data.get("effort") or "").strip().lower()
+            req_effort = raw_effort if raw_effort in VALID_EFFORTS else None
+            req_mode = str(data.get("mode") or "").strip() or None
+            def_model, def_mode, def_effort = self.orchestrator._active_view_defaults()
+            use_model = req_model or def_model
+            use_mode = req_mode or def_mode
+            use_effort = req_effort or def_effort
+
             new_cid = f"session-{uuid.uuid4().hex[:12]}"
+            ctx = self.orchestrator.get_or_create_context(
+                new_cid,
+                workspace=self.default_workspace,
+                model=use_model,
+                mode=use_mode,
+                effort=use_effort,
+            )
             self.orchestrator.active_view_cid = new_cid
-            ctx = self.orchestrator.get_or_create_context(new_cid, workspace=self.default_workspace)
             ctx.title = "New Conversation"
             ctx.total_input_tokens = 0
             ctx.total_output_tokens = 0
@@ -6122,6 +6285,14 @@ class AgyWebServer:
                     "git_branch": branch,
                     "messages": [],
                     "is_running": False,
+                    "config": {
+                        "conversation_id": new_cid,
+                        "model": ctx.model,
+                        "mode": ctx.mode,
+                        "effort": ctx.effort,
+                        "workspace": self.default_workspace,
+                        "git_branch": branch,
+                    },
                 }
             )
             await self.broadcast(
@@ -6206,18 +6377,58 @@ class AgyWebServer:
                 try:
                     new_session = self.storage.branch_conversation(orig_cid, branch_name)
                     new_cid = new_session["conversation_id"]
-                    self.orchestrator.config.conversation_id = new_cid
+
+                    orig_ctx = self.orchestrator._sessions.get(orig_cid)
+                    def_model, def_mode, def_effort = self.orchestrator._active_view_defaults()
+                    branch_model = orig_ctx.model if (orig_ctx and orig_ctx.model) else def_model
+                    branch_mode = orig_ctx.mode if (orig_ctx and orig_ctx.mode) else def_mode
+                    branch_effort = orig_ctx.effort if (orig_ctx and orig_ctx.effort) else def_effort
+                    branch_ws = orig_ctx.workspace if (orig_ctx and orig_ctx.workspace) else self.default_workspace
+
+                    ctx = self.orchestrator.get_or_create_context(
+                        new_cid,
+                        workspace=branch_ws,
+                        model=branch_model,
+                        mode=branch_mode,
+                        effort=branch_effort,
+                    )
+                    self.orchestrator.active_view_cid = new_cid
                     sessions = self.storage.list_conversations(limit=100)
                     await self.broadcast({"type": "session_list", "sessions": sessions})
                     history = self.storage.load_transcript(new_cid)
                     meta = self.storage.get_conversation_meta(new_cid)
+                    branch = get_git_branch(ctx.workspace)
                     await self.broadcast(
                         {
                             "type": "session_history",
                             "conversation_id": new_cid,
                             "title": meta["title"],
                             "meta": meta,
+                            "workspace": ctx.workspace,
+                            "git_branch": branch,
                             "messages": history,
+                            "config": {
+                                "conversation_id": new_cid,
+                                "model": ctx.model,
+                                "mode": ctx.mode,
+                                "effort": ctx.effort,
+                                "workspace": ctx.workspace,
+                                "git_branch": branch,
+                            },
+                        }
+                    )
+                    await self.broadcast(
+                        {
+                            "type": "config_updated",
+                            "conversation_id": new_cid,
+                            "config": {
+                                "conversation_id": new_cid,
+                                "model": ctx.model,
+                                "mode": ctx.mode,
+                                "effort": ctx.effort,
+                                "workspace": ctx.workspace,
+                                "git_branch": branch,
+                            },
                         }
                     )
                     await self.broadcast(
@@ -6283,16 +6494,32 @@ class AgyWebServer:
             return
 
         if mtype == "update_config":
+            settings = load_app_settings()
+            settings_changed = False
             if data.get("model"):
-                self.orchestrator.config.model = str(data["model"])
+                m_str = str(data["model"])
+                self.orchestrator.config.model = m_str
+                self.orchestrator.default_model = m_str
+                settings["default_model"] = m_str
+                settings_changed = True
             if data.get("mode"):
                 chosen_mode = str(data["mode"])
                 if chosen_mode in ("default", "accept-edits", "plan"):
                     self.orchestrator.config.mode = chosen_mode
+                    self.orchestrator.default_mode = chosen_mode
+                    settings["default_mode"] = chosen_mode
+                    settings_changed = True
                 elif chosen_mode in ("auto", "standard"):
                     self.orchestrator.config.mode = "default"
+                    self.orchestrator.default_mode = "default"
+                    settings["default_mode"] = "default"
+                    settings_changed = True
             if data.get("effort") in VALID_EFFORTS:
-                self.orchestrator.config.effort = str(data["effort"])
+                ef_str = str(data["effort"])
+                self.orchestrator.config.effort = ef_str
+                self.orchestrator.default_effort = ef_str
+                settings["default_effort"] = ef_str
+                settings_changed = True
             if data.get("workspace"):
                 target = Path(os.path.expanduser(str(data["workspace"]))).resolve()
                 if target.is_dir():
@@ -6300,6 +6527,8 @@ class AgyWebServer:
                     cid = self.orchestrator.config.conversation_id
                     if cid:
                         self.storage.update_conversation_workspace(cid, str(target))
+            if settings_changed:
+                save_app_settings(settings)
             branch = get_git_branch(self.orchestrator.config.workspace)
             await self.broadcast(
                 {
@@ -6598,9 +6827,16 @@ class AgyWebServer:
                 for ef in ("low", "medium", "high", "xhigh", "max"):
                     if arg.endswith(f"-{ef}"):
                         cfg.effort = ef
+                        self.orchestrator.default_effort = ef
                         clean_arg = arg[: -len(f"-{ef}")]
                         break
                 cfg.model = clean_arg
+                self.orchestrator.default_model = clean_arg
+                settings = load_app_settings()
+                settings["default_model"] = clean_arg
+                if cfg.effort:
+                    settings["default_effort"] = cfg.effort
+                save_app_settings(settings)
                 await self.broadcast(
                     {
                         "type": "config_updated",
@@ -6648,9 +6884,14 @@ class AgyWebServer:
             mode_arg = arg.strip().lower()
             if mode_arg in ("default", "accept-edits", "plan"):
                 cfg.mode = mode_arg
+                self.orchestrator.default_mode = mode_arg
             elif mode_arg in ("auto", "standard"):
                 cfg.mode = "default"
+                self.orchestrator.default_mode = "default"
             if mode_arg in ("default", "accept-edits", "plan", "auto", "standard"):
+                settings = load_app_settings()
+                settings["default_mode"] = cfg.mode
+                save_app_settings(settings)
                 await self.broadcast(
                     {
                         "type": "config_updated",
@@ -6677,7 +6918,13 @@ class AgyWebServer:
         if cmd == "/effort":
             if arg in VALID_EFFORTS:
                 cfg.effort = arg
+                self.orchestrator.default_effort = arg
                 cfg.model = re.sub(r"-(low|medium|high|xhigh|max)$", "", cfg.model, flags=re.IGNORECASE)
+                self.orchestrator.default_model = cfg.model
+                settings = load_app_settings()
+                settings["default_effort"] = arg
+                settings["default_model"] = cfg.model
+                save_app_settings(settings)
                 await self.broadcast(
                     {
                         "type": "config_updated",
