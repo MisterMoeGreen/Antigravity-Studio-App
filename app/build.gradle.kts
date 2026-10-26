@@ -121,3 +121,13 @@ dependencies {
     implementation("com.github.luben:zstd-jni:1.5.6-8@aar")
     implementation("org.apache.commons:commons-compress:1.27.1")
 }
+
+tasks.register<Exec>("syncWebAssets") {
+    inputs.dir(rootProject.file("agy-ui"))
+    outputs.file(project.file("src/main/assets/usr-data.tar.zst"))
+    commandLine("bash", "${rootProject.rootDir}/scripts/sync_web_assets.sh")
+}
+
+tasks.named("preBuild") {
+    dependsOn("syncWebAssets")
+}

@@ -2566,8 +2566,8 @@ def get_available_ram_mb() -> int:
         pass
     return 2048
 
-MAX_CONCURRENT_SESSIONS = 2
-MIN_AVAILABLE_RAM_MB_FOR_PARALLEL = 750
+MAX_CONCURRENT_SESSIONS = int(os.environ.get("AGY_MAX_CONCURRENT_SESSIONS", "5"))
+MIN_AVAILABLE_RAM_MB_FOR_PARALLEL = 500
 
 @dataclass
 class TurnSnapshot:
