@@ -3688,14 +3688,26 @@
       let targetBubbleInfo = null;
       let toastTimer = null;
 
-      function showToast(text) {
+      function showToast(text, onClick) {
         if (!toast) return;
         toast.textContent = text;
         toast.classList.add('visible');
+        if (typeof onClick === 'function') {
+          toast.style.cursor = 'pointer';
+          toast.onclick = () => {
+            toast.classList.remove('visible');
+            toast.onclick = null;
+            onClick();
+          };
+        } else {
+          toast.style.cursor = 'default';
+          toast.onclick = null;
+        }
         clearTimeout(toastTimer);
         toastTimer = setTimeout(() => {
           toast.classList.remove('visible');
-        }, 2200);
+          toast.onclick = null;
+        }, onClick ? 5000 : 2200);
       }
 
       async function copyTextToClipboard(text) {
@@ -3718,6 +3730,86 @@
         } catch (_) {
           sendWs({ type: 'copy_clipboard', text: text });
           showToast('Copied to clipboard');
+        }
+      }
+
+      function adoptDraftSessionId(cid) {
+        if (!state.conversationId && cid) {
+          const defBuf = state.sessionBuffers.get('default');
+          if (state.isInitializingDraft || (defBuf && defBuf.isRunning)) {
+            state.conversationId = cid;
+            if (window.AndroidApp && typeof window.AndroidApp.setActiveSession === 'function') {
+              window.AndroidApp.setActiveSession(cid);
+            }
+            if (defBuf) {
+              state.sessionBuffers.delete('default');
+              defBuf.conversationId = cid;
+              state.sessionBuffers.set(cid, defBuf);
+            }
+            setInitializingControlsState(false);
+            updatePinButtonState(Boolean(defBuf && defBuf.isPinned));
+            return true;
+          }
+        }
+        return false;
+      }
+
+      function setInitializingControlsState(initializing) {
+        state.isInitializingDraft = initializing;
+        const btnDrawer = document.getElementById('btnOpenDrawer');
+        const btnSettings = document.getElementById('btnOpenSettings');
+        const btnNew = document.getElementById('btnNewSession');
+        const promptInput = document.getElementById('promptInput');
+
+        [btnDrawer, btnSettings, btnNew].forEach(btn => {
+          if (btn) {
+            btn.disabled = initializing;
+            btn.style.opacity = initializing ? '0.35' : '';
+            btn.style.pointerEvents = initializing ? 'none' : '';
+          }
+        });
+        if (promptInput) {
+          promptInput.disabled = initializing;
+        }
+      }
+
+      function prepareWizardDraftSession(title, promptText) {
+        try {
+          if (state.conversationId) {
+            const curBuf = getOrCreateSessionBuffer(state.conversationId);
+            curBuf.draftPrompt = promptInput.value;
+            curBuf.draftAttachments = [...state.pendingAttachments];
+          }
+          promptInput.value = '';
+          state.pendingAttachments = [];
+          renderAttachmentBar();
+          autoResizePrompt();
+          closeOverlays();
+          state.conversationId = null;
+          if (window.AndroidApp && typeof window.AndroidApp.setActiveSession === 'function') {
+            window.AndroidApp.setActiveSession(null);
+          }
+          updatePinButtonState(false);
+          setInitializingControlsState(true);
+
+          sessionTitle.textContent = title;
+          state.activeTurns.clear();
+          chatViewport.innerHTML = '';
+          appendUserBubble(promptText, []);
+
+          const buf = getOrCreateSessionBuffer('default');
+          buf.conversationId = null;
+          buf.activeUserPrompt = promptText;
+          buf.activeUserAttachments = [];
+          buf.isRunning = true;
+          buf.startTime = performance.now();
+          buf.currentAction = 'Initializing agent session...';
+          syncHeaderAndControlsForSession(buf);
+          startLiveProgress('Initializing agent session...', buf.startTime);
+          scrollToBottom(true);
+        } catch (err) {
+          console.error('Error in prepareWizardDraftSession:', err);
+          setInitializingControlsState(false);
         }
       }
 
@@ -4102,6 +4194,7 @@
 
         ws.onclose = () => {
           state.wsInitialized = false;
+          setInitializingControlsState(false);
           setRuntimeStatus('offline', 'Reconnecting...');
           setTimeout(connectWebSocket, 1800);
         };
@@ -4220,6 +4313,13 @@
         const btn = document.getElementById('btnPinLiveNotif');
         if (!btn) return;
         const textSpan = btn.querySelector('.pin-text');
+        const cid = state.conversationId;
+        const hasValidCid = Boolean(cid && !cid.startsWith('session-'));
+        if (!hasValidCid || !window.AndroidApp) {
+          btn.style.display = 'none';
+          return;
+        }
+        btn.style.display = 'inline-flex';
         if (isPinned) {
           btn.classList.add('pinned');
           if (textSpan) textSpan.textContent = 'Pinned';
@@ -4586,11 +4686,21 @@
             break;
 
           case 'session_history':
+            if (msg.conversation_id) {
+              adoptDraftSessionId(msg.conversation_id);
+            }
             if (state.ignoreNextInitialHistory) {
               state.ignoreNextInitialHistory = false;
               if (msg.conversation_id !== state.conversationId) {
                 break;
               }
+            }
+            if (state.conversationId && msg.conversation_id && msg.conversation_id !== state.conversationId) {
+              // Background session history update - update its buffer only, do not hijack active view
+              const b = getOrCreateSessionBuffer(msg.conversation_id);
+              if (msg.messages) b.messages = msg.messages;
+              renderSessionDrawerList();
+              break;
             }
             state.conversationId = msg.conversation_id;
             sessionTitle.textContent = msg.title || 'New Conversation';
@@ -4697,9 +4807,7 @@
 
           case 'turn_start': {
             const cid = msg.conversation_id || state.conversationId;
-            if (!state.conversationId && cid) {
-              state.conversationId = cid;
-            }
+            adoptDraftSessionId(cid);
             const buf = getOrCreateSessionBuffer(cid);
             buf.isRunning = true;
             buf.currentAction = 'Thinking...';
@@ -4715,6 +4823,8 @@
             renderSessionDrawerList();
 
             if (cid === state.conversationId) {
+              setInitializingControlsState(false);
+              updatePinButtonState(Boolean(buf && buf.isPinned));
               setSendButtonRunning();
               ensureAssistantTurnCard(msg.turn_id, msg.model || state.model);
               startLiveProgress('Thinking...', buf.startTime);
@@ -4725,9 +4835,6 @@
 
           case 'agent_thought': {
             const cid = msg.conversation_id || state.conversationId;
-            if (!state.conversationId && cid) {
-              state.conversationId = cid;
-            }
             const buf = getOrCreateSessionBuffer(cid);
             const tRec = getOrCreateTurnRecord(buf, msg.turn_id);
             const delta = msg.delta || '';
@@ -4744,9 +4851,6 @@
 
           case 'agent_token': {
             const cid = msg.conversation_id || state.conversationId;
-            if (!state.conversationId && cid) {
-              state.conversationId = cid;
-            }
             const buf = getOrCreateSessionBuffer(cid);
             const tRec = getOrCreateTurnRecord(buf, msg.turn_id);
             const delta = msg.delta || '';
@@ -4764,9 +4868,6 @@
 
           case 'tool_call': {
             const cid = msg.conversation_id || state.conversationId;
-            if (!state.conversationId && cid) {
-              state.conversationId = cid;
-            }
             const buf = getOrCreateSessionBuffer(cid);
             const tRec = getOrCreateTurnRecord(buf, msg.turn_id);
             const existingIdx = tRec.toolCalls.findIndex(tc => (tc.tool_id && tc.tool_id === msg.tool_id) || (tc.name === msg.name && !tc.tool_id));
@@ -4818,6 +4919,7 @@
             if (cid === state.conversationId) {
               finalizeTurnCard(msg.turn_id, msg);
               resetSendButtonToIdle();
+              setInitializingControlsState(false);
               statusDot.className = 'status-dot';
               statusText.textContent = 'Ready';
               updatePinButtonState(false);
@@ -4846,6 +4948,8 @@
             if (!cid || cid === state.conversationId) {
               appendSystemCard(msg.title, msg.markdown);
               stopLiveProgress();
+              resetSendButtonToIdle();
+              setInitializingControlsState(false);
               scrollToBottom(true);
             }
             break;
@@ -5049,15 +5153,26 @@
 
           case 'ask_question': {
             const cid = msg.conversation_id || state.conversationId;
+            adoptDraftSessionId(cid);
             const buf = getOrCreateSessionBuffer(cid);
             buf.waitingInput = true;
             buf.pendingQuestion = msg;
             renderSessionDrawerList();
 
-            if (cid === state.conversationId) {
+            const isCurrentSession = Boolean(cid && cid === state.conversationId);
+            const isUnassignedCurrentDraft = !state.conversationId && (
+              state.isRunning || (state.activeTurns && msg.turn_id && state.activeTurns.has(msg.turn_id))
+            );
+
+            if (isCurrentSession || isUnassignedCurrentDraft) {
               handleAskQuestionEvent(msg);
             } else {
-              showToast(`Session needs input: ${msg.tool_summary || 'Question ready'}`);
+              showToast(`Session needs input: ${msg.tool_summary || 'Question ready'}`, () => {
+                if (cid) {
+                  initiateSessionSwitch(cid);
+                  handleAskQuestionEvent(msg);
+                }
+              });
             }
             break;
           }
@@ -5585,57 +5700,69 @@
       // User Input & Composer Actions
       // ---------------------------------------------------------------------
       function dispatchUserPrompt(text) {
-        const trimmed = (text || '').trim();
-        const attachments = state.pendingAttachments.slice();
-        if (!trimmed && !attachments.length) return;
+        try {
+          const trimmed = (text || '').trim();
+          const attachments = state.pendingAttachments.slice();
+          if (!trimmed && !attachments.length) return;
 
-        appendUserBubble(trimmed, attachments);
+          if (!state.conversationId) {
+            setInitializingControlsState(true);
+            updatePinButtonState(false);
+          }
 
-        // Record user prompt in active session buffer
-        const buf = getOrCreateSessionBuffer(state.conversationId);
-        buf.activeUserPrompt = trimmed;
-        buf.activeUserAttachments = attachments;
-        buf.isRunning = true;
-        buf.startTime = performance.now();
-        buf.unread = false;
-        syncUnreadToStorage();
+          appendUserBubble(trimmed, attachments);
 
-        if (trimmed.startsWith('/')) {
-          const firstWord = trimmed.split(/\s+/)[0].toLowerCase();
-          const progressLabels = {
-            '/usage': 'Querying subscription quotas & context...',
-            '/quota': 'Querying subscription quotas & context...',
-            '/cost': 'Querying subscription quotas & context...',
-            '/status': 'Inspecting device hardware & diagnostics...',
-            '/context': 'Calculating context window usage...',
-            '/version': 'Checking runtime versions...',
-          };
-          buf.currentAction = progressLabels[firstWord] || ('Running ' + firstWord + '...');
-          startLiveProgress(buf.currentAction, buf.startTime);
-        } else {
-          buf.currentAction = 'Thinking...';
-          startLiveProgress('Thinking...', buf.startTime);
+          // Record user prompt in active session buffer
+          const buf = getOrCreateSessionBuffer(state.conversationId);
+          buf.activeUserPrompt = trimmed;
+          buf.activeUserAttachments = attachments;
+          buf.isRunning = true;
+          buf.startTime = performance.now();
+          buf.unread = false;
+          syncUnreadToStorage();
+
+          if (trimmed.startsWith('/')) {
+            const firstWord = trimmed.split(/\s+/)[0].toLowerCase();
+            const progressLabels = {
+              '/usage': 'Querying subscription quotas & context...',
+              '/quota': 'Querying subscription quotas & context...',
+              '/cost': 'Querying subscription quotas & context...',
+              '/status': 'Inspecting device hardware & diagnostics...',
+              '/context': 'Calculating context window usage...',
+              '/version': 'Checking runtime versions...',
+            };
+            buf.currentAction = progressLabels[firstWord] || ('Running ' + firstWord + '...');
+            startLiveProgress(buf.currentAction, buf.startTime);
+          } else {
+            buf.currentAction = 'Thinking...';
+            startLiveProgress('Thinking...', buf.startTime);
+          }
+          sendWs({
+            type: 'user_prompt',
+            prompt: trimmed,
+            attachments: attachments,
+            conversation_id: state.conversationId,
+            model: state.model,
+            mode: state.mode,
+            effort: state.effort,
+          });
+
+          state.pendingAttachments = [];
+          renderAttachmentBar();
+          promptInput.value = '';
+          promptInput.style.height = 'auto';
+        } catch (err) {
+          console.error('Error in dispatchUserPrompt:', err);
+          setInitializingControlsState(false);
         }
-        sendWs({
-          type: 'user_prompt',
-          prompt: trimmed,
-          attachments: attachments,
-          conversation_id: state.conversationId,
-          model: state.model,
-          mode: state.mode,
-          effort: state.effort,
-        });
-
-        state.pendingAttachments = [];
-        renderAttachmentBar();
-        promptInput.value = '';
-        promptInput.style.height = 'auto';
       }
 
       function handleSendOrStop() {
         if (state.isRunning) {
           sendWs({ type: 'abort_generation', conversation_id: state.conversationId });
           stopLiveProgress();
+          setInitializingControlsState(false);
+          updatePinButtonState(false);
           const buf = state.conversationId ? state.sessionBuffers.get(state.conversationId) : null;
           if (buf) {
             buf.isRunning = false;
@@ -5751,27 +5878,40 @@
       });
 
       document.getElementById('btnNewSession').addEventListener('click', () => {
-        if (state.conversationId) {
-          const curBuf = getOrCreateSessionBuffer(state.conversationId);
-          curBuf.draftPrompt = promptInput.value;
-          curBuf.draftAttachments = [...state.pendingAttachments];
+        try {
+          if (state.conversationId) {
+            const curBuf = getOrCreateSessionBuffer(state.conversationId);
+            curBuf.draftPrompt = promptInput.value;
+            curBuf.draftAttachments = [...state.pendingAttachments];
+          }
+          promptInput.value = '';
+          state.pendingAttachments = [];
+          renderAttachmentBar();
+          autoResizePrompt();
+          closeOverlays();
+          state.conversationId = null;
+          if (window.AndroidApp && typeof window.AndroidApp.setActiveSession === 'function') {
+            window.AndroidApp.setActiveSession(null);
+          }
+          chatViewport.innerHTML = '';
+          state.activeTurns.clear();
+          setInitializingControlsState(false);
+          updatePinButtonState(false);
+          stopLiveProgress();
+          resetSendButtonToIdle();
+          if (sessionTitle) {
+            sessionTitle.textContent = 'New Conversation';
+          }
+          sendWs({
+            type: 'new_session',
+            model: state.model,
+            effort: state.effort,
+            mode: state.mode
+          });
+        } catch (err) {
+          console.error('Error in btnNewSession click:', err);
+          setInitializingControlsState(false);
         }
-        promptInput.value = '';
-        state.pendingAttachments = [];
-        renderAttachmentBar();
-        autoResizePrompt();
-        closeOverlays();
-        state.conversationId = null;
-        if (window.AndroidApp && typeof window.AndroidApp.setActiveSession === 'function') {
-          window.AndroidApp.setActiveSession(null);
-        }
-        updatePinButtonState(false);
-        sendWs({
-          type: 'new_session',
-          model: state.model,
-          effort: state.effort,
-          mode: state.mode
-        });
       });
 
       sessionSearch.addEventListener('input', () => {
@@ -6952,6 +7092,9 @@
           closeSkillSheet();
           closeSettingsHub();
 
+          const promptText = `Create a new skill named "${name}":\n- Purpose: ${purpose}${trigger ? `\n- Trigger: ${trigger}` : ''}\n- Scope: ${currentAISkillScope.toUpperCase()}`;
+          prepareWizardDraftSession(`Skill: ${name}`, promptText);
+
           sendWs({
             type: 'create_skill_prompt',
             name: name,
@@ -7068,6 +7211,8 @@
           if (btnAiEdit) {
             btnAiEdit.addEventListener('click', () => {
               closeSettingsHub();
+              const promptText = `Edit skill "${s.name}" at ${s.path}`;
+              prepareWizardDraftSession(`Edit: ${s.name}`, promptText);
               sendWs({
                 type: 'edit_skill_prompt',
                 name: s.name,
@@ -7213,6 +7358,8 @@
             }
             closeMCPModal();
             closeSettingsHub();
+            const promptText = `Setup MCP Server "${name}":\n${details}`;
+            prepareWizardDraftSession(`Setup MCP: ${name}`, promptText);
             sendWs({
               type: 'setup_mcp_prompt',
               name: name,
@@ -7522,6 +7669,8 @@
           }
           closeInstallPackageModal();
           closeSettingsHub();
+          const promptText = `Install package "${val}"`;
+          prepareWizardDraftSession(`Install: ${val.slice(0, 20)}`, promptText);
           sendWs({
             type: 'install_package_prompt',
             package_query: val,

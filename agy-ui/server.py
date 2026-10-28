@@ -304,8 +304,8 @@ def get_agy_version() -> str:
 
     return _cached_agy_version or os.environ.get("AGY_RUNTIME_VERSION", "1.4.7")
 
-APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.4.6")
-APP_BUILD = os.environ.get("AGY_APP_VERSION_CODE", "25")
+APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.5.1")
+APP_BUILD = os.environ.get("AGY_APP_VERSION_CODE", "33")
 AGY_VERSION = get_agy_version()
 
 logging.basicConfig(
@@ -1152,8 +1152,8 @@ async def delete_mcp_server(name: str) -> dict[str, Any]:
 
 
 async def check_github_updates() -> dict[str, Any]:
-    installed_version = os.environ.get("AGY_APP_VERSION", "1.4.6")
-    installed_code = int(os.environ.get("AGY_APP_VERSION_CODE", "25"))
+    installed_version = os.environ.get("AGY_APP_VERSION", "1.5.1")
+    installed_code = int(os.environ.get("AGY_APP_VERSION_CODE", "33"))
     url = "https://api.github.com/repos/MisterMoeGreen/Antigravity-Studio-App/releases/latest"
 
     cmd = ["curl", "-sSL", "-H", f"User-Agent: AntigravityStudio/{APP_VERSION}", url]
@@ -2631,6 +2631,8 @@ class AgyProcessOrchestrator:
         self._migrated_cids: dict[str, str] = {}
         self.active_view_cid: Optional[str] = None
         self._global_auth_lock = asyncio.Lock()
+        self._new_session_lock = asyncio.Lock()
+        self._initializing_ctx: Optional[SessionExecutionContext] = None
         self._streamed_turn_ids: set[str] = set()
         self.discovered_models: list[dict[str, Any]] = []
 
@@ -2658,7 +2660,7 @@ class AgyProcessOrchestrator:
         persisted_cids = {p["conversation_id"] for p in persisted}
         active_entries = []
         for cid, ctx in self._sessions.items():
-            if cid not in persisted_cids and (ctx.is_running or cid == self.active_view_cid):
+            if cid not in persisted_cids and (ctx.is_running or (cid == self.active_view_cid and not cid.startswith("session-"))):
                 active_entries.append({
                     "conversation_id": cid,
                     "title": ctx.title or ("New Conversation" if not ctx.is_running else "Running Turn"),
@@ -2718,6 +2720,25 @@ class AgyProcessOrchestrator:
                 default_model = self.discovered_models[0]["id"]
         return default_model, self.default_mode, self.default_effort
 
+    def create_new_session_context(
+        self,
+        workspace: Optional[str] = None,
+        model: Optional[str] = None,
+        mode: Optional[str] = None,
+        effort: Optional[str] = None,
+        title: str = "New Conversation",
+    ) -> SessionExecutionContext:
+        ws = workspace or get_default_workspace()
+        default_model, default_mode, default_effort = self._active_view_defaults()
+        return SessionExecutionContext(
+            conversation_id="",
+            workspace=ws,
+            model=model or default_model,
+            mode=mode or default_mode,
+            effort=effort or default_effort,
+            title=title,
+        )
+
     def get_or_create_context(
         self,
         conversation_id: Optional[str],
@@ -2738,7 +2759,7 @@ class AgyProcessOrchestrator:
                     cid = latest[0]["conversation_id"]
                     self.active_view_cid = cid
                 else:
-                    cid = f"session-{uuid.uuid4().hex[:12]}"
+                    return self.create_new_session_context(workspace, model, mode, effort)
         if cid not in self._sessions:
             ws = workspace or get_default_workspace()
             default_model, default_mode, default_effort = self._active_view_defaults()
@@ -2834,14 +2855,43 @@ class AgyProcessOrchestrator:
         model: Optional[str] = None,
         mode: Optional[str] = None,
         effort: Optional[str] = None,
+        workspace: Optional[str] = None,
+        initial_title: Optional[str] = None,
     ) -> None:
-        ctx = self.get_or_create_context(
-            conversation_id,
-            model=model,
-            mode=mode,
-            effort=effort,
-        )
-        cid = ctx.conversation_id
+        raw_cid = (conversation_id or "").strip()
+        if raw_cid in self._migrated_cids:
+            raw_cid = self._migrated_cids[raw_cid]
+        is_new_session = not raw_cid or raw_cid.startswith("session-")
+
+        if is_new_session:
+            if self._new_session_lock.locked():
+                await self.broadcast(
+                    {
+                        "type": "system_card",
+                        "conversation_id": "",
+                        "title": "Session Initializing",
+                        "markdown": "A new session is currently starting. Please wait a moment...",
+                        "level": "warning",
+                    }
+                )
+                return
+            ctx = self.create_new_session_context(
+                workspace=workspace,
+                model=model,
+                mode=mode,
+                effort=effort,
+                title=initial_title or "New Conversation",
+            )
+            cid = ""
+        else:
+            ctx = self.get_or_create_context(
+                raw_cid,
+                workspace=workspace,
+                model=model,
+                mode=mode,
+                effort=effort,
+            )
+            cid = ctx.conversation_id
 
         # 1. Intra-session lock check
         if ctx.turn_lock.locked():
@@ -2887,7 +2937,7 @@ class AgyProcessOrchestrator:
         if running_sessions:
             logger.info(
                 "Session %s starting turn (parallel sessions active: %d)",
-                cid[:8],
+                cid[:8] if cid else "new",
                 len(running_sessions),
             )
 
@@ -2902,48 +2952,6 @@ class AgyProcessOrchestrator:
             ctx.active_prompt = prompt
             ctx.active_snapshot = TurnSnapshot(turn_id=turn_id, model=ctx.model)
             self._auth_required_detected = False
-
-            await self.broadcast(
-                {
-                    "type": "session_status",
-                    "conversation_id": cid,
-                    "state": "running",
-                    "detail": f"Running ({ctx.model})",
-                }
-            )
-            await self.broadcast(
-                {
-                    "type": "status",
-                    "conversation_id": cid,
-                    "state": "running",
-                    "detail": f"Running ({ctx.model})",
-                }
-            )
-            await self.broadcast(
-                {
-                    "type": "turn_start",
-                    "conversation_id": cid,
-                    "turn_id": turn_id,
-                    "model": ctx.model,
-                    "start_time": ctx.active_snapshot.start_time if ctx.active_snapshot else time.time(),
-                }
-            )
-            meta = self.storage.get_conversation_meta(cid)
-            s_title = meta.get("title") or f"Session {cid[:8]}"
-            emit_native_notif_event(
-                {
-                    "event": "turn_start",
-                    "conversation_id": cid,
-                    "title": s_title,
-                    "status": "Thinking...",
-                }
-            )
-            await self.broadcast(
-                {
-                    "type": "session_list",
-                    "sessions": self.get_all_sessions(limit=80),
-                }
-            )
 
             usage_summary = {
                 "input_tokens": 0,
@@ -2966,7 +2974,7 @@ class AgyProcessOrchestrator:
 
                 # Spawn `agy` with `--output-format stream-json --dangerously-skip-permissions`
                 cmd = self.build_cli_args(ctx, prompt=prompt, use_persistent_stdio=False)
-                logger.info("Spawning agy for [%s]: %s", cid[:8], " ".join(cmd[:8]) + " ...")
+                logger.info("Spawning agy for [%s]: %s", cid[:8] if cid else "new", " ".join(cmd[:8]) + " ...")
 
                 proc_env = dict(os.environ)
                 proc_env["AGY_AUTO_UPDATE"] = "1"
@@ -2979,22 +2987,170 @@ class AgyProcessOrchestrator:
                     if ak_k not in PROTECTED_ENV_NAMES:
                         proc_env[ak_k] = ak_v
 
-                # ARGON-V14-14: brief auth lock during spawn to prevent token race
-                async with self._global_auth_lock:
-                    ctx.active_proc = await asyncio.create_subprocess_exec(
-                        *cmd,
-                        stdin=asyncio.subprocess.PIPE,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                        cwd=ctx.workspace if Path(ctx.workspace).is_dir() else str(HOME_DIR),
-                        env=proc_env,
-                        limit=16 * 1024 * 1024,  # 16 MiB line buffer for large tool outputs
-                        start_new_session=True,  # setsid for process group isolation (ARGON-V14-09)
+                first_str = ""
+                first_line_consumed = False
+                if is_new_session:
+                    async with self._new_session_lock:
+                        self._initializing_ctx = ctx
+                        try:
+                            # ARGON-V14-14: brief auth lock during spawn to prevent token race
+                            async with self._global_auth_lock:
+                                ctx.active_proc = await asyncio.create_subprocess_exec(
+                                    *cmd,
+                                    stdin=asyncio.subprocess.PIPE,
+                                    stdout=asyncio.subprocess.PIPE,
+                                    stderr=asyncio.subprocess.PIPE,
+                                    cwd=ctx.workspace if Path(ctx.workspace).is_dir() else str(HOME_DIR),
+                                    env=proc_env,
+                                    limit=16 * 1024 * 1024,  # 16 MiB line buffer for large tool outputs
+                                    start_new_session=True,  # setsid for process group isolation (ARGON-V14-09)
+                                )
+                            if ctx.interrupted:
+                                try:
+                                    pgid = os.getpgid(ctx.active_proc.pid)
+                                    os.killpg(pgid, signal.SIGKILL)
+                                except Exception:
+                                    pass
+                                return
+                            try:
+                                first_raw = await asyncio.wait_for(ctx.active_proc.stdout.readline(), timeout=30.0)
+                                if first_raw:
+                                    first_str = first_raw.decode("utf-8", errors="replace").strip()
+                                    if first_str.startswith("{"):
+                                        init_event = json.loads(first_str)
+                                        if init_event.get("event") == "init":
+                                            first_line_consumed = True
+                                            real_cid = str(init_event.get("conversation_id") or "").strip()
+                                            if real_cid:
+                                                if raw_cid:
+                                                    self._migrated_cids[raw_cid] = real_cid
+                                                ctx.conversation_id = real_cid
+                                                self._sessions[real_cid] = ctx
+                                                self.active_view_cid = real_cid
+                                                cid = real_cid
+                            except asyncio.TimeoutError:
+                                logger.warning("Timed out waiting for init event from agy stdout")
+                            except Exception as exc:
+                                logger.warning("Error reading init event from agy stdout: %s", exc)
+                        finally:
+                            self._initializing_ctx = None
+                else:
+                    async with self._global_auth_lock:
+                        ctx.active_proc = await asyncio.create_subprocess_exec(
+                            *cmd,
+                            stdin=asyncio.subprocess.PIPE,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                            cwd=ctx.workspace if Path(ctx.workspace).is_dir() else str(HOME_DIR),
+                            env=proc_env,
+                            limit=16 * 1024 * 1024,
+                            start_new_session=True,
+                        )
+
+                if raw_cid and cid and raw_cid != cid:
+                    self._migrated_cids[raw_cid] = cid
+                    await self.broadcast(
+                        {
+                            "type": "conversation_assigned",
+                            "old_conversation_id": raw_cid,
+                            "conversation_id": cid,
+                        }
                     )
+                    emit_native_notif_event(
+                        {
+                            "event": "conversation_assigned",
+                            "old_conversation_id": raw_cid,
+                            "conversation_id": cid,
+                        }
+                    )
+
+                if initial_title:
+                    branch = get_git_branch(ctx.workspace)
+                    await self.broadcast(
+                        {
+                            "type": "session_history",
+                            "conversation_id": cid,
+                            "title": ctx.title,
+                            "workspace": ctx.workspace,
+                            "git_branch": branch,
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": prompt,
+                                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                                }
+                            ],
+                            "is_running": True,
+                            "current_action": f"Running ({ctx.model})",
+                            "config": {
+                                "conversation_id": cid,
+                                "model": ctx.model,
+                                "mode": ctx.mode,
+                                "effort": ctx.effort,
+                                "workspace": ctx.workspace,
+                                "git_branch": branch,
+                            },
+                        }
+                    )
+                    await self.broadcast(
+                        {
+                            "type": "config_updated",
+                            "conversation_id": cid,
+                            "config": {
+                                "conversation_id": cid,
+                                "model": ctx.model,
+                                "mode": ctx.mode,
+                                "effort": ctx.effort,
+                                "workspace": ctx.workspace,
+                                "git_branch": branch,
+                            },
+                        }
+                    )
+
+                await self.broadcast(
+                    {
+                        "type": "session_status",
+                        "conversation_id": cid,
+                        "state": "running",
+                        "detail": f"Running ({ctx.model})",
+                    }
+                )
+                await self.broadcast(
+                    {
+                        "type": "status",
+                        "conversation_id": cid,
+                        "state": "running",
+                        "detail": f"Running ({ctx.model})",
+                    }
+                )
+                await self.broadcast(
+                    {
+                        "type": "turn_start",
+                        "conversation_id": cid,
+                        "turn_id": turn_id,
+                        "model": ctx.model,
+                        "start_time": ctx.active_snapshot.start_time if ctx.active_snapshot else time.time(),
+                    }
+                )
+                s_title = ctx.title or (f"Session {cid[:8]}" if cid else "New Conversation")
+                emit_native_notif_event(
+                    {
+                        "event": "turn_start",
+                        "conversation_id": cid,
+                        "title": s_title,
+                        "status": "Thinking...",
+                    }
+                )
+                await self.broadcast(
+                    {
+                        "type": "session_list",
+                        "sessions": self.get_all_sessions(limit=80),
+                    }
+                )
 
                 # Read stdout and stderr concurrently
                 stdout_task = asyncio.create_task(
-                    self._consume_stdout_stream(ctx, turn_id, usage_summary)
+                    self._consume_stdout_stream(ctx, turn_id, usage_summary, initial_line=first_str if (is_new_session and not first_line_consumed) else None)
                 )
                 stderr_task = asyncio.create_task(self._consume_stderr_stream(ctx, turn_id))
 
@@ -3700,10 +3856,32 @@ class AgyProcessOrchestrator:
             self._cleanup_auth()
 
     async def _consume_stdout_stream(
-        self, ctx: SessionExecutionContext, turn_id: str, usage_summary: dict[str, int]
+        self,
+        ctx: SessionExecutionContext,
+        turn_id: str,
+        usage_summary: dict[str, int],
+        initial_line: Optional[str] = None,
     ) -> bool:
         assert ctx.active_proc and ctx.active_proc.stdout
         emitted = False
+
+        if initial_line:
+            line = initial_line.strip()
+            if line:
+                if not line.startswith("{"):
+                    emitted = True
+                    if ctx.active_snapshot:
+                        ctx.active_snapshot.raw_markdown += line + "\n"
+                    await self.broadcast(
+                        {"type": "agent_token", "conversation_id": ctx.conversation_id, "turn_id": turn_id, "delta": line + "\n"}
+                    )
+                else:
+                    try:
+                        event = json.loads(line)
+                        if await self._demux_json_event(ctx, turn_id, event, usage_summary):
+                            emitted = True
+                    except Exception:
+                        pass
 
         while True:
             raw_line = await ctx.active_proc.stdout.readline()
@@ -4206,6 +4384,15 @@ class AgyProcessOrchestrator:
                     target_cid = c.conversation_id
                     break
         if not target_cid or target_cid not in self._sessions:
+            if self._initializing_ctx and self._initializing_ctx.active_proc:
+                self._initializing_ctx.interrupted = True
+                try:
+                    proc = self._initializing_ctx.active_proc
+                    pgid = os.getpgid(proc.pid)
+                    os.killpg(pgid, signal.SIGKILL)
+                except Exception:
+                    pass
+                return True
             return False
 
         ctx = self._sessions[target_cid]
@@ -4504,19 +4691,37 @@ class AgyWebServer:
         loop = asyncio.get_running_loop()
         future = loop.create_future()
 
+        turn_id = str(payload.get("turn_id") or "").strip()
         cid = str(payload.get("conversation_id") or "").strip()
-        if not cid:
-            cid = self.orchestrator.active_view_cid or ""
-        if not cid:
+
+        # Multi-tier session resolution
+        if turn_id:
             for s in self.orchestrator._sessions.values():
-                if s.is_running:
+                if s.current_turn_id == turn_id and s.conversation_id:
                     cid = s.conversation_id
                     break
+
+        if cid in self.orchestrator._migrated_cids:
+            cid = self.orchestrator._migrated_cids[cid]
+
+        if not cid or cid.startswith("session-"):
+            if self.orchestrator.active_view_cid and not self.orchestrator.active_view_cid.startswith("session-"):
+                cid = self.orchestrator.active_view_cid
+            else:
+                running_sessions = [s for s in self.orchestrator._sessions.values() if s.is_running and s.conversation_id and not s.conversation_id.startswith("session-")]
+                if running_sessions:
+                    cid = running_sessions[0].conversation_id
+                elif self.orchestrator.active_view_cid:
+                    cid = self.orchestrator.active_view_cid
+
+        if cid in self.orchestrator._migrated_cids:
+            cid = self.orchestrator._migrated_cids[cid]
 
         self._pending_questions[question_id] = {
             "future": future,
             "conversation_id": cid,
             "session_id": cid,
+            "turn_id": turn_id,
             "created_at": int(time.time()),
             "questions": normalized_questions,
             "tool_action": tool_action,
@@ -4539,10 +4744,11 @@ class AgyWebServer:
                 "detail": "Needs input",
             })
 
-        # Broadcast WebSocket frame to all connected mobile clients with conversation_id
+        # Broadcast WebSocket frame to all connected mobile clients with conversation_id and turn_id
         await self.broadcast({
             "type": "ask_question",
             "conversation_id": cid,
+            "turn_id": turn_id,
             "question_id": question_id,
             "created_at": int(time.time()),
             "tool_action": tool_action,
@@ -4598,6 +4804,10 @@ class AgyWebServer:
             return {"error": "Question already completed", "status": "gone"}
 
         cid = entry.get("conversation_id", "")
+        if cid in self.orchestrator._migrated_cids:
+            cid = self.orchestrator._migrated_cids[cid]
+            entry["conversation_id"] = cid
+
         if cid and cid in self.orchestrator._sessions:
             ctx = self.orchestrator._sessions[cid]
             ctx.waiting_input = False
@@ -4680,9 +4890,16 @@ class AgyWebServer:
     async def _cancel_all_pending_questions(self, conversation_id: Optional[str] = None, reason: str = "user_aborted") -> None:
         if not self._pending_questions:
             return
+        target_cid = conversation_id
+        if target_cid and target_cid in self.orchestrator._migrated_cids:
+            target_cid = self.orchestrator._migrated_cids[target_cid]
+
         for qid, qentry in list(self._pending_questions.items()):
             q_cid = qentry.get("conversation_id")
-            if conversation_id and q_cid and q_cid != conversation_id:
+            if q_cid and q_cid in self.orchestrator._migrated_cids:
+                q_cid = self.orchestrator._migrated_cids[q_cid]
+                qentry["conversation_id"] = q_cid
+            if target_cid and q_cid and q_cid != target_cid:
                 continue
             fut = qentry.get("future")
             if fut and not fut.done():
@@ -4695,7 +4912,7 @@ class AgyWebServer:
                 })
             await self.broadcast({
                 "type": "dismiss_question",
-                "conversation_id": q_cid,
+                "conversation_id": q_cid or target_cid or "",
                 "question_id": qid,
                 "reason": reason,
             })
@@ -5702,70 +5919,15 @@ class AgyWebServer:
             use_model = req_model or def_model
             use_effort = req_effort or def_effort
 
-            new_cid = f"session-{uuid.uuid4().hex[:12]}"
-            ctx = self.orchestrator.get_or_create_context(
-                new_cid,
-                workspace=current_ws,
-                model=use_model,
-                effort=use_effort,
-            )
-            self.orchestrator.active_view_cid = new_cid
-            ctx.title = f"Skill: {s_name}"
-            ctx.total_input_tokens = 0
-            ctx.total_output_tokens = 0
-            ctx.total_thinking_tokens = 0
-            ctx.turn_count = 0
-            ctx.current_action = f"Running ({ctx.model})"
-            ctx.active_prompt = ai_prompt
-            branch = get_git_branch(ctx.workspace)
-            await self.broadcast({
-                "type": "session_history",
-                "conversation_id": new_cid,
-                "title": f"Skill: {s_name}",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": ai_prompt,
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    }
-                ],
-                "history": [],
-                "workspace": ctx.workspace,
-                "git_branch": branch,
-                "is_running": True,
-                "current_action": f"Running ({ctx.model})",
-                "config": {
-                    "conversation_id": new_cid,
-                    "model": ctx.model,
-                    "mode": ctx.mode,
-                    "effort": ctx.effort,
-                    "workspace": ctx.workspace,
-                    "git_branch": branch,
-                },
-            })
-            await self.broadcast({
-                "type": "config_updated",
-                "conversation_id": new_cid,
-                "config": {
-                    "conversation_id": new_cid,
-                    "model": ctx.model,
-                    "mode": ctx.mode,
-                    "effort": ctx.effort,
-                    "workspace": ctx.workspace,
-                    "git_branch": branch,
-                },
-            })
-            await self.broadcast({
-                "type": "session_list",
-                "sessions": self.get_all_sessions(limit=80),
-            })
             asyncio.create_task(
                 self.orchestrator.execute_turn(
                     ai_prompt,
-                    conversation_id=new_cid,
-                    model=ctx.model,
-                    mode=ctx.mode,
-                    effort=ctx.effort,
+                    conversation_id=None,
+                    model=use_model,
+                    mode=def_mode,
+                    effort=use_effort,
+                    workspace=current_ws,
+                    initial_title=f"Skill: {s_name}",
                 )
             )
             return
@@ -5785,70 +5947,15 @@ class AgyWebServer:
             use_model = req_model or def_model
             use_effort = req_effort or def_effort
 
-            new_cid = f"session-{uuid.uuid4().hex[:12]}"
-            ctx = self.orchestrator.get_or_create_context(
-                new_cid,
-                workspace=current_ws,
-                model=use_model,
-                effort=use_effort,
-            )
-            self.orchestrator.active_view_cid = new_cid
-            ctx.title = f"Edit: {s_name}"
-            ctx.total_input_tokens = 0
-            ctx.total_output_tokens = 0
-            ctx.total_thinking_tokens = 0
-            ctx.turn_count = 0
-            ctx.current_action = f"Running ({ctx.model})"
-            ctx.active_prompt = ai_prompt
-            branch = get_git_branch(ctx.workspace)
-            await self.broadcast({
-                "type": "session_history",
-                "conversation_id": new_cid,
-                "title": f"Edit: {s_name}",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": ai_prompt,
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    }
-                ],
-                "history": [],
-                "workspace": ctx.workspace,
-                "git_branch": branch,
-                "is_running": True,
-                "current_action": f"Running ({ctx.model})",
-                "config": {
-                    "conversation_id": new_cid,
-                    "model": ctx.model,
-                    "mode": ctx.mode,
-                    "effort": ctx.effort,
-                    "workspace": ctx.workspace,
-                    "git_branch": branch,
-                },
-            })
-            await self.broadcast({
-                "type": "config_updated",
-                "conversation_id": new_cid,
-                "config": {
-                    "conversation_id": new_cid,
-                    "model": ctx.model,
-                    "mode": ctx.mode,
-                    "effort": ctx.effort,
-                    "workspace": ctx.workspace,
-                    "git_branch": branch,
-                },
-            })
-            await self.broadcast({
-                "type": "session_list",
-                "sessions": self.get_all_sessions(limit=80),
-            })
             asyncio.create_task(
                 self.orchestrator.execute_turn(
                     ai_prompt,
-                    conversation_id=new_cid,
-                    model=ctx.model,
-                    mode=ctx.mode,
-                    effort=ctx.effort,
+                    conversation_id=None,
+                    model=use_model,
+                    mode=def_mode,
+                    effort=use_effort,
+                    workspace=current_ws,
+                    initial_title=f"Edit: {s_name}",
                 )
             )
             return
@@ -5978,70 +6085,15 @@ class AgyWebServer:
             use_model = req_model or def_model
             use_effort = req_effort or def_effort
 
-            new_cid = f"session-{uuid.uuid4().hex[:12]}"
-            ctx = self.orchestrator.get_or_create_context(
-                new_cid,
-                workspace=current_ws,
-                model=use_model,
-                effort=use_effort,
-            )
-            self.orchestrator.active_view_cid = new_cid
-            ctx.title = f"Setup MCP: {name or brief[:16]}"
-            ctx.total_input_tokens = 0
-            ctx.total_output_tokens = 0
-            ctx.total_thinking_tokens = 0
-            ctx.turn_count = 0
-            ctx.current_action = f"Running ({ctx.model})"
-            ctx.active_prompt = ai_prompt
-            branch = get_git_branch(ctx.workspace)
-            await self.broadcast({
-                "type": "session_history",
-                "conversation_id": new_cid,
-                "title": f"Setup MCP: {name or brief[:16]}",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": ai_prompt,
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    }
-                ],
-                "history": [],
-                "workspace": ctx.workspace,
-                "git_branch": branch,
-                "is_running": True,
-                "current_action": f"Running ({ctx.model})",
-                "config": {
-                    "conversation_id": new_cid,
-                    "model": ctx.model,
-                    "mode": ctx.mode,
-                    "effort": ctx.effort,
-                    "workspace": ctx.workspace,
-                    "git_branch": branch,
-                },
-            })
-            await self.broadcast({
-                "type": "config_updated",
-                "conversation_id": new_cid,
-                "config": {
-                    "conversation_id": new_cid,
-                    "model": ctx.model,
-                    "mode": ctx.mode,
-                    "effort": ctx.effort,
-                    "workspace": ctx.workspace,
-                    "git_branch": branch,
-                },
-            })
-            await self.broadcast({
-                "type": "session_list",
-                "sessions": self.get_all_sessions(limit=80),
-            })
             asyncio.create_task(
                 self.orchestrator.execute_turn(
                     ai_prompt,
-                    conversation_id=new_cid,
-                    model=ctx.model,
-                    mode=ctx.mode,
-                    effort=ctx.effort,
+                    conversation_id=None,
+                    model=use_model,
+                    mode=def_mode,
+                    effort=use_effort,
+                    workspace=current_ws,
+                    initial_title=f"Setup MCP: {name or brief[:16]}",
                 )
             )
             return
@@ -6191,70 +6243,15 @@ class AgyWebServer:
             use_model = req_model or def_model
             use_effort = req_effort or def_effort
 
-            new_cid = f"session-{uuid.uuid4().hex[:12]}"
-            ctx = self.orchestrator.get_or_create_context(
-                new_cid,
-                workspace=current_ws,
-                model=use_model,
-                effort=use_effort,
-            )
-            self.orchestrator.active_view_cid = new_cid
-            ctx.title = f"Install: {clean_query[:20]}"
-            ctx.total_input_tokens = 0
-            ctx.total_output_tokens = 0
-            ctx.total_thinking_tokens = 0
-            ctx.turn_count = 0
-            ctx.current_action = f"Running ({ctx.model})"
-            ctx.active_prompt = ai_prompt
-            branch = get_git_branch(ctx.workspace)
-            await self.broadcast({
-                "type": "session_history",
-                "conversation_id": new_cid,
-                "title": f"Install: {clean_query[:20]}",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": ai_prompt,
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    }
-                ],
-                "history": [],
-                "workspace": ctx.workspace,
-                "git_branch": branch,
-                "is_running": True,
-                "current_action": f"Running ({ctx.model})",
-                "config": {
-                    "conversation_id": new_cid,
-                    "model": ctx.model,
-                    "mode": ctx.mode,
-                    "effort": ctx.effort,
-                    "workspace": ctx.workspace,
-                    "git_branch": branch,
-                },
-            })
-            await self.broadcast({
-                "type": "config_updated",
-                "conversation_id": new_cid,
-                "config": {
-                    "conversation_id": new_cid,
-                    "model": ctx.model,
-                    "mode": ctx.mode,
-                    "effort": ctx.effort,
-                    "workspace": ctx.workspace,
-                    "git_branch": branch,
-                },
-            })
-            await self.broadcast({
-                "type": "session_list",
-                "sessions": self.get_all_sessions(limit=80),
-            })
             asyncio.create_task(
                 self.orchestrator.execute_turn(
                     ai_prompt,
-                    conversation_id=new_cid,
-                    model=ctx.model,
-                    mode=ctx.mode,
-                    effort=ctx.effort,
+                    conversation_id=None,
+                    model=use_model,
+                    mode=def_mode,
+                    effort=use_effort,
+                    workspace=current_ws,
+                    initial_title=f"Install: {clean_query[:20]}",
                 )
             )
             return
@@ -6273,7 +6270,11 @@ class AgyWebServer:
             return
 
         if mtype == "user_prompt":
-            cid = str(data.get("conversation_id") or self.orchestrator.active_view_cid or "").strip()
+            raw_cid = str(data.get("conversation_id") or "").strip()
+            if raw_cid in self.orchestrator._migrated_cids:
+                raw_cid = self.orchestrator._migrated_cids[raw_cid]
+            is_new = not raw_cid or raw_cid.startswith("session-")
+            cid = "" if is_new else raw_cid
             raw_prompt = str(data.get("prompt") or "").strip()
             if self.orchestrator.is_authenticating and raw_prompt:
                 asyncio.create_task(self.orchestrator.submit_auth_code(raw_prompt))
@@ -6320,7 +6321,10 @@ class AgyWebServer:
                 return
 
             # Update session execution context if sent with prompt
-            ctx = self.orchestrator.get_or_create_context(cid)
+            if cid:
+                ctx = self.orchestrator.get_or_create_context(cid)
+            else:
+                ctx = self.orchestrator.create_new_session_context()
             settings = load_app_settings()
             settings_changed = False
             if data.get("model"):
@@ -6359,11 +6363,12 @@ class AgyWebServer:
             asyncio.create_task(
                 self.orchestrator.execute_turn(
                     prompt,
-                    conversation_id=ctx.conversation_id,
+                    conversation_id=ctx.conversation_id if ctx.conversation_id else None,
                     attachments=saved_attachments,
                     model=ctx.model,
                     mode=ctx.mode,
                     effort=ctx.effort,
+                    workspace=ctx.workspace,
                 )
             )
             return
@@ -6464,25 +6469,12 @@ class AgyWebServer:
             use_mode = req_mode or def_mode
             use_effort = req_effort or def_effort
 
-            new_cid = f"session-{uuid.uuid4().hex[:12]}"
-            ctx = self.orchestrator.get_or_create_context(
-                new_cid,
-                workspace=self.default_workspace,
-                model=use_model,
-                mode=use_mode,
-                effort=use_effort,
-            )
-            self.orchestrator.active_view_cid = new_cid
-            ctx.title = "New Conversation"
-            ctx.total_input_tokens = 0
-            ctx.total_output_tokens = 0
-            ctx.total_thinking_tokens = 0
-            ctx.turn_count = 0
+            self.orchestrator.active_view_cid = None
             branch = get_git_branch(self.default_workspace)
             await self.broadcast(
                 {
                     "type": "session_history",
-                    "conversation_id": new_cid,
+                    "conversation_id": None,
                     "title": "New Conversation",
                     "meta": {"workspaces": [self.default_workspace]},
                     "workspace": self.default_workspace,
@@ -6490,10 +6482,10 @@ class AgyWebServer:
                     "messages": [],
                     "is_running": False,
                     "config": {
-                        "conversation_id": new_cid,
-                        "model": ctx.model,
-                        "mode": ctx.mode,
-                        "effort": ctx.effort,
+                        "conversation_id": None,
+                        "model": use_model,
+                        "mode": use_mode,
+                        "effort": use_effort,
                         "workspace": self.default_workspace,
                         "git_branch": branch,
                     },
@@ -6502,12 +6494,12 @@ class AgyWebServer:
             await self.broadcast(
                 {
                     "type": "config_updated",
-                    "conversation_id": new_cid,
+                    "conversation_id": None,
                     "config": {
-                        "conversation_id": new_cid,
-                        "model": ctx.model,
-                        "mode": ctx.mode,
-                        "effort": ctx.effort,
+                        "conversation_id": None,
+                        "model": use_model,
+                        "mode": use_mode,
+                        "effort": use_effort,
                         "workspace": self.default_workspace,
                         "git_branch": branch,
                     },

@@ -89,10 +89,13 @@ def main():
         return
 
     timeout_sec = int(data.get("timeout_seconds") or data.get("timeoutSeconds") or 300)
+    raw_cid = os.environ.get("AGY_CONVERSATION_ID", "").strip()
+    if raw_cid.startswith("session-"):
+        raw_cid = ""
     payload = {
         "action": "ask",
-        "conversation_id": os.environ.get("AGY_CONVERSATION_ID", ""),
-        "turn_id": os.environ.get("AGY_TURN_ID", ""),
+        "conversation_id": raw_cid,
+        "turn_id": os.environ.get("AGY_TURN_ID", "").strip(),
         "questions": normalized_questions,
         "tool_action": data.get("tool_action") or data.get("toolAction") or "Waiting for user decision",
         "tool_summary": data.get("tool_summary") or data.get("toolSummary") or "Decision required",
