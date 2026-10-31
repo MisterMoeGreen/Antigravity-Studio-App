@@ -108,6 +108,13 @@
       border-color: rgba(79, 70, 229, 0.2);
       border-top-color: #4f46e5;
     }
+    html.light .session-loading-spinner {
+      border-color: rgba(79, 70, 229, 0.2);
+      border-top-color: #4f46e5;
+    }
+    html.light .session-loading-text {
+      color: #64748b;
+    }
     html.light .code-wrapper {
       background: #f8fafc;
       border-color: rgba(15, 23, 42, 0.12);
@@ -422,6 +429,32 @@
       flex-direction: column;
       align-items: center;
       gap: 14px;
+    }
+
+    /* Session History Loading State */
+    .session-loading-wrap {
+      margin: auto 0;
+      text-align: center;
+      padding: 40px 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+      animation: fadeIn 0.2s ease-out;
+    }
+    .session-loading-spinner {
+      width: 34px;
+      height: 34px;
+      border: 3px solid rgba(99, 102, 241, 0.2);
+      border-top-color: var(--accent-primary);
+      border-radius: 50%;
+      animation: liveSpin 0.8s linear infinite;
+    }
+    .session-loading-text {
+      font-size: 0.88rem;
+      font-weight: 500;
+      color: var(--text-muted);
+      letter-spacing: -0.01em;
     }
     .empty-logo {
       width: 64px;
@@ -2718,7 +2751,12 @@
 
     <!-- Main Scrollable Chat Stream Container -->
     <div class="chat-viewport-wrap">
-      <main class="chat-viewport" id="chatViewport"></main>
+      <main class="chat-viewport" id="chatViewport">
+        <div class="session-loading-wrap" id="sessionLoadingPlaceholder">
+          <div class="session-loading-spinner"></div>
+          <div class="session-loading-text">Loading conversation...</div>
+        </div>
+      </main>
 
       <!-- Floating Jump-to-Bottom Action Button in Bottom Right Corner of Chat Content -->
       <button id="btnScrollBottom" class="scroll-bottom-btn" title="Jump to latest response">
@@ -4099,6 +4137,10 @@
         autoResizePrompt();
 
         // 5. Update header and controls immediately
+        const sInfo = state.sessions.find(s => s.conversation_id === newCid);
+        if (sInfo && sInfo.title && sessionTitle) {
+          sessionTitle.textContent = sInfo.title;
+        }
         syncHeaderAndControlsForSession(targetBuf);
         if (window.AndroidApp && typeof window.AndroidApp.setActiveSession === 'function') {
           window.AndroidApp.setActiveSession(newCid);
@@ -4108,7 +4150,10 @@
         }
         updatePinButtonState(Boolean(targetBuf && targetBuf.isPinned));
 
-        // 6. Request canonical transcript from server
+        // 6. Show loading spinner while canonical transcript is retrieved from storage
+        showSessionLoading('Loading conversation...');
+
+        // 7. Request canonical transcript from server
         sendWs({ type: 'switch_session', conversation_id: newCid });
       }
 
@@ -5332,6 +5377,16 @@
       // ---------------------------------------------------------------------
       // Chat Stream Rendering & Incremental Streaming DOM Updates
       // ---------------------------------------------------------------------
+      function showSessionLoading(text = 'Loading conversation...') {
+        state.activeTurns.clear();
+        chatViewport.innerHTML = `
+          <div class="session-loading-wrap" id="sessionLoadingPlaceholder">
+            <div class="session-loading-spinner"></div>
+            <div class="session-loading-text">${escapeHtml(text)}</div>
+          </div>
+        `;
+      }
+
       function renderEmptyWelcome() {
         chatViewport.innerHTML = `
           <div class="empty-state" id="emptyWelcome">
