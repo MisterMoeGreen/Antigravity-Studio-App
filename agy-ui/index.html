@@ -2662,7 +2662,10 @@
       border: 3px solid rgba(99, 102, 241, 0.2);
       border-top-color: var(--accent-primary);
       border-radius: 50%;
-      animation: spin 0.8s linear infinite;
+      animation: liveSpin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
     }
     .boot-splash-text {
       font-size: 0.88rem;
@@ -5588,7 +5591,6 @@
             <div class="tools-container" style="display:none;">
               <div class="tools-summary-bar">
                 <span class="tools-count-badge">${faIcon('wrench')} <span class="tools-count-num">0</span> tool calls</span>
-                <span class="tools-active-action" style="display:none;font-size:12px;color:var(--text-muted);margin-left:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:55%;"></span>
                 <button class="tools-toggle-btn" type="button" style="display:none;">Show all ▾</button>
               </div>
               <div class="tool-list collapsed"></div>
@@ -5610,7 +5612,6 @@
           toolsSummaryBar: row.querySelector('.tools-summary-bar'),
           toolsCountBadge: row.querySelector('.tools-count-badge'),
           toolsCountNum: row.querySelector('.tools-count-num'),
-          toolsActiveAction: row.querySelector('.tools-active-action'),
           toolsToggleBtn: row.querySelector('.tools-toggle-btn'),
           toolList: row.querySelector('.tool-list'),
           mdBody: row.querySelector('.md-body'),
@@ -5721,14 +5722,6 @@
         `;
 
         const actionText = formatToolAction(toolMsg);
-        if (t.toolsActiveAction) {
-          if (toolMsg.status !== 'completed') {
-            t.toolsActiveAction.textContent = actionText;
-            t.toolsActiveAction.style.display = 'inline-block';
-          } else {
-            t.toolsActiveAction.style.display = 'none';
-          }
-        }
 
         if (state.isRunning) {
           setLiveProgress('tool', actionText);
@@ -5741,9 +5734,6 @@
       function finalizeTurnCard(turnId, msg) {
         const t = state.activeTurns.get(turnId);
         if (!t) return;
-        if (t.toolsActiveAction) {
-          t.toolsActiveAction.style.display = 'none';
-        }
         if (t.rawMarkdown) {
           t.mdBody.innerHTML = renderMarkdown(t.rawMarkdown);
         }
