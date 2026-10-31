@@ -5964,6 +5964,7 @@
             model: state.model,
             mode: state.mode,
             effort: state.effort,
+            workspace: state.workspace,
           });
 
           state.pendingAttachments = [];
@@ -6762,6 +6763,8 @@
               updateDrawerDefaultWorkspace(selected);
               showToast('Default workspace set: ' + formatWorkspacePath(selected));
             } else {
+              state.workspace = selected;
+              updateWorkspaceStatusBar(selected);
               sendWs({
                 type: 'set_workspace',
                 path: selected,

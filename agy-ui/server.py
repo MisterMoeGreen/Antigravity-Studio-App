@@ -2655,6 +2655,17 @@ class AgyProcessOrchestrator:
         self._auth_required_detected: bool = False
         self._secure_oauth_token()
 
+        # Dedicated draft context for unassigned new sessions
+        d_model, d_mode, d_effort = self._active_view_defaults()
+        self.draft_context = SessionExecutionContext(
+            conversation_id="",
+            workspace=get_default_workspace(),
+            model=d_model,
+            mode=d_mode,
+            effort=d_effort,
+            title="New Conversation",
+        )
+
     def get_all_sessions(self, search_query: str = "", limit: int = 100) -> list[dict[str, Any]]:
         persisted = self.storage.list_conversations(search_query=search_query, limit=limit)
         persisted_cids = {p["conversation_id"] for p in persisted}
@@ -2674,7 +2685,11 @@ class AgyProcessOrchestrator:
 
     @property
     def config(self) -> SessionExecutionContext:
-        return self.get_or_create_context(self.active_view_cid)
+        if self.active_view_cid and self.active_view_cid in self._sessions:
+            return self._sessions[self.active_view_cid]
+        if self.active_view_cid:
+            return self.get_or_create_context(self.active_view_cid)
+        return self.draft_context
 
     @property
     def is_running(self) -> bool:
@@ -2728,7 +2743,10 @@ class AgyProcessOrchestrator:
         effort: Optional[str] = None,
         title: str = "New Conversation",
     ) -> SessionExecutionContext:
-        ws = workspace or get_default_workspace()
+        candidate_ws = workspace
+        if not candidate_ws and hasattr(self, "draft_context") and self.draft_context:
+            candidate_ws = self.draft_context.workspace
+        ws = candidate_ws if (candidate_ws and Path(candidate_ws).is_dir()) else get_default_workspace()
         default_model, default_mode, default_effort = self._active_view_defaults()
         return SessionExecutionContext(
             conversation_id="",
@@ -2754,7 +2772,15 @@ class AgyProcessOrchestrator:
             if self.active_view_cid:
                 cid = self.active_view_cid
             else:
-                return self.create_new_session_context(workspace, model, mode, effort)
+                if workspace and Path(workspace).is_dir():
+                    self.draft_context.workspace = str(Path(workspace).resolve())
+                if model:
+                    self.draft_context.model = model
+                if mode:
+                    self.draft_context.mode = mode
+                if effort:
+                    self.draft_context.effort = effort
+                return self.draft_context
         if cid not in self._sessions:
             ws = workspace or get_default_workspace()
             default_model, default_mode, default_effort = self._active_view_defaults()
@@ -2767,7 +2793,7 @@ class AgyProcessOrchestrator:
             )
         ctx = self._sessions[cid]
         if workspace and Path(workspace).is_dir():
-            ctx.workspace = workspace
+            ctx.workspace = str(Path(workspace).resolve())
         if model:
             ctx.model = model
         if mode:
@@ -3023,6 +3049,16 @@ class AgyProcessOrchestrator:
                                                 self._sessions[real_cid] = ctx
                                                 self.active_view_cid = real_cid
                                                 cid = real_cid
+                                                self.storage.update_conversation_workspace(real_cid, ctx.workspace)
+                                                d_model, d_mode, d_effort = self._active_view_defaults()
+                                                self.draft_context = SessionExecutionContext(
+                                                    conversation_id="",
+                                                    workspace=get_default_workspace(),
+                                                    model=d_model,
+                                                    mode=d_mode,
+                                                    effort=d_effort,
+                                                    title="New Conversation",
+                                                )
                             except asyncio.TimeoutError:
                                 logger.warning("Timed out waiting for init event from agy stdout")
                             except Exception as exc:
@@ -4602,11 +4638,8 @@ class AgyWebServer:
         self.orchestrator.on_auth_success_cb = self.refresh_models
         self.default_workspace = get_default_workspace()
 
-        # Attach active view to most recent session on cold start
-        latest = self.storage.list_conversations(limit=1)
-        if latest:
-            self.orchestrator.active_view_cid = latest[0]["conversation_id"]
-
+        # Open in clean draft session on cold start (matches terminal agy CLI behavior)
+        self.orchestrator.active_view_cid = None
         self.orchestrator.config.workspace = self.default_workspace
         self.discovered_models: list[dict[str, Any]] = []
         self._cached_quotas: Optional[list[dict[str, str]]] = None
@@ -5603,11 +5636,6 @@ class AgyWebServer:
                 self.orchestrator.config.model = d_model
                 self.orchestrator.config.effort = d_effort
 
-            if not self.orchestrator.active_view_cid:
-                latest = self.storage.list_conversations(limit=1)
-                if latest:
-                    self.orchestrator.active_view_cid = latest[0]["conversation_id"]
-
             sessions = self.get_all_sessions(limit=80)
             active_cid = self.orchestrator.active_view_cid
 
@@ -5949,7 +5977,7 @@ class AgyWebServer:
             raw_effort = str(data.get("effort") or "").strip().lower()
             req_effort = raw_effort if raw_effort in VALID_EFFORTS else None
 
-            current_ws = self.orchestrator.config.workspace if self.orchestrator.active_view_cid else self.default_workspace
+            current_ws = self.orchestrator.config.workspace or self.default_workspace
             target_path = f"{current_ws}/.agents/skills/{s_name}/SKILL.md" if s_scope.lower() == "workspace" else f"{GLOBAL_SKILLS_DIR}/{s_name}/SKILL.md"
 
             ai_prompt = (
@@ -5991,7 +6019,7 @@ class AgyWebServer:
                 f"The user wants to edit this skill: {path_str}.\n"
                 f"Study the existing SKILL.md and associated files in detail, then ask the user how they would like to modify it."
             )
-            current_ws = self.orchestrator.config.workspace if self.orchestrator.active_view_cid else self.default_workspace
+            current_ws = self.orchestrator.config.workspace or self.default_workspace
             def_model, def_mode, def_effort = self.orchestrator._active_view_defaults()
             use_model = req_model or def_model
             use_effort = req_effort or def_effort
@@ -6129,7 +6157,7 @@ class AgyWebServer:
                 f"- Pre-configured environment API keys available: {keys_hint}.\n\n"
                 f"Please configure this server, verify ~/.gemini/config/mcp_config.json is valid JSON with 0600 permissions, and test readiness with `agy mcp list`."
             )
-            current_ws = self.orchestrator.config.workspace if self.orchestrator.active_view_cid else self.default_workspace
+            current_ws = self.orchestrator.config.workspace or self.default_workspace
             def_model, def_mode, def_effort = self.orchestrator._active_view_defaults()
             use_model = req_model or def_model
             use_effort = req_effort or def_effort
@@ -6287,7 +6315,7 @@ class AgyWebServer:
                 f"   - Run a quick verification of the installed binary to confirm readiness."
             )
 
-            current_ws = self.orchestrator.config.workspace if self.orchestrator.active_view_cid else self.default_workspace
+            current_ws = self.orchestrator.config.workspace or self.default_workspace
             def_model, def_mode, def_effort = self.orchestrator._active_view_defaults()
             use_model = req_model or def_model
             use_effort = req_effort or def_effort
@@ -6373,9 +6401,14 @@ class AgyWebServer:
             if cid:
                 ctx = self.orchestrator.get_or_create_context(cid)
             else:
-                ctx = self.orchestrator.create_new_session_context()
+                ctx = self.orchestrator.draft_context
             settings = load_app_settings()
             settings_changed = False
+            if data.get("workspace"):
+                target_ws = Path(os.path.expanduser(str(data["workspace"]))).resolve()
+                if target_ws.is_dir():
+                    ctx.workspace = str(target_ws)
+                    self.orchestrator.config.workspace = str(target_ws)
             if data.get("model"):
                 ctx.model = str(data["model"])
                 self.orchestrator.default_model = ctx.model
@@ -6519,6 +6552,14 @@ class AgyWebServer:
             use_effort = req_effort or def_effort
 
             self.orchestrator.active_view_cid = None
+            self.orchestrator.draft_context = SessionExecutionContext(
+                conversation_id="",
+                workspace=self.default_workspace,
+                model=use_model,
+                mode=use_mode,
+                effort=use_effort,
+                title="New Conversation",
+            )
             branch = get_git_branch(self.default_workspace)
             await self.broadcast(
                 {
@@ -6913,23 +6954,30 @@ class AgyWebServer:
 
         if mtype == "set_workspace":
             req_path = str(data.get("path") or "").strip()
-            cid = data.get("conversation_id") or self.orchestrator.config.conversation_id
+            raw_cid = data.get("conversation_id")
+            cid = str(raw_cid).strip() if raw_cid else ""
             if req_path:
                 target = Path(os.path.expanduser(req_path)).resolve()
                 if target.is_dir():
-                    self.orchestrator.config.workspace = str(target)
-                    branch = get_git_branch(str(target))
+                    target_str = str(target)
                     if cid:
-                        self.storage.update_conversation_workspace(cid, str(target))
+                        ctx = self.orchestrator.get_or_create_context(cid)
+                        ctx.workspace = target_str
+                        self.storage.update_conversation_workspace(cid, target_str)
+                    else:
+                        self.orchestrator.draft_context.workspace = target_str
+                    self.orchestrator.config.workspace = target_str
+                    branch = get_git_branch(target_str)
 
                     await self.broadcast({
                         "type": "config_updated",
+                        "conversation_id": cid or None,
                         "config": {
-                            "conversation_id": self.orchestrator.config.conversation_id,
+                            "conversation_id": cid or None,
                             "model": self.orchestrator.config.model,
                             "mode": self.orchestrator.config.mode,
                             "effort": self.orchestrator.config.effort,
-                            "workspace": self.orchestrator.config.workspace,
+                            "workspace": target_str,
                             "git_branch": branch,
                         }
                     })
