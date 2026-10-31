@@ -2734,6 +2734,13 @@
           </svg>
           <span id="labelUpload">Attach</span>
         </button>
+        <button class="config-pill" id="btnPasteClipboard" type="button" title="Paste image or text from clipboard">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;">
+            <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+            <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+          </svg>
+          <span>Paste</span>
+        </button>
         <button class="config-pill accent" id="pillSlash">
           <span>/ Commands</span>
         </button>
@@ -5490,6 +5497,67 @@
         });
         filePickerInput.value = '';
       });
+
+      const btnPasteClipboard = document.getElementById('btnPasteClipboard');
+      if (btnPasteClipboard) {
+        btnPasteClipboard.addEventListener('click', async () => {
+          try {
+            if (navigator.clipboard && navigator.clipboard.read) {
+              const items = await navigator.clipboard.read();
+              let hasImage = false;
+              for (const item of items) {
+                for (const type of item.types) {
+                  if (type.startsWith('image/')) {
+                    const blob = await item.getType(type);
+                    const ext = (type.split('/')[1] || 'png').split('+')[0];
+                    const fileName = `pasted_image_${Date.now()}.${ext}`;
+                    const reader = new FileReader();
+                    reader.onload = (ev) => {
+                      state.pendingAttachments.push({
+                        name: fileName,
+                        size: blob.size,
+                        type: type,
+                        data: ev.target.result,
+                      });
+                      renderAttachmentBar();
+                    };
+                    reader.readAsDataURL(blob);
+                    hasImage = true;
+                    break;
+                  }
+                }
+                if (hasImage) break;
+              }
+              if (hasImage) return;
+            }
+            if (navigator.clipboard && navigator.clipboard.readText) {
+              const text = await navigator.clipboard.readText();
+              if (text) {
+                const start = promptInput.selectionStart || 0;
+                const end = promptInput.selectionEnd || 0;
+                const val = promptInput.value;
+                promptInput.value = val.substring(0, start) + text + val.substring(end);
+                promptInput.selectionStart = promptInput.selectionEnd = start + text.length;
+                promptInput.focus();
+                adjustTextareaHeight(promptInput);
+              }
+            }
+          } catch (err) {
+            console.warn('Clipboard read error:', err);
+            showToast && showToast('No image found in clipboard or access denied', 'warning');
+          }
+        });
+      }
+
+      window.addAttachmentFromApp = function(name, mimeType, dataUrl) {
+        state.pendingAttachments.push({
+          name: name,
+          size: Math.round((dataUrl.length * 3) / 4),
+          type: mimeType || 'image/png',
+          data: dataUrl
+        });
+        renderAttachmentBar();
+      };
 
       promptInput.addEventListener('paste', (e) => {
         const clipboardData = e.clipboardData || window.clipboardData;
