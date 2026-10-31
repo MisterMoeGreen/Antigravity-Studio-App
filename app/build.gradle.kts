@@ -128,6 +128,10 @@ dependencies {
     implementation("org.apache.commons:commons-compress:1.27.1")
 }
 
+tasks.register<Exec>("verifyLibAgy") {
+    commandLine("bash", "${rootProject.rootDir}/scripts/verify_or_patch_libagy.sh")
+}
+
 tasks.register<Exec>("syncWebAssets") {
     inputs.dir(rootProject.file("agy-ui"))
     outputs.file(project.file("src/main/assets/usr-data.tar.zst"))
@@ -135,5 +139,5 @@ tasks.register<Exec>("syncWebAssets") {
 }
 
 tasks.named("preBuild") {
-    dependsOn("syncWebAssets")
+    dependsOn("verifyLibAgy", "syncWebAssets")
 }

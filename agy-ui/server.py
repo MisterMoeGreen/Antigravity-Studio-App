@@ -3182,11 +3182,11 @@ class AgyProcessOrchestrator:
 
                 if was_interrupted:
                     status_str = "INTERRUPTED"
-                elif return_code != 0 and not emitted_any_content and stderr_text.strip():
+                elif return_code != 0 and not emitted_any_content:
                     cleaned_err = "\n".join(
                         line for line in stderr_text.strip().splitlines()
                         if not line.lower().startswith("warning:")
-                    ).strip()
+                    ).strip() if stderr_text else ""
                     if cleaned_err:
                         await self.broadcast(
                             {
@@ -3196,9 +3196,16 @@ class AgyProcessOrchestrator:
                                 "delta": f"\n> **CLI Status ({return_code}):**\n```\n{cleaned_err[:2000]}\n```\n",
                             }
                         )
-                        status_str = "ERROR"
                     else:
-                        status_str = "SUCCESS"
+                        await self.broadcast(
+                            {
+                                "type": "agent_token",
+                                "conversation_id": cid,
+                                "turn_id": turn_id,
+                                "delta": f"\n> **CLI Error ({return_code}):** Antigravity process exited prematurely with code {return_code}.\n",
+                            }
+                        )
+                    status_str = "ERROR"
                 else:
                     status_str = "SUCCESS"
 
