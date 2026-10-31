@@ -31,3 +31,4 @@ __pycache__/
 .android/
 *.keystore
 *.jks
+*.idsig
