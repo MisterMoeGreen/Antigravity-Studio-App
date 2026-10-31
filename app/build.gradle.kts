@@ -72,8 +72,14 @@ android {
                 keyAlias = System.getenv("AGY_KEY_ALIAS") ?: "androiddebugkey"
                 keyPassword = System.getenv("AGY_KEY_PASSWORD") ?: "android"
             } else {
-                // Local Termux / Developer fallback: Use persistent debug.keystore
-                val debugKeystore = File(System.getProperty("user.home"), ".android/debug.keystore")
+                // Local Termux / Antigravity Studio fallback: Use persistent debug.keystore
+                val candidateKeystores = listOf(
+                    File(System.getProperty("user.home"), ".android/debug.keystore"),
+                    File(rootProject.rootDir, ".android/debug.keystore"),
+                    File("/storage/emulated/0/Documents/AgyStudio/.android/debug.keystore")
+                )
+                val debugKeystore = candidateKeystores.firstOrNull { it.exists() }
+                    ?: File(System.getProperty("user.home"), ".android/debug.keystore")
                 storeFile = debugKeystore
                 storePassword = "android"
                 keyAlias = "androiddebugkey"
