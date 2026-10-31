@@ -203,7 +203,7 @@ object AgyNotificationManager {
             nm?.cancel(oldCid, NOTIF_ID_LIVE_PROGRESS)
             nm?.cancel(oldCid, NOTIF_ID_COMPLETION)
 
-            if (activeConversationId == oldCid) {
+            if (activeConversationId.isNullOrBlank() || activeConversationId == oldCid || activeConversationId == "default" || oldCid.isBlank()) {
                 activeConversationId = newCid
             }
             if (pendingDeepLinkConversationId == oldCid) {
@@ -400,7 +400,13 @@ object AgyNotificationManager {
     }
 
     fun shouldSendCompletionNotification(conversationId: String): Boolean {
-        return !(isAppForeground && activeConversationId == conversationId)
+        if (!isAppForeground) return true
+        val active = activeConversationId?.trim()
+        val target = conversationId.trim()
+        if (active != null && active.equals(target, ignoreCase = true)) {
+            return false
+        }
+        return true
     }
 
     fun postCompletionNotification(

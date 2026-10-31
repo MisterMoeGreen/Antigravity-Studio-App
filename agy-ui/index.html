@@ -2614,9 +2614,75 @@
       transition: width 0.2s ease;
     }
 
+    /* Boot Splash Loading Screen (Wish 2) */
+    .boot-splash-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 99999;
+      background: var(--bg-obsidian);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      transition: opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1), visibility 0.35s ease;
+    }
+    .boot-splash-overlay.hidden {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }
+    .boot-splash-content {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      gap: 18px;
+      padding: 24px;
+    }
+    .boot-splash-logo {
+      width: 84px;
+      height: 84px;
+      border-radius: 22px;
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5), 0 0 24px var(--accent-glow);
+      animation: bootLogoPulse 2.4s ease-in-out infinite;
+    }
+    @keyframes bootLogoPulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.04); }
+    }
+    .boot-splash-title {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      letter-spacing: -0.025em;
+    }
+    .boot-splash-spinner {
+      width: 30px;
+      height: 30px;
+      border: 3px solid rgba(99, 102, 241, 0.2);
+      border-top-color: var(--accent-primary);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    .boot-splash-text {
+      font-size: 0.88rem;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
   </style>
 </head>
 <body>
+  <!-- Initial Boot Splash Screen -->
+  <div id="appBootSplash" class="boot-splash-overlay" aria-label="Loading Antigravity Studio">
+    <div class="boot-splash-content">
+      <img src="/icon-192.png" alt="Antigravity Studio" class="boot-splash-logo" />
+      <div class="boot-splash-title">Antigravity Studio</div>
+      <div class="boot-splash-spinner"></div>
+      <div class="boot-splash-text">Loading session...</div>
+    </div>
+  </div>
+
   <div class="app-shell">
     <!-- Top App Bar -->
     <header class="top-bar">
@@ -3519,6 +3585,12 @@
       window.addEventListener('resize', syncViewportHeight);
       syncViewportHeight();
 
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && state.conversationId && window.AndroidApp && typeof window.AndroidApp.setActiveSession === 'function') {
+          window.AndroidApp.setActiveSession(state.conversationId);
+        }
+      });
+
             // Font Awesome Free 6.7.2 Icon Registry (CC BY 4.0 / SIL OFL / MIT)
       // https://fontawesome.com
       const FA_PATHS = {
@@ -3736,7 +3808,7 @@
       function adoptDraftSessionId(cid) {
         if (!state.conversationId && cid) {
           const defBuf = state.sessionBuffers.get('default');
-          if (state.isInitializingDraft || (defBuf && defBuf.isRunning)) {
+          if (state.isInitializingDraft || (defBuf && (defBuf.isRunning || defBuf.activeUserPrompt))) {
             state.conversationId = cid;
             if (window.AndroidApp && typeof window.AndroidApp.setActiveSession === 'function') {
               window.AndroidApp.setActiveSession(cid);
@@ -3759,9 +3831,10 @@
         const btnDrawer = document.getElementById('btnOpenDrawer');
         const btnSettings = document.getElementById('btnOpenSettings');
         const btnNew = document.getElementById('btnNewSession');
+        const btnSend = document.getElementById('btnSend');
         const promptInput = document.getElementById('promptInput');
 
-        [btnDrawer, btnSettings, btnNew].forEach(btn => {
+        [btnDrawer, btnSettings, btnNew, btnSend].forEach(btn => {
           if (btn) {
             btn.disabled = initializing;
             btn.style.opacity = initializing ? '0.35' : '';
@@ -4168,6 +4241,17 @@
         }
       }
 
+      function hideBootSplash() {
+        const splash = document.getElementById('appBootSplash');
+        if (splash && !splash.classList.contains('hidden')) {
+          splash.classList.add('hidden');
+          setTimeout(() => {
+            splash.style.display = 'none';
+          }, 360);
+        }
+      }
+      setTimeout(hideBootSplash, 6000);
+
       function connectWebSocket() {
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         const token = getAuthToken();
@@ -4315,7 +4399,7 @@
         const textSpan = btn.querySelector('.pin-text');
         const cid = state.conversationId;
         const hasValidCid = Boolean(cid && !cid.startsWith('session-'));
-        if (!hasValidCid || !window.AndroidApp) {
+        if (!hasValidCid || !window.AndroidApp || state.isInitializingDraft) {
           btn.style.display = 'none';
           return;
         }
@@ -4535,8 +4619,10 @@
         if (cfg.models) state.models = cfg.models;
         if (cfg.modes) state.modes = cfg.modes;
         if (cfg.efforts) state.efforts = cfg.efforts;
-        if ('conversation_id' in cfg) {
-          state.conversationId = cfg.conversation_id;
+        if ('conversation_id' in cfg && cfg.conversation_id !== undefined) {
+          if (state.conversationId !== null || !cfg.conversation_id || cfg.force_switch) {
+            state.conversationId = cfg.conversation_id;
+          }
         }
         if (cfg.model) {
           state.model = cfg.model;
@@ -4622,6 +4708,7 @@
               initiateSessionSwitch(pendingCid);
             } else if (!msg.config?.conversation_id) {
               renderEmptyWelcome();
+              hideBootSplash();
             }
             break;
 
@@ -4671,6 +4758,12 @@
           case 'session_list':
             state.sessions = msg.sessions || [];
             renderSessionDrawerList();
+            if (state.conversationId) {
+              const cur = state.sessions.find(x => x.conversation_id === state.conversationId);
+              if (cur && cur.title && cur.title !== 'New Conversation') {
+                sessionTitle.textContent = cur.title;
+              }
+            }
             break;
 
           case 'session_renamed':
@@ -4682,12 +4775,19 @@
               renItem.title = msg.title;
             }
             renderSessionDrawerList();
-            showToast('Renamed: ' + msg.title);
+            if (!msg.silent) {
+              showToast('Renamed: ' + msg.title);
+            }
             break;
 
           case 'session_history':
+            hideBootSplash();
             if (msg.conversation_id) {
               adoptDraftSessionId(msg.conversation_id);
+            }
+            if (msg.force_switch && msg.conversation_id) {
+              initiateSessionSwitch(msg.conversation_id);
+              break;
             }
             if (state.ignoreNextInitialHistory) {
               state.ignoreNextInitialHistory = false;
@@ -4695,7 +4795,14 @@
                 break;
               }
             }
-            if (state.conversationId && msg.conversation_id && msg.conversation_id !== state.conversationId) {
+            if (state.conversationId === null && msg.conversation_id && !msg.force_switch) {
+              // Background session history update while drafting new session
+              const b = getOrCreateSessionBuffer(msg.conversation_id);
+              if (msg.messages) b.messages = msg.messages;
+              renderSessionDrawerList();
+              break;
+            }
+            if (state.conversationId && msg.conversation_id && msg.conversation_id !== state.conversationId && !msg.force_switch) {
               // Background session history update - update its buffer only, do not hijack active view
               const b = getOrCreateSessionBuffer(msg.conversation_id);
               if (msg.messages) b.messages = msg.messages;
@@ -4878,7 +4985,13 @@
             }
             buf.currentAction = formatToolAction(msg);
 
+            const sItem = state.sessions.find(s => s.conversation_id === cid);
+            if (sItem) {
+              sItem.preview = buf.currentAction;
+            }
+
             if (cid === state.conversationId) {
+              setRuntimeStatus('running', buf.currentAction);
               upsertTurnTool(msg.turn_id, msg);
             }
             if (buf && buf.isPinned) {
@@ -4892,6 +5005,9 @@
             if (msg.old_conversation_id && msg.conversation_id) {
               if (state.conversationId === msg.old_conversation_id) {
                 state.conversationId = msg.conversation_id;
+                if (window.AndroidApp && typeof window.AndroidApp.setActiveSession === 'function') {
+                  window.AndroidApp.setActiveSession(msg.conversation_id);
+                }
               }
               if (state.sessionBuffers.has(msg.old_conversation_id)) {
                 const oldBuf = state.sessionBuffers.get(msg.old_conversation_id);
@@ -4915,6 +5031,16 @@
             const tRec = getOrCreateTurnRecord(buf, msg.turn_id);
             tRec.finalized = true;
 
+            if (msg.title && msg.title !== 'New Conversation') {
+              const renItem = state.sessions.find(x => x.conversation_id === cid);
+              if (renItem) {
+                renItem.title = msg.title;
+              }
+              if (cid === state.conversationId) {
+                sessionTitle.textContent = msg.title;
+              }
+            }
+
             buf.isPinned = false;
             if (cid === state.conversationId) {
               finalizeTurnCard(msg.turn_id, msg);
@@ -4932,7 +5058,8 @@
               if (typeof window.AndroidApp.clearLiveNotification === 'function') {
                 window.AndroidApp.clearLiveNotification(cid);
               }
-              if (typeof window.AndroidApp.notifyTurnComplete === 'function') {
+              const isCurrentlyOpenAndVisible = (cid === state.conversationId && document.visibilityState === 'visible');
+              if (!isCurrentlyOpenAndVisible && typeof window.AndroidApp.notifyTurnComplete === 'function') {
                 const sCard = state.sessions.find(s => s.conversation_id === cid);
                 const sTitle = (sCard && sCard.title) || ('Session ' + cid.slice(0, 8));
                 const preview = (tRec && tRec.rawMarkdown) || '';
@@ -5364,6 +5491,41 @@
         filePickerInput.value = '';
       });
 
+      promptInput.addEventListener('paste', (e) => {
+        const clipboardData = e.clipboardData || window.clipboardData;
+        if (!clipboardData || !clipboardData.items) return;
+
+        let hasImage = false;
+        for (let i = 0; i < clipboardData.items.length; i++) {
+          const item = clipboardData.items[i];
+          if (item.type && item.type.startsWith('image/')) {
+            const blob = item.getAsFile();
+            if (blob) {
+              hasImage = true;
+              const ext = (blob.type.split('/')[1] || 'png').split('+')[0];
+              const fileName = `pasted_image_${Date.now()}_${i + 1}.${ext}`;
+              const reader = new FileReader();
+              reader.onload = (ev) => {
+                state.pendingAttachments.push({
+                  name: fileName,
+                  size: blob.size,
+                  type: blob.type || 'image/png',
+                  data: ev.target.result,
+                });
+                renderAttachmentBar();
+              };
+              reader.readAsDataURL(blob);
+            }
+          }
+        }
+        if (hasImage) {
+          const hasText = Array.from(clipboardData.items).some(it => it.type === 'text/plain');
+          if (!hasText) {
+            e.preventDefault();
+          }
+        }
+      });
+
       function appendUserBubble(text, attachments = [], stepIndex = null) {
         clearWelcomeIfPresent();
         const cleaned = cleanPromptText(text);
@@ -5426,6 +5588,7 @@
             <div class="tools-container" style="display:none;">
               <div class="tools-summary-bar">
                 <span class="tools-count-badge">${faIcon('wrench')} <span class="tools-count-num">0</span> tool calls</span>
+                <span class="tools-active-action" style="display:none;font-size:12px;color:var(--text-muted);margin-left:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:55%;"></span>
                 <button class="tools-toggle-btn" type="button" style="display:none;">Show all ▾</button>
               </div>
               <div class="tool-list collapsed"></div>
@@ -5447,6 +5610,7 @@
           toolsSummaryBar: row.querySelector('.tools-summary-bar'),
           toolsCountBadge: row.querySelector('.tools-count-badge'),
           toolsCountNum: row.querySelector('.tools-count-num'),
+          toolsActiveAction: row.querySelector('.tools-active-action'),
           toolsToggleBtn: row.querySelector('.tools-toggle-btn'),
           toolList: row.querySelector('.tool-list'),
           mdBody: row.querySelector('.md-body'),
@@ -5556,8 +5720,19 @@
           <div class="tool-drawer">Args:\n${escapeHtml(argsStr)}${toolMsg.output ? '\n\nOutput:\n' + escapeHtml(toolMsg.output) : ''}</div>
         `;
 
+        const actionText = formatToolAction(toolMsg);
+        if (t.toolsActiveAction) {
+          if (toolMsg.status !== 'completed') {
+            t.toolsActiveAction.textContent = actionText;
+            t.toolsActiveAction.style.display = 'inline-block';
+          } else {
+            t.toolsActiveAction.style.display = 'none';
+          }
+        }
+
         if (state.isRunning) {
-          setLiveProgress('tool', formatToolAction(toolMsg));
+          setLiveProgress('tool', actionText);
+          setRuntimeStatus('running', actionText);
         }
 
         scrollToBottom(false);
@@ -5566,6 +5741,9 @@
       function finalizeTurnCard(turnId, msg) {
         const t = state.activeTurns.get(turnId);
         if (!t) return;
+        if (t.toolsActiveAction) {
+          t.toolsActiveAction.style.display = 'none';
+        }
         if (t.rawMarkdown) {
           t.mdBody.innerHTML = renderMarkdown(t.rawMarkdown);
         }
@@ -5705,10 +5883,8 @@
           const attachments = state.pendingAttachments.slice();
           if (!trimmed && !attachments.length) return;
 
-          if (!state.conversationId) {
-            setInitializingControlsState(true);
-            updatePinButtonState(false);
-          }
+          setInitializingControlsState(true);
+          updatePinButtonState(false);
 
           appendUserBubble(trimmed, attachments);
 

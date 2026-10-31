@@ -2754,12 +2754,7 @@ class AgyProcessOrchestrator:
             if self.active_view_cid:
                 cid = self.active_view_cid
             else:
-                latest = self.storage.list_conversations(limit=1)
-                if latest:
-                    cid = latest[0]["conversation_id"]
-                    self.active_view_cid = cid
-                else:
-                    return self.create_new_session_context(workspace, model, mode, effort)
+                return self.create_new_session_context(workspace, model, mode, effort)
         if cid not in self._sessions:
             ws = workspace or get_default_workspace()
             default_model, default_mode, default_effort = self._active_view_defaults()
@@ -3047,19 +3042,20 @@ class AgyProcessOrchestrator:
                             start_new_session=True,
                         )
 
-                if raw_cid and cid and raw_cid != cid:
-                    self._migrated_cids[raw_cid] = cid
+                if cid and (raw_cid != cid or is_new_session):
+                    if raw_cid:
+                        self._migrated_cids[raw_cid] = cid
                     await self.broadcast(
                         {
                             "type": "conversation_assigned",
-                            "old_conversation_id": raw_cid,
+                            "old_conversation_id": raw_cid or None,
                             "conversation_id": cid,
                         }
                     )
                     emit_native_notif_event(
                         {
                             "event": "conversation_assigned",
-                            "old_conversation_id": raw_cid,
+                            "old_conversation_id": raw_cid or None,
                             "conversation_id": cid,
                         }
                     )
@@ -3181,12 +3177,6 @@ class AgyProcessOrchestrator:
 
                 if self._auth_required_detected and not was_interrupted:
                     logger.info("Session expired or authentication required. Triggering in-app login...")
-                    token_file = GEMINI_DIR / "antigravity-oauth-token"
-                    if token_file.exists():
-                        try:
-                            token_file.unlink()
-                        except Exception:
-                            pass
                     await self.trigger_in_app_login(turn_id, conversation_id=cid, original_prompt=prompt, original_attachments=attachments)
                     return
 
@@ -3253,12 +3243,26 @@ class AgyProcessOrchestrator:
                 ctx.total_thinking_tokens += usage_summary["thinking_tokens"]
                 ctx.turn_count += 1
 
+                meta = self.storage.get_conversation_meta(cid)
+                s_title = meta.get("title") or f"Session {cid[:8]}"
+                if s_title and s_title != "New Conversation":
+                    ctx.title = s_title
+                    await self.broadcast(
+                        {
+                            "type": "session_renamed",
+                            "conversation_id": cid,
+                            "title": s_title,
+                            "silent": True,
+                        }
+                    )
+
                 await self.broadcast(
                     {
                         "type": "turn_complete",
                         "conversation_id": cid,
                         "old_conversation_id": old_cid if assigned_new_cid else None,
                         "turn_id": turn_id,
+                        "title": s_title,
                         "usage": usage_summary,
                         "totals": {
                             "input_tokens": ctx.total_input_tokens,
@@ -3285,8 +3289,6 @@ class AgyProcessOrchestrator:
                         "sessions": self.storage.list_conversations(limit=80),
                     }
                 )
-                meta = self.storage.get_conversation_meta(cid)
-                s_title = meta.get("title") or f"Session {cid[:8]}"
                 raw_preview = ctx.active_snapshot.raw_markdown if ctx.active_snapshot else ""
                 emit_native_notif_event(
                     {
@@ -3669,14 +3671,6 @@ class AgyProcessOrchestrator:
         self._pending_auth_prompt = original_prompt
         self._pending_auth_attachments = original_attachments or []
 
-        # Remove stale token file if starting a fresh sign-in session
-        token_file = GEMINI_DIR / "antigravity-oauth-token"
-        if token_file.exists():
-            try:
-                token_file.unlink()
-            except Exception:
-                pass
-
         logger.info("Initiating in-app Google OAuth consent flow...")
         await self.broadcast(
             {
@@ -3710,10 +3704,14 @@ class AgyProcessOrchestrator:
             )
             os.close(slave)
 
-            # Wait for menu to appear before selecting option 1
+            # Wait for menu or onboarding screens to appear before selecting option 1
             output = ""
             start_wait = time.time()
-            while time.time() - start_wait < 6.0:
+            color_scheme_handled = False
+            tos_handled = False
+            login_method_selected = False
+
+            while time.time() - start_wait < 14.0:
                 if proc.returncode is not None:
                     break
                 await asyncio.sleep(0.15)
@@ -3722,8 +3720,31 @@ class AgyProcessOrchestrator:
                     try:
                         c = os.read(master, 1024).decode("latin1", "ignore")
                         output += c
-                        if "Select login method" in output or "Google OAuth" in output:
-                            break
+                    except Exception:
+                        break
+
+                if not color_scheme_handled and ("Choose your color scheme" in output or "color scheme:" in output):
+                    await asyncio.sleep(0.2)
+                    try:
+                        os.write(master, b"\r\n")
+                        color_scheme_handled = True
+                    except Exception:
+                        pass
+
+                if not tos_handled and ("Terms of Service" in output or "[Done]" in output):
+                    await asyncio.sleep(0.2)
+                    try:
+                        os.write(master, b"\t\t\r\n")
+                        tos_handled = True
+                    except Exception:
+                        pass
+
+                if not login_method_selected and ("Select login method" in output or "1. Google OAuth" in output):
+                    await asyncio.sleep(0.25)
+                    try:
+                        os.write(master, b"\r\n")
+                        login_method_selected = True
+                        break
                     except Exception:
                         break
 
@@ -3732,18 +3753,21 @@ class AgyProcessOrchestrator:
                     f"Antigravity CLI process terminated prematurely (exit code {proc.returncode}). Output: {output.strip() or 'None'}"
                 )
 
-            await asyncio.sleep(0.25)
-            # Send Enter (\r\n) to select "1. Google OAuth"
-            try:
-                os.write(master, b"\r\n")
-            except Exception as write_err:
-                raise RuntimeError(f"Failed communicating with CLI login pseudo-terminal: {write_err}")
-
             auth_url = None
             start_time = time.time()
-            while time.time() - start_time < 10.0:
+            while time.time() - start_time < 15.0:
                 if proc.returncode is not None:
                     break
+
+                m = re.search(
+                    r'(https://accounts\.google\.com/o/oauth2/auth\?[a-zA-Z0-9_\-\.%&=+]+)',
+                    output
+                )
+                if m:
+                    auth_url = m.group(1)
+                    if "authorization code" in output.lower():
+                        break
+
                 await asyncio.sleep(0.2)
                 r, _, _ = select.select([master], [], [], 0.1)
                 if r:
@@ -4095,10 +4119,17 @@ class AgyProcessOrchestrator:
                 ctx.conversation_id = cid
 
             err_msg = str(res.get("error") or "")
+            err_lower = err_msg.lower()
             if res.get("status") == "ERROR" and (
-                "auth" in err_msg.lower()
-                or "log in" in err_msg.lower()
-                or "token" in err_msg.lower()
+                "authentication required" in err_lower
+                or "accounts.google.com/o/oauth2/auth" in err_lower
+                or "you are not logged into antigravity" in err_lower
+                or "error getting token source" in err_lower
+                or "authentication failed" in err_lower
+                or "unauthenticated" in err_lower
+                or "invalid_grant" in err_lower
+                or "please log in" in err_lower
+                or "please visit the url to log in" in err_lower
             ):
                 logger.warning("Auth failure detected in result event: %s", err_msg)
                 self._auth_required_detected = True
@@ -4129,7 +4160,18 @@ class AgyProcessOrchestrator:
         # 4b. Handle explicit "error" event
         if etype == "error":
             err_str = str(event.get("error") or event.get("message") or "")
-            if "auth" in err_str.lower() or "log in" in err_str.lower() or "token" in err_str.lower():
+            err_lower = err_str.lower()
+            if (
+                "authentication required" in err_lower
+                or "accounts.google.com/o/oauth2/auth" in err_lower
+                or "you are not logged into antigravity" in err_lower
+                or "error getting token source" in err_lower
+                or "authentication failed" in err_lower
+                or "unauthenticated" in err_lower
+                or "invalid_grant" in err_lower
+                or "please log in" in err_lower
+                or "please visit the url to log in" in err_lower
+            ):
                 logger.warning("Auth failure detected in error event: %s", err_str)
                 self._auth_required_detected = True
                 if ctx.active_proc and ctx.active_proc.returncode is None:
@@ -6603,6 +6645,7 @@ class AgyWebServer:
                             "workspace": ctx.workspace,
                             "git_branch": branch,
                             "messages": history,
+                            "force_switch": True,
                             "config": {
                                 "conversation_id": new_cid,
                                 "model": ctx.model,
@@ -6617,6 +6660,7 @@ class AgyWebServer:
                         {
                             "type": "config_updated",
                             "conversation_id": new_cid,
+                            "force_switch": True,
                             "config": {
                                 "conversation_id": new_cid,
                                 "model": ctx.model,
@@ -6980,18 +7024,60 @@ class AgyWebServer:
             try:
                 new_session = self.storage.branch_conversation(orig_cid, branch_name)
                 new_cid = new_session["conversation_id"]
-                cfg.conversation_id = new_cid
+
+                orig_ctx = self.orchestrator._sessions.get(orig_cid) or cfg
+                def_model, def_mode, def_effort = self.orchestrator._active_view_defaults()
+                branch_model = orig_ctx.model if (orig_ctx and orig_ctx.model) else def_model
+                branch_mode = orig_ctx.mode if (orig_ctx and orig_ctx.mode) else def_mode
+                branch_effort = orig_ctx.effort if (orig_ctx and orig_ctx.effort) else def_effort
+                branch_ws = orig_ctx.workspace if (orig_ctx and orig_ctx.workspace) else self.default_workspace
+
+                ctx = self.orchestrator.get_or_create_context(
+                    new_cid,
+                    workspace=branch_ws,
+                    model=branch_model,
+                    mode=branch_mode,
+                    effort=branch_effort,
+                )
+                self.orchestrator.active_view_cid = new_cid
                 sessions = self.storage.list_conversations(limit=100)
                 await self.broadcast({"type": "session_list", "sessions": sessions})
                 history = self.storage.load_transcript(new_cid)
                 meta = self.storage.get_conversation_meta(new_cid)
+                branch = get_git_branch(ctx.workspace)
                 await self.broadcast(
                     {
                         "type": "session_history",
                         "conversation_id": new_cid,
                         "title": meta["title"],
                         "meta": meta,
+                        "workspace": ctx.workspace,
+                        "git_branch": branch,
                         "messages": history,
+                        "force_switch": True,
+                        "config": {
+                            "conversation_id": new_cid,
+                            "model": ctx.model,
+                            "mode": ctx.mode,
+                            "effort": ctx.effort,
+                            "workspace": ctx.workspace,
+                            "git_branch": branch,
+                        },
+                    }
+                )
+                await self.broadcast(
+                    {
+                        "type": "config_updated",
+                        "conversation_id": new_cid,
+                        "force_switch": True,
+                        "config": {
+                            "conversation_id": new_cid,
+                            "model": ctx.model,
+                            "mode": ctx.mode,
+                            "effort": ctx.effort,
+                            "workspace": ctx.workspace,
+                            "git_branch": branch,
+                        },
                     }
                 )
                 await self.broadcast(

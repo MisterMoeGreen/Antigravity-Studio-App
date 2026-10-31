@@ -1,6 +1,7 @@
 package ai.agy.app
 
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -52,8 +53,31 @@ class MainActivity : AppCompatActivity() {
     ) { result ->
         val callback = filePathCallback ?: return@registerForActivityResult
         filePathCallback = null
-        val uris = WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
-        callback.onReceiveValue(uris)
+        if (result.resultCode == Activity.RESULT_OK) {
+            val intentData = result.data
+            val uris = mutableListOf<Uri>()
+            if (intentData != null) {
+                val clipData = intentData.clipData
+                if (clipData != null) {
+                    for (i in 0 until clipData.itemCount) {
+                        val itemUri = clipData.getItemAt(i).uri
+                        if (itemUri != null) {
+                            uris.add(itemUri)
+                        }
+                    }
+                } else if (intentData.data != null) {
+                    uris.add(intentData.data!!)
+                }
+            }
+            if (uris.isNotEmpty()) {
+                callback.onReceiveValue(uris.toTypedArray())
+                return@registerForActivityResult
+            }
+            val parsed = WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
+            callback.onReceiveValue(parsed)
+        } else {
+            callback.onReceiveValue(null)
+        }
     }
 
     private val notificationPermissionLauncher = registerForActivityResult(
@@ -199,6 +223,9 @@ class MainActivity : AppCompatActivity() {
                         val intent = fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
                             addCategory(Intent.CATEGORY_OPENABLE)
                             type = "*/*"
+                        }
+                        if (fileChooserParams?.mode == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) {
+                            intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
                         }
                         fileChooserLauncher.launch(intent)
                         true

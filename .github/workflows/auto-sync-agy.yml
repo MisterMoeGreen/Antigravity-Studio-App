@@ -4,6 +4,9 @@ on:
   schedule:
     # Run twice a week: Mondays & Thursdays at 00:00 UTC
     - cron: '0 0 * * 1,4'
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       force_build:
@@ -68,7 +71,7 @@ jobs:
           echo "Latest upstream agy version: $UPSTREAM_VER"
 
           SHOULD_BUILD=false
-          if [ "${{ inputs.force_build }}" = "true" ] || [ "$UPSTREAM_VER" != "$CURRENT_AGY_VER" ]; then
+          if [ "${{ github.event_name }}" = "push" ] || [ "${{ inputs.force_build }}" = "true" ] || [ "$UPSTREAM_VER" != "$CURRENT_AGY_VER" ]; then
             SHOULD_BUILD=true
           fi
 
@@ -85,15 +88,21 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           OLD_CODE=${{ steps.check_upstream.outputs.current_code }}
-          NEW_CODE=$((OLD_CODE + 1))
-          
           OLD_NAME="${{ steps.check_upstream.outputs.current_name }}"
-          BASE_NAME=$(echo "$OLD_NAME" | cut -d'.' -f1,2)
-          PATCH_NUM=$(echo "$OLD_NAME" | cut -d'.' -f3)
-          NEW_PATCH=$((PATCH_NUM + 1))
-          NEW_NAME="${BASE_NAME}.${NEW_PATCH}"
-          NEW_AGY_VER="${{ steps.check_upstream.outputs.upstream_ver }}"
           OLD_AGY_VER="${{ steps.check_upstream.outputs.current_agy_ver }}"
+
+          if [ "${{ github.event_name }}" = "push" ] && [[ "${{ github.ref_name }}" =~ ^v[0-9]+ ]]; then
+            NEW_NAME="${GITHUB_REF_NAME#v}"
+            NEW_CODE=$OLD_CODE
+            NEW_AGY_VER="$OLD_AGY_VER"
+          else
+            NEW_CODE=$((OLD_CODE + 1))
+            BASE_NAME=$(echo "$OLD_NAME" | cut -d'.' -f1,2)
+            PATCH_NUM=$(echo "$OLD_NAME" | cut -d'.' -f3)
+            NEW_PATCH=$((PATCH_NUM + 1))
+            NEW_NAME="${BASE_NAME}.${NEW_PATCH}"
+            NEW_AGY_VER="${{ steps.check_upstream.outputs.upstream_ver }}"
+          fi
 
           echo "Bumping version: $OLD_NAME (code $OLD_CODE) -> $NEW_NAME (code $NEW_CODE)"
           echo "Bundling agy version: $NEW_AGY_VER (previous: $OLD_AGY_VER)"
@@ -253,7 +262,7 @@ jobs:
           ls -lh AntigravityStudio*.apk release-metadata.json
 
       - name: Commit & Push Updated Version
-        if: steps.check_upstream.outputs.should_build == 'true'
+        if: steps.check_upstream.outputs.should_build == 'true' && startsWith(github.ref, 'refs/tags/') != true
         run: |
           git checkout -- gradle.properties 2>/dev/null || true
           git config user.name "github-actions[bot]"
