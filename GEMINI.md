@@ -10,7 +10,13 @@ This document defines the architecture, environment requirements, upstream binar
 - **Byte Geometry**: Exactly 10 ASCII characters (`ai.agy.app`), identical in byte-length to `com.termux` (10 chars). This 1:1 length match allows byte-level binary patching across all compiled native binaries, glibc shared objects, and scripts without altering ELF file offsets.
 - **Storage Subsystem**:
   - The repository resides on Android shared storage (`/storage/emulated/0/Documents/AgyStudio` or `~/storage/shared/Documents/AgyStudio`), backed by Android FUSE.
-  - **CRITICAL**: Android shared storage is mounted `noexec` and does **not** support POSIX `chmod +x` or UNIX permissions (`0600`/`0700`). All scripts and wrappers (including `gradlew`) must always be executed explicitly through their interpreter (e.g., `bash ./gradlew`).
+  - **CRITICAL (noexec & permissions)**: Android shared storage is mounted `noexec` and does **not** support POSIX `chmod +x` or UNIX permissions (`0600`/`0700`). All scripts and wrappers (including `gradlew` and `scripts/*.sh`) must always be executed explicitly through their interpreter (e.g., `bash ./gradlew`, `bash scripts/verify_or_patch_libagy.sh`).
+  - **Git Configuration on FUSE**: Android FUSE forces fixed permission masks. To prevent Git from falsely flagging all files as modified or failing on ownership checks, ensure:
+    ```bash
+    git config core.fileMode false
+    git config --global --add safe.directory /storage/emulated/0/Documents/AgyStudio
+    ```
+  - **Temporary Files & Sockets**: FUSE blocks `symlink()` and `AF_UNIX` domain socket creation. All compilation staging, virtual environments, and IPC sockets must reside in Termux internal ext4 storage (`$TMPDIR` or `/data/data/com.termux/files/usr/tmp`), never inside the repo tree on shared storage.
   - Private app storage resides inside `/data/data/ai.agy.app/files/` with separate ext4 sandboxed permissions for internal tokens and sockets.
 
 ---
@@ -36,7 +42,8 @@ pkg install -y \
   apksigner
 ```
 
-> **Note on `patchelf`**: Version `0.19.2` or later is mandatory. Older versions (such as `0.18.0`) corrupt the `DT_STRTAB` section on 200MB+ Go/ELF binaries when adjusting 16KB page alignment, causing instant `SIGSEGV` (exit code -11).
+> [!IMPORTANT]
+> **Mandatory `patchelf` version**: Version `0.19.2` or later is mandatory. Older versions (such as `0.18.0`) corrupt the `DT_STRTAB` section on 200MB+ Go/ELF binaries when adjusting 16KB page alignment, causing instant `SIGSEGV` (exit code -11).
 
 ### 2.2 Android SDK Configuration
 Create or verify `local.properties` in the project root:
@@ -88,8 +95,12 @@ agy update -y
 ### 3.2 Automated Binary Verification & Patching
 The project includes an automated integrity checker and patcher at [`scripts/verify_or_patch_libagy.sh`](file:///data/data/com.termux/files/home/storage/shared/Documents/AgyStudio/scripts/verify_or_patch_libagy.sh). This script:
 1. Inspects `app/src/main/jniLibs/arm64-v8a/libagy.so`.
-2. Validates ELF header and segment mappings using `llvm-readelf` to ensure `DT_STRTAB` is within a valid `PT_LOAD` segment.
-3. If missing or corrupted, copies `/data/data/com.termux/files/usr/bin/agy.va39`, applies 16KB page alignment (`patchelf --page-size 16384`), configures the Glibc dynamic interpreter and RPATH, and replaces `/data/data/com.termux` with `/data/data/ai.agy.app`.
+2. Validates ELF header and segment mappings using `llvm-readelf` to enforce the following **4 invariants**:
+   - `PT_INTERP` points to `/data/data/ai.agy.app/files/usr/glibc/lib/ld-linux-aarch64.so.1`.
+   - `DT_RPATH` / `DT_RUNPATH` points to `/data/data/ai.agy.app/files/usr/glibc/lib`.
+   - `PT_LOAD` segments conform to 16KB (`0x4000`) page alignment.
+   - `DT_STRTAB` virtual address falls strictly within a valid, memory-mapped `PT_LOAD` segment with zero residual `/data/data/com.termux` strings.
+3. If missing or corrupted, copies `/data/data/com.termux/files/usr/bin/agy.va39`, applies 16KB page alignment (`patchelf --page-size 16384`), configures the Glibc dynamic interpreter and RPATH, and applies byte-safe replacement of `/data/data/com.termux` with `/data/data/ai.agy.app`.
 
 This script is registered directly as the Gradle task `verifyLibAgy` and runs automatically before every build (`preBuild`).
 
@@ -97,6 +108,16 @@ To manually run the verification/patch script at any time:
 ```bash
 bash scripts/verify_or_patch_libagy.sh
 ```
+
+To diagnose or sanity-check the binary headers directly:
+```bash
+llvm-readelf -l -d app/src/main/jniLibs/arm64-v8a/libagy.so | grep -E "INTERP|RPATH|RUNPATH|STRTAB|LOAD|warning|error"
+```
+
+### 3.3 Runtime Execution & Glibc vs. Bionic Isolation
+- `libagy.so` is a **Glibc dynamic executable**. Android OS and Termux utilities run under **Bionic** `libc.so`.
+- When spawning `agy` from Python (`server.py`) or Kotlin, **never** set `LD_LIBRARY_PATH` to `/data/data/ai.agy.app/files/usr/lib` (Bionic). Let `libagy.so` resolve its dependencies solely through its embedded `DT_RPATH` (`/data/data/ai.agy.app/files/usr/glibc/lib`).
+- In `app/build.gradle.kts`, `packaging.jniLibs.useLegacyPackaging = true` **must remain enabled**. This forces physical extraction of native binaries to `/data/app/.../lib/arm64/` with executable permissions, allowing `execve()` on Android.
 
 ---
 
@@ -129,10 +150,10 @@ AGY_SHA256=...
 ### Step 3: Run the Gradle Release Build
 > [!IMPORTANT]
 > **Always invoke via `bash ./gradlew`!**
-> Because the repository is located on Android FUSE shared storage, running bare `./gradlew` will fail with `Permission denied`. Always use `bash ./gradlew`.
+> Because the repository is located on Android FUSE shared storage, running bare `./gradlew` will fail with `Permission denied`. Always use `bash ./gradlew`. Bound max workers to avoid triggering Android's Phantom Process Killer:
 
 ```bash
-bash ./gradlew assembleRelease
+bash ./gradlew assembleRelease --max-workers=2
 ```
 
 During this build, Gradle will automatically:
@@ -161,7 +182,11 @@ cp -f app/build/outputs/apk/release/app-release.apk /storage/emulated/0/Download
 | Issue | Cause | Fix |
 | :--- | :--- | :--- |
 | **`./gradlew: Permission denied`** | Shared storage (`/storage/emulated/0`) lacks POSIX execution bits (`noexec`). | Always run through the bash interpreter: `bash ./gradlew <tasks>`. |
-| **`exit code -11` (SIGSEGV) in `agy`** | `libagy.so` was patched with a buggy patchelf or unaligned pages, causing `unable to parse DT_STRTAB: virtual address is not in any segment`. | Run `bash scripts/verify_or_patch_libagy.sh` to cleanly re-patch from `agy.va39`. |
+| **Git reports every file modified or "dubious ownership"** | Android FUSE assigns fixed permissions and non-Termux UID. | Run `git config core.fileMode false` and `git config --global --add safe.directory /storage/emulated/0/Documents/AgyStudio`. |
+| **`exit code -11` (SIGSEGV) in `agy`** | `libagy.so` was patched with buggy patchelf or unaligned pages, causing `unable to parse DT_STRTAB: virtual address is not in any segment`. | Run `bash scripts/verify_or_patch_libagy.sh` to cleanly re-patch from `agy.va39`. |
 | **"Google Authentication Required" lock sheet appears even when signed in** | `server.py` runs `agy models` on startup to discover models. If `agy` crashes with code -11, `models` is empty, triggering the auth lock sheet. | Fixing the `libagy.so` segfault resolves this automatically. |
 | **AAPT2 daemon crash / `ExecException`** | Google's x86_64 AAPT2 was invoked instead of native ARM64 AAPT2. | Ensure `android.aapt2FromMavenOverride=/data/data/com.termux/files/usr/bin/aapt2` is set in `gradle.properties`. |
 | **"App not installed as package appears to be invalid"** | `VERSION_CODE` was not incremented, or signature keystore differed from previous installation. | Bump `VERSION_CODE` in `version.properties` and verify `.android/debug.keystore` is used. |
+| **Build process killed abruptly / Termux crashes** | Android Phantom Process Killer killed high-concurrency Gradle worker pool. | Pass `--max-workers=2` or `--no-daemon` to `bash ./gradlew`. |
+| **`libagy.so` fails with symbol errors on launch** | `LD_LIBRARY_PATH` passed Bionic `/usr/lib` to Glibc `libagy.so`. | Unset `LD_LIBRARY_PATH` or exclude Bionic paths; rely on `libagy.so`'s embedded `DT_RPATH`. |
+| **`Permission denied` when creating sockets or symlinks** | Attempted to create UNIX domain sockets or symlinks on FUSE storage. | Use Termux ext4 internal storage (`$TMPDIR` or `/data/data/com.termux/files/usr/tmp`). |
