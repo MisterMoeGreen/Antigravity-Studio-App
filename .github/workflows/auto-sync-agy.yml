@@ -4,9 +4,6 @@ on:
   schedule:
     # Run twice a week: Mondays & Thursdays at 00:00 UTC
     - cron: '0 0 * * 1,4'
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       force_build:
