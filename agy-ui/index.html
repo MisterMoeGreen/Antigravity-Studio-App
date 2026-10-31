@@ -2751,12 +2751,7 @@
 
     <!-- Main Scrollable Chat Stream Container -->
     <div class="chat-viewport-wrap">
-      <main class="chat-viewport" id="chatViewport">
-        <div class="session-loading-wrap" id="sessionLoadingPlaceholder">
-          <div class="session-loading-spinner"></div>
-          <div class="session-loading-text">Loading conversation...</div>
-        </div>
-      </main>
+      <main class="chat-viewport" id="chatViewport"></main>
 
       <!-- Floating Jump-to-Bottom Action Button in Bottom Right Corner of Chat Content -->
       <button id="btnScrollBottom" class="scroll-bottom-btn" title="Jump to latest response">
@@ -4754,7 +4749,7 @@
             if (pendingCid) {
               state.ignoreNextInitialHistory = true;
               initiateSessionSwitch(pendingCid);
-            } else if (!msg.config?.conversation_id) {
+            } else if (!state.conversationId) {
               renderEmptyWelcome();
               hideBootSplash();
             }
@@ -4848,6 +4843,9 @@
               const b = getOrCreateSessionBuffer(msg.conversation_id);
               if (msg.messages) b.messages = msg.messages;
               renderSessionDrawerList();
+              if (!chatViewport.querySelector('.msg-row') && !chatViewport.querySelector('#emptyWelcome')) {
+                renderEmptyWelcome();
+              }
               break;
             }
             if (state.conversationId && msg.conversation_id && msg.conversation_id !== state.conversationId && !msg.force_switch) {
@@ -6116,6 +6114,7 @@
           }
           chatViewport.innerHTML = '';
           state.activeTurns.clear();
+          renderEmptyWelcome();
           setInitializingControlsState(false);
           updatePinButtonState(false);
           stopLiveProgress();
