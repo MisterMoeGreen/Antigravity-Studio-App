@@ -335,8 +335,8 @@ def get_agy_version() -> str:
 
     return _cached_agy_version or os.environ.get("AGY_RUNTIME_VERSION", "1.4.7")
 
-APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.6.1")
-APP_BUILD = os.environ.get("AGY_APP_VERSION_CODE", "43")
+APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.6.2")
+APP_BUILD = os.environ.get("AGY_APP_VERSION_CODE", "46")
 AGY_VERSION = get_agy_version()
 
 logging.basicConfig(
@@ -1183,8 +1183,8 @@ async def delete_mcp_server(name: str) -> dict[str, Any]:
 
 
 async def check_github_updates() -> dict[str, Any]:
-    installed_version = os.environ.get("AGY_APP_VERSION", "1.6.1")
-    installed_code = int(os.environ.get("AGY_APP_VERSION_CODE", "43"))
+    installed_version = os.environ.get("AGY_APP_VERSION", "1.6.2")
+    installed_code = int(os.environ.get("AGY_APP_VERSION_CODE", "46"))
     url = "https://api.github.com/repos/MisterMoeGreen/Antigravity-Studio-App/releases/latest"
 
     cmd = ["curl", "-sSL", "-H", f"User-Agent: AntigravityStudio/{APP_VERSION}", url]
@@ -2648,6 +2648,15 @@ class SessionExecutionContext:
 SessionConfig = SessionExecutionContext
 
 
+def redact_sensitive_auth_output(text: str) -> str:
+    """Redacts OAuth authorization codes and tokens from PTY diagnostic output (ARGON-V162-02)."""
+    if not text:
+        return ""
+    redacted = re.sub(r"4/[a-zA-Z0-9_\-]{15,}", "4/[REDACTED_AUTH_CODE]", text)
+    redacted = re.sub(r"([?&](?:code|token|key|secret)=)[^&\s]+", r"\1[REDACTED]", redacted)
+    return redacted
+
+
 class AgyProcessOrchestrator:
     """
     Manages concurrent lifecycles of per-session `agy` CLI subprocesses,
@@ -3543,6 +3552,10 @@ class AgyProcessOrchestrator:
             try:
                 if self.auth_proc.returncode is None:
                     self.auth_proc.terminate()
+                    try:
+                        self.auth_proc.kill()
+                    except Exception:
+                        pass
             except Exception:
                 pass
             self.auth_proc = None
@@ -3699,7 +3712,8 @@ class AgyProcessOrchestrator:
                 await self._on_auth_success()
                 return True
             else:
-                logger.error("Authentication failed: token not saved. PTY output: %s", output_tail[-300:])
+                sanitized_tail = redact_sensitive_auth_output(output_tail[-300:])
+                logger.error("Authentication failed: token not saved. PTY output: %s", sanitized_tail)
                 err_hint = "Google rejected the authorization code (expired or already used). Please try again."
                 lowered_tail = output_tail.lower()
                 if "invalid_grant" in lowered_tail:
@@ -3776,6 +3790,8 @@ class AgyProcessOrchestrator:
 
             try:
                 master, slave = pty.openpty()
+                self.auth_master = master  # ARGON-V162-01: immediately track master descriptor
+
                 # Crucial: set terminal window size to 100 rows x 1000 cols to prevent agy from paging or wrapping URLs
                 try:
                     winsize = struct.pack("HHHH", 100, 1000, 0, 0)
@@ -3787,15 +3803,21 @@ class AgyProcessOrchestrator:
                 env = dict(os.environ)
                 env["TERM"] = "xterm-256color"
 
-                proc = await asyncio.create_subprocess_exec(
-                    os.environ.get("AGY_BIN", str(AGY_BIN)),
-                    stdin=slave,
-                    stdout=slave,
-                    stderr=slave,
-                    env=env,
-                    close_fds=True,
-                )
-                os.close(slave)  # ARGON-V161-02: close slave in parent immediately
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        os.environ.get("AGY_BIN", str(AGY_BIN)),
+                        stdin=slave,
+                        stdout=slave,
+                        stderr=slave,
+                        env=env,
+                        close_fds=True,
+                    )
+                finally:
+                    # ARGON-V162-01: always close slave in parent process immediately after spawn
+                    try:
+                        os.close(slave)
+                    except Exception:
+                        pass
 
                 # Wait for menu or onboarding screens to appear before selecting option 1
                 output = ""
@@ -3858,10 +3880,10 @@ class AgyProcessOrchestrator:
                     )
                     if m:
                         auth_url = m.group(1)
-                        if "authorization code" in output.lower():
+                        if "&state=" in auth_url or "authorization code" in output.lower():
                             break
 
-                    await asyncio.sleep(0.2)
+                    await asyncio.sleep(0.15)
                     r, _, _ = select.select([master], [], [], 0.1)
                     if r:
                         try:
@@ -3873,7 +3895,7 @@ class AgyProcessOrchestrator:
                             )
                             if m:
                                 auth_url = m.group(1)
-                                if "authorization code" in output.lower():
+                                if "&state=" in auth_url or "authorization code" in output.lower():
                                     break
                         except Exception:
                             break

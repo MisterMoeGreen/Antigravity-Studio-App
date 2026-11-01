@@ -264,7 +264,8 @@ const authOverlay = {
    - As the user types or pastes into `#authCodeInput`, a clean string is stripped of leading/trailing whitespace and URL parameters (e.g. `code=...`).
    - `#btnSubmitAuthCode` is strictly enabled when `cleanCode.length > 0`.
 2. **Clipboard Paste Shortcut**:
-   - Tapping `#btnPasteAuthCode` reads the clipboard via `navigator.clipboard.readText()`. If granted, it populates the field and immediately enables `#btnSubmitAuthCode`.
+   - Tapping `#btnPasteAuthCode` reads the clipboard via `navigator.clipboard.readText()` wrapped inside a `try/catch` block. If permission is granted and text is present, it sanitizes the string, populates the field, and immediately enables `#btnSubmitAuthCode`.
+   - If clipboard permission is denied or throws a `NotAllowedError` (common in certain Android WebView configurations), it gracefully focuses `#authCodeInput` to prompt native touch-longpress pasting without throwing an unhandled exception.
 3. **Submission**:
    - Tapping `#btnSubmitAuthCode` calls `authOverlay.setSubmitting(true)` and sends:
      ```json

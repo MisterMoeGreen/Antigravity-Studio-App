@@ -79,16 +79,9 @@ sequenceDiagram
     Srv->>Orch: trigger_in_app_login(standalone=True)
     Orch->>PTY: Open PTY master/slave & spawn agy
     PTY-->>Orch: Emits Google OAuth consent URL
-    Orch-->>UI: { type: "auth_url", url: "https://accounts.google.com/..." }
-    Orch-->>UI: { type: "open_external_url", url: "https://accounts.google.com/..." }
-    UI->>Google: Launch Chrome / System Browser
-    Google-->>User: Display Google Consent Screen
-    User->>Google: Grant Permissions
-    Google-->>User: Display Authorization Code
-
-    Note over User,Srv: Verification & Resolution
-    User->>UI: Switch back to Studio, tap "Paste"
-    UI->>UI: Populate #authCodeInput & Enable Submit Button
+    Orch-->>UI: { type: "auth_url_ready", url: "https://accounts.google.com/..." }
+    UI->>UI: Open URL in External Browser
+    User->>UI: Pastes Auth Code into #authCodeInput
     User->>UI: Tap "Confirm & Finish Sign-In"
     UI->>UI: Set Submitting State (Spinner + Disabled)
     UI->>Srv: { type: "submit_auth_code", code: "4/0A..." }
@@ -125,7 +118,7 @@ sequenceDiagram
 ## 5. Gemini 4 Argon Architectural Review & Security Hardening
 
 - **Auditor**: `argon-agent (high-reasoning)`
-- **Overall Status**: **AUDITED & HARDENED (6 Architectural Mitigations Integrated)**
+- **Overall Status**: **AUDITED & HARDENED (7 Architectural Mitigations Integrated)**
 
 ### Critical Mitigations Matrix
 | Issue ID | Severity | Subsystem | Threat & Impact | Architectural Mitigation |
@@ -136,4 +129,4 @@ sequenceDiagram
 | **ARGON-V161-04** | MEDIUM | IPC & Intent Security | Opening arbitrary URLs emitted by external processes could trigger intent hijacking or unsupported schemes. | Validate captured URL strictly against `^https://accounts\.google\.com/o/oauth2/auth\?` before emitting `open_external_url` to the Android native bridge or browser. |
 | **ARGON-V161-05** | MEDIUM | Code Sanitization | Users frequently copy the entire redirect URL (`https://.../?code=4/0A...`) rather than isolating the raw authorization code string. | Implement robust code sanitization in both JavaScript and Python (`urllib.parse.unquote(re.search(r"[?&]code=([^&\s]+)", raw))`) before submitting to the PTY. |
 | **ARGON-V161-06** | LOW | Credential Sanitization | Auth tokens or raw codes could leak into chat logs or debug prints during error handling. | Ensure error reporting in `auth_failed` emits only categorized high-level error strings without echoing raw code fragments or credentials. |
-
+| **ARGON-V161-13** | LOW | WebView Clipboard Permissions | Android WebView may deny `navigator.clipboard.readText()` or throw `NotAllowedError`. | Wrap clipboard access in `try/catch` and gracefully fall back to focusing `#authCodeInput` for native long-press pasting without crashing the UI. |

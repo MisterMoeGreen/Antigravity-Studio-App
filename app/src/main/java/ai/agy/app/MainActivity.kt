@@ -375,6 +375,24 @@ class MainActivity : AppCompatActivity() {
         }
 
         @JavascriptInterface
+        fun openUrl(url: String) {
+            val safeUrl = url.trim()
+            if (!safeUrl.startsWith("https://") && !safeUrl.startsWith("http://")) return
+            runOnUiThread {
+                try {
+                    val uri = Uri.parse(safeUrl)
+                    val intent = CustomTabsIntent.Builder().setShowTitle(true).build()
+                    intent.launchUrl(this@MainActivity, uri)
+                } catch (_: Exception) {
+                    try {
+                        val fallback = Intent(Intent.ACTION_VIEW, Uri.parse(safeUrl))
+                        startActivity(fallback)
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+
+        @JavascriptInterface
         fun triggerUpdateCheck(force: Boolean) {
             lifecycleScope.launch(Dispatchers.IO) {
                 InAppUpdateManager.checkForUpdates(this@MainActivity, force = force)

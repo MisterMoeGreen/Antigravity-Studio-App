@@ -4253,6 +4253,9 @@
           }
           if (this.btnGoogle) {
             this.btnGoogle.disabled = isSubmitting;
+            if (!isSubmitting && this.labelGoogle && this.labelGoogle.textContent === 'Opening Sign-In...') {
+              this.labelGoogle.textContent = 'Sign In with Google';
+            }
           }
           if (this.spinnerSubmit) {
             this.spinnerSubmit.style.display = isSubmitting ? 'inline-block' : 'none';
@@ -4269,7 +4272,22 @@
             this.btnGoogle.addEventListener('click', () => {
               this.btnGoogle.disabled = true;
               if (this.labelGoogle) this.labelGoogle.textContent = 'Opening Sign-In...';
+              if (this.linkDirect && this.linkDirect.href && this.linkDirect.href.startsWith('https://accounts.google.com')) {
+                if (window.AndroidApp && typeof window.AndroidApp.openUrl === 'function') {
+                  window.AndroidApp.openUrl(this.linkDirect.href);
+                } else {
+                  window.open(this.linkDirect.href, '_blank');
+                }
+              }
               sendWs({ type: 'request_auth_url' });
+              setTimeout(() => {
+                if (this.btnGoogle) this.btnGoogle.disabled = false;
+                if (this.labelGoogle && this.labelGoogle.textContent === 'Opening Sign-In...') {
+                  this.labelGoogle.textContent = (this.linkDirect && this.linkDirect.href && this.linkDirect.href.startsWith('https://accounts.google.com'))
+                    ? 'Re-open Sign-In Page'
+                    : 'Sign In with Google';
+                }
+              }, 3500);
             });
           }
 
@@ -4841,6 +4859,14 @@
           if (typeof fetchPendingQuestions === 'function') {
             fetchPendingQuestions();
           }
+          while (wsMessageQueue.length > 0) {
+            const queued = wsMessageQueue.shift();
+            try {
+              ws.send(JSON.stringify(queued));
+            } catch (err) {
+              console.warn('Failed to send queued WS message:', err);
+            }
+          }
         };
 
         ws.onmessage = (ev) => {
@@ -4860,9 +4886,12 @@
         };
       }
 
+      const wsMessageQueue = [];
       function sendWs(payload) {
         if (state.ws && state.ws.readyState === WebSocket.OPEN) {
           state.ws.send(JSON.stringify(payload));
+        } else {
+          wsMessageQueue.push(payload);
         }
       }
 
@@ -5716,6 +5745,12 @@
           case 'auth_failed':
             state.isAuthenticating = false;
             authOverlay.setSubmitting(false);
+            if (authOverlay.btnGoogle) authOverlay.btnGoogle.disabled = false;
+            if (authOverlay.labelGoogle) {
+              authOverlay.labelGoogle.textContent = (authOverlay.linkDirect && authOverlay.linkDirect.href && authOverlay.linkDirect.href.startsWith('https://accounts.google.com'))
+                ? 'Re-open Sign-In Page'
+                : 'Sign In with Google';
+            }
             authOverlay.showAlert(msg.error || 'Invalid or expired code. Please try signing in again.', 'error');
             break;
 
@@ -5919,7 +5954,17 @@
 
           case 'open_external_url':
             if (msg.url) {
-              window.open(msg.url, '_blank');
+              if (window.AndroidApp && typeof window.AndroidApp.openUrl === 'function') {
+                window.AndroidApp.openUrl(msg.url);
+              } else {
+                const a = document.createElement('a');
+                a.href = msg.url;
+                a.target = '_blank';
+                a.rel = 'noopener noreferrer';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+              }
             }
             break;
         }
