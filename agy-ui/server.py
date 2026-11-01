@@ -1266,6 +1266,7 @@ PROTECTED_PACKAGES: frozenset[str] = frozenset({
     "alpine-baselayout-data",
     "alpine-keys",
     "alpine-release",
+    "android-build-tools",
     "apk-tools",
     "busybox",
     "busybox-binsh",
@@ -1886,7 +1887,7 @@ async def restore_configurations_bundle(
                             validate_pkg_name(pkg_str)
                         except Exception:
                             continue
-                        if pkg_str in installed_names:
+                        if pkg_str in installed_names or pkg_str in PROTECTED_PACKAGES:
                             summary["packages"]["preserved"].append(pkg_str)
                         else:
                             missing.append(pkg_str)
@@ -1902,9 +1903,21 @@ async def restore_configurations_bundle(
                                     summary["packages"]["installed"].extend(missing)
                                 else:
                                     err_msg = stderr.strip() or stdout.strip() or f"Exit code {code}"
-                                    logger.warning("apk add returned non-zero during restore: %s", err_msg)
-                                    summary["packages"]["failed"].extend(missing)
-                                    summary["packages"]["error"] = err_msg
+                                    logger.warning("Batch apk add returned non-zero during restore: %s; attempting resilient fallback...", err_msg)
+                                    # Fall back to installing individually so one invalid or missing package does not block the rest
+                                    failed_msgs: list[str] = []
+                                    for single_pkg in missing:
+                                        if progress_callback:
+                                            await progress_callback(f"Installing {single_pkg} via apk add...")
+                                        c_s, out_s, err_s = await run_apk_command("add", "--no-cache", single_pkg)
+                                        if c_s == 0:
+                                            summary["packages"]["installed"].append(single_pkg)
+                                        else:
+                                            summary["packages"]["failed"].append(single_pkg)
+                                            sub_err = err_s.strip() or out_s.strip() or f"Exit code {c_s}"
+                                            failed_msgs.append(f"{single_pkg}: {sub_err}")
+                                    if failed_msgs:
+                                        summary["packages"]["error"] = "; ".join(failed_msgs[:3])
                             except Exception as apk_err:
                                 logger.warning("apk add exception during restore: %s", apk_err)
                                 summary["packages"]["failed"].extend(missing)
