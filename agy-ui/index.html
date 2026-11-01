@@ -2918,8 +2918,8 @@
 
     .auth-text-input {
       width: 100%;
-      height: 46px;
-      padding: 0 74px 0 14px;
+      height: 48px;
+      padding: 0 92px 0 14px;
       background: rgba(0, 0, 0, 0.25);
       border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.15));
       border-radius: 12px;
@@ -2946,29 +2946,37 @@
       right: 6px;
       top: 50%;
       transform: translateY(-50%);
-      height: 32px;
-      padding: 0 12px;
-      background: rgba(255, 255, 255, 0.1);
-      border: 1px solid rgba(255, 255, 255, 0.15);
-      border-radius: 8px;
+      height: 36px;
+      padding: 0 14px;
+      background: rgba(255, 255, 255, 0.12);
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      border-radius: 9px;
       color: var(--text-primary, #f8fafc);
-      font-size: 0.78rem;
+      font-size: 0.82rem;
       font-weight: 600;
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: background 0.15s ease;
+      gap: 6px;
+      z-index: 10;
+      touch-action: manipulation;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-tap-highlight-color: rgba(99, 102, 241, 0.3);
+      transition: all 0.15s ease;
     }
 
     html.light .btn-input-paste {
-      background: rgba(0, 0, 0, 0.06);
-      border-color: rgba(0, 0, 0, 0.12);
+      background: rgba(0, 0, 0, 0.08);
+      border-color: rgba(0, 0, 0, 0.16);
       color: #0f172a;
     }
 
     .btn-input-paste:active {
-      background: rgba(255, 255, 255, 0.2);
+      background: var(--accent-primary, #6366f1);
+      color: #ffffff;
+      transform: translateY(-50%) scale(0.96);
     }
 
     .auth-input-help {
@@ -3184,7 +3192,10 @@
             spellcheck="false" 
           />
           <button type="button" class="btn-input-paste" id="btnPasteAuthCode" title="Paste from clipboard">
-            Paste
+            <svg width="13" height="13" viewBox="0 0 448 512" fill="currentColor" aria-hidden="true">
+              <path d="M208 0L332.1 0c12.7 0 24.9 5.1 33.9 14.1l67.9 67.9c9 9 14.1 21.2 14.1 33.9L448 336c0 26.5-21.5 48-48 48l-192 0c-26.5 0-48-21.5-48-48l0-288c0-26.5 21.5-48 48-48zM48 128l80 0 0 64-64 0 0 256 192 0 0-32 64 0 0 48c0 26.5-21.5 48-48 48L48 512c-26.5 0-48-21.5-48-48L0 176c0-26.5 21.5-48 48-48z"/>
+            </svg>
+            <span>Paste</span>
           </button>
         </div>
         <span class="auth-input-help">Google displays this code in your browser after signing in.</span>
@@ -4347,23 +4358,53 @@
           }
 
           if (this.btnPaste) {
-            this.btnPaste.addEventListener('click', async () => {
-              try {
-                if (navigator.clipboard && navigator.clipboard.readText) {
-                  const text = await navigator.clipboard.readText();
-                  const clean = cleanAuthCode(text);
-                  if (clean) {
-                    this.inputCode.value = clean;
-                    if (this.btnSubmit) this.btnSubmit.disabled = false;
-                    this.inputCode.focus();
-                    return;
-                  }
-                }
-              } catch (err) {
-                console.warn('Clipboard read error:', err);
+            const doPaste = async (e) => {
+              if (e) {
+                e.preventDefault();
+                e.stopPropagation();
               }
-              if (this.inputCode) this.inputCode.focus();
-              showToast('Tap and hold in the box to paste');
+              let text = '';
+              // 1. Primary: Native Android clipboard bridge (100% reliable in Android WebView)
+              if (window.AndroidApp && typeof window.AndroidApp.getClipboardText === 'function') {
+                try {
+                  text = window.AndroidApp.getClipboardText() || '';
+                } catch (err) {
+                  console.warn('Native clipboard read error:', err);
+                }
+              }
+              // 2. Fallback: Browser async Clipboard API
+              if (!text && navigator.clipboard && navigator.clipboard.readText) {
+                try {
+                  text = (await navigator.clipboard.readText()) || '';
+                } catch (err) {
+                  console.warn('Web clipboard read error:', err);
+                }
+              }
+
+              const raw = String(text || '').trim();
+              if (raw) {
+                const clean = cleanAuthCode(raw);
+                const finalCode = clean || raw;
+                if (this.inputCode) {
+                  this.inputCode.value = finalCode;
+                  this.inputCode.dispatchEvent(new Event('input', { bubbles: true }));
+                  this.inputCode.focus();
+                }
+                if (this.btnSubmit) {
+                  this.btnSubmit.disabled = false;
+                }
+                showToast('Code pasted from clipboard!');
+              } else {
+                if (this.inputCode) {
+                  this.inputCode.focus();
+                }
+                showToast('Clipboard is empty. Copy the code from Google first.');
+              }
+            };
+
+            this.btnPaste.addEventListener('click', doPaste);
+            this.btnPaste.addEventListener('touchend', (e) => {
+              doPaste(e);
             });
           }
 

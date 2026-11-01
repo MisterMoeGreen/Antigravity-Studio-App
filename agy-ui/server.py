@@ -336,7 +336,7 @@ def get_agy_version() -> str:
     return _cached_agy_version or os.environ.get("AGY_RUNTIME_VERSION", "1.4.7")
 
 APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.6.2")
-APP_BUILD = os.environ.get("AGY_APP_VERSION_CODE", "46")
+APP_BUILD = os.environ.get("AGY_APP_VERSION_CODE", "47")
 AGY_VERSION = get_agy_version()
 
 logging.basicConfig(
@@ -1184,7 +1184,7 @@ async def delete_mcp_server(name: str) -> dict[str, Any]:
 
 async def check_github_updates() -> dict[str, Any]:
     installed_version = os.environ.get("AGY_APP_VERSION", "1.6.2")
-    installed_code = int(os.environ.get("AGY_APP_VERSION_CODE", "46"))
+    installed_code = int(os.environ.get("AGY_APP_VERSION_CODE", "47"))
     url = "https://api.github.com/repos/MisterMoeGreen/Antigravity-Studio-App/releases/latest"
 
     cmd = ["curl", "-sSL", "-H", f"User-Agent: AntigravityStudio/{APP_VERSION}", url]

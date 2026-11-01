@@ -393,6 +393,53 @@ class MainActivity : AppCompatActivity() {
         }
 
         @JavascriptInterface
+        fun getClipboardText(): String {
+            return try {
+                if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+                    readClipboardInternal()
+                } else {
+                    val future = java.util.concurrent.CompletableFuture<String>()
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        try {
+                            future.complete(readClipboardInternal())
+                        } catch (_: Exception) {
+                            future.complete("")
+                        }
+                    }
+                    future.get(1500, java.util.concurrent.TimeUnit.MILLISECONDS)
+                }
+            } catch (_: Exception) {
+                ""
+            }
+        }
+
+        private fun readClipboardInternal(): String {
+            val clipboard = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+            val clip = clipboard?.primaryClip
+            return if (clip != null && clip.itemCount > 0) {
+                clip.getItemAt(0).coerceToText(this@MainActivity)?.toString() ?: ""
+            } else {
+                ""
+            }
+        }
+
+        @JavascriptInterface
+        fun setClipboardText(text: String): Boolean {
+            return try {
+                runOnUiThread {
+                    try {
+                        val clipboard = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                        val clip = android.content.ClipData.newPlainText("AgyStudio", text)
+                        clipboard?.setPrimaryClip(clip)
+                    } catch (_: Exception) {}
+                }
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
+
+        @JavascriptInterface
         fun triggerUpdateCheck(force: Boolean) {
             lifecycleScope.launch(Dispatchers.IO) {
                 InAppUpdateManager.checkForUpdates(this@MainActivity, force = force)

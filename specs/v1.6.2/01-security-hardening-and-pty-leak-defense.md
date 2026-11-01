@@ -114,8 +114,9 @@ if proc_to_kill:
 - [x] **AC-1.6.2.2**: `slave` is closed in a `finally:` block, preventing file descriptor leaks if subprocess execution fails.
 - [x] **AC-1.6.2.3**: `logger.error`, `logger.warning`, and error exceptions redact all OAuth authorization codes, access tokens (`ya29...`), and refresh tokens (`1//...`).
 - [x] **AC-1.6.2.4**: Subprocess cleanup escalates from `SIGTERM` to `SIGKILL` asynchronously and awaits `wait()` to cleanly reap child processes.
-- [x] **AC-1.6.2.5**: Release metadata, `version.properties`, and runtime headers are synchronized to `v1.6.2` (build `46`).
+- [x] **AC-1.6.2.5**: Release metadata, `version.properties`, and runtime headers are synchronized to `v1.6.2` (build `47`).
 - [x] **AC-1.6.2.6**: `AndroidApp.openUrl(url)` JavaScript bridge and HTML5 anchor fallback ensure OAuth URLs open in Chrome Custom Tabs from Android WebView.
 - [x] **AC-1.6.2.7**: Class scope integrity verified so `trigger_in_app_login` and `submit_auth_code` remain methods of `AgyProcessOrchestrator`.
 - [x] **AC-1.6.2.8**: Bounded WebSocket message queue (`MAX_WS_QUEUE = 50`) prevents memory growth during disconnected states.
 - [x] **AC-1.6.2.9**: Touch close button on auth overlay and Android back gesture dismiss `#loginOverlay` when the session is already authenticated.
+- [x] **AC-1.6.2.10**: Native Android `getClipboardText()` bridge on `AndroidAppInterface` and enhanced touch targets (`z-index: 10`, `touchend` dispatch) ensure reliable one-tap code pasting from clipboard.
