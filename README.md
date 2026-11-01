@@ -19,7 +19,7 @@
 
 **Antigravity Studio** brings Google DeepMind's autonomous coding engine (**Antigravity**) directly to your Android device in a native, touch-first mobile IDE.
 
-Download a single APK, sign in with Google, and start building — no Termux, no root, no laptop required. The app ships everything you need: a full AI coding agent, built-in developer tools (bash, git, python, ssh), and the ability to install virtually any programming language or compiler on the fly.
+Download a single lightweight APK (~45 MB), sign in with Google, and start building — no Termux, no root, no laptop required. The app ships everything you need: a full AI coding agent, built-in developer tools (bash, git, python, ssh), and the ability to install virtually any programming language or compiler on the fly.
 
 What makes it unique: Antigravity Studio is the first app to run real native compilers and JIT runtimes (Node.js, Java, Rust, GCC, Clang, Go) **directly on Android at full native speed** — something normally blocked by Android's security restrictions. It does this transparently, so you just write code and the agent handles the rest.
 
@@ -58,6 +58,7 @@ A touch-first control panel for managing your development environment:
 * **MCP Servers** — Connect Model Context Protocol servers (local stdio or remote HTTP)
 * **Skills & Custom Instructions** — Browse, create, and edit agent behaviors and workspace rules
 * **Packages** — Visual package manager for the built-in Alpine subsystem
+* **Encrypted Backup & Restore** — Password-protected configuration export/import (AES-256-GCM + scrypt) to migrate keys, skills, MCPs, and packages across devices
 
 ### 🔋 Runs in the Background
 Lock your screen or switch apps — the agent keeps working:
@@ -65,9 +66,9 @@ Lock your screen or switch apps — the agent keeps working:
 * Battery-aware: the agent can check battery level, charging state, and CPU temperature
 * Automatic network handling when switching between Wi-Fi and cellular
 
-### 🔄 Seamless Updates
-* **Instant UI updates**: Frontend patches download and apply without reinstalling the app
-* **In-app APK updater**: Check for new versions, download, and install — all from within the app
+### 🔄 Dual-Track Software Updates
+* **Antigravity Studio App**: In-app APK release checks, changelog inspection, and seamless one-tap updates
+* **Antigravity CLI Engine**: On-demand download, background update checks, integrity verification, and self-healing repair independent of the APK
 
 ---
 
@@ -118,7 +119,7 @@ flowchart TD
     PRoot -->|Loads Binaries via| AnonLoader
     AnonLoader -->|Executes in Container| UsrRootfs
 
-    AgyCore -->|Invokes Decision| AskLauncher
+    AgyEngine -->|Invokes Decision| AskLauncher
     AskLauncher -->|Executes| AskBridge
     AskBridge -->|Dispatches JSON| ServerPy
     ServerPy -->|Pushes Bottom Sheet| WebAssets
@@ -142,7 +143,7 @@ The app also embeds a lightweight Alpine Linux rootfs (~3.5 MB) that provides th
 1. **Runtime Extraction**: On first launch (or build update), `EnvironmentBootstrapper` extracts:
    * `usr-data.tar.zst` (~8.5 MB): Python stdlib, git templates, SSL certificates, Web UI, `ask_question.py`, and built-in skills.
    * `rootfs.tar.zst` (~3.5 MB): Alpine Linux `aarch64` minirootfs non-destructively unpacked into `usr/rootfs/`.
-2. **Symlink Farm Assembly**: Creates symlinks in `usr/bin/` pointing to the native binaries in `/data/app/.../lib/arm64/`, including `libagy.so`, host toolchain utilities, and multicall bridges (`agy-sh`, `apk`, `pkg`, `node`, `npm`, `npx`, `cargo`, `gcc`, `java`, `ask_question`).
+2. **Symlink Farm Assembly**: Creates symlinks in `usr/bin/` pointing to the native binaries in `/data/app/.../lib/arm64/`, including `libagy_launcher.so` (native bridge for on-demand engine dispatch), host toolchain utilities, and multicall bridges (`agy-sh`, `apk`, `pkg`, `node`, `npm`, `npx`, `cargo`, `gcc`, `java`, `ask_question`).
 3. **Daemon Initialization**: `AgyForegroundService` acquires a `WakeLock`, selects an available port (`8081` $\to$ `8082` $\to$ `8090` $\to$ ephemeral), and starts `server.py` with `LD_PRELOAD=libagy_shim.so`.
 4. **UI Readiness**: `MainActivity` polls `/health` until the backend signals ready, then renders the responsive mobile IDE interface in WebView.
 
@@ -174,6 +175,7 @@ AgyStudio/
 │   ├── src/main/
 │   │   ├── AndroidManifest.xml           # Permissions, FGS declaration, FileProvider
 │   │   ├── cpp/
+│   │   │   ├── agy_launcher.c            # Native C linker bridge for on-demand zero-mutation engine dispatch
 │   │   │   ├── agy_shim.c                # Bionic C virtualization shim (execve / shebang parser)
 │   │   │   ├── agy_sh.c                  # Native multicall toolchain bridge (apk, node, gcc...)
 │   │   │   ├── ask_question_launcher.c   # Native ELF launcher for interactive touch modals
@@ -200,8 +202,9 @@ AgyStudio/
 │   ├── manifest.json                     # PWA standalone application manifest
 │   └── sw.js                             # Service Worker offline asset cache
 ├── scripts/
-│   ├── build_shim.sh                     # Compiles and strips libagy_shim.so
-│   └── prepare_binaries.sh               # Stages 16KB-aligned ELF binaries & packages assets
+│   ├── verify_or_patch_libagy.sh         # Compiles libagy_launcher.so and enforces engine unbundling
+│   ├── sync_web_assets.sh                # Synchronizes web UI assets into usr-data.tar.zst
+│   └── verify_architectural_invariants.py # Automated pre-build AST and API boundary integrity gate
 ├── specs/
 │   ├── initial/                          # v1.0.0 Architecture & Core Toolchain specifications
 │   ├── 1.1.0/                            # v1.1.0 System Prompts, Dynamic DNS & Telemetry specs
@@ -224,9 +227,9 @@ To compile the APK from source on an Android device (via Termux) or on a Linux d
 git clone git@github.com:MisterMoeGreen/Antigravity-Studio-App.git
 cd Antigravity-Studio-App
 
-# 2. Stage binaries and generate asset bundles (if modifying core engine or rootfs)
-bash scripts/build_shim.sh
-bash scripts/prepare_binaries.sh
+# 2. Verify native launcher bridge and sync web assets
+bash scripts/verify_or_patch_libagy.sh
+bash scripts/sync_web_assets.sh
 
 # 3. Build signed Release APK
 bash ./gradlew assembleRelease

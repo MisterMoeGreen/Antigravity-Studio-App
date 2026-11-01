@@ -15,7 +15,7 @@
 ### 1. Antigravity Agent Engine
 * **Copyright**: &copy; Google LLC / Google DeepMind
 * **Upstream**: Distributed via official Antigravity distribution channels (`https://antigravity.google/cli/install.sh`).
-* **Usage**: Bundled as `libagy.so` to provide core agentic planning, reasoning, and tool dispatching.
+* **Usage**: Downloaded on-demand to private app storage (`usr/opt/agy/`) and dispatched via the native `libagy_launcher.so` bridge to provide core agentic planning, reasoning, and tool dispatching at native ARM64 speed.
 
 ### 2. GNU Project
 * **GNU Bash (`libbash.so`)**:
@@ -70,6 +70,11 @@
 * **Repository**: [https://github.com/wallentx/antigravity-cli-termux](https://github.com/wallentx/antigravity-cli-termux)
 * **Author**: wallentx & community contributors
 * **Usage**: Core upstream project providing the VA39 kernel compatibility layer (rewriting TCMalloc 48-bit Virtual Address instructions and bitmasks to fit 39-bit Android memory layouts). Antigravity Studio downloads the standalone Linux ARM64 engine on-demand directly from this upstream release pipeline.
+
+### 13. PRoot Virtualization Engine (`libproot.so`, `libproot_loader.so`)
+* **Copyright**: &copy; Cédric Vincent and the PRoot Development Community
+* **License**: GNU General Public License v2 (GPLv2)
+* **Usage**: User-space syscall virtualization and anonymous memory ELF execution enabling native JITs and compilers to execute on Android without root or SELinux W^X violations.
 
 ---
 
