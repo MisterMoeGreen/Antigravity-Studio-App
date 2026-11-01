@@ -112,6 +112,37 @@ def is_request_authorized(request: Request) -> bool:
     return False
 
 
+def is_oauth_token_valid() -> bool:
+    """
+    Evaluates whether a valid Google OAuth credential token exists on disk.
+    Enforces existence, minimum file geometry (>50 bytes), JSON syntax, and expiry.
+    """
+    token_file = GEMINI_DIR / "antigravity-oauth-token"
+    if not token_file.exists():
+        return False
+    try:
+        st = token_file.stat()
+        if st.st_size < 50:
+            return False
+        data = json.loads(token_file.read_text(encoding="utf-8"))
+        tok = data.get("token")
+        if isinstance(tok, dict):
+            if not (tok.get("access_token") or tok.get("refresh_token") or tok.get("token")):
+                return False
+            if "expires_at" in tok and not tok.get("refresh_token"):
+                if float(tok["expires_at"]) < time.time():
+                    return False
+        elif not (data.get("token") or data.get("access_token")):
+            return False
+
+        if "expires_at" in data and not (isinstance(tok, dict) and tok.get("refresh_token")):
+            if float(data["expires_at"]) < time.time():
+                return False
+        return True
+    except Exception:
+        return False
+
+
 def emit_native_notif_event(payload: dict) -> None:
     """Emit structured event to AgyForegroundService stdout pipe for background-safe notifications (ARGON-V15-01)."""
     try:
@@ -304,8 +335,8 @@ def get_agy_version() -> str:
 
     return _cached_agy_version or os.environ.get("AGY_RUNTIME_VERSION", "1.4.7")
 
-APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.5.1")
-APP_BUILD = os.environ.get("AGY_APP_VERSION_CODE", "33")
+APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.6.1")
+APP_BUILD = os.environ.get("AGY_APP_VERSION_CODE", "43")
 AGY_VERSION = get_agy_version()
 
 logging.basicConfig(
@@ -1152,8 +1183,8 @@ async def delete_mcp_server(name: str) -> dict[str, Any]:
 
 
 async def check_github_updates() -> dict[str, Any]:
-    installed_version = os.environ.get("AGY_APP_VERSION", "1.5.1")
-    installed_code = int(os.environ.get("AGY_APP_VERSION_CODE", "33"))
+    installed_version = os.environ.get("AGY_APP_VERSION", "1.6.1")
+    installed_code = int(os.environ.get("AGY_APP_VERSION_CODE", "43"))
     url = "https://api.github.com/repos/MisterMoeGreen/Antigravity-Studio-App/releases/latest"
 
     cmd = ["curl", "-sSL", "-H", f"User-Agent: AntigravityStudio/{APP_VERSION}", url]
@@ -2649,6 +2680,9 @@ class AgyProcessOrchestrator:
         self.auth_turn_id: Optional[str] = None
         self.auth_cid: Optional[str] = None
         self.auth_waiter_task: Optional[asyncio.Task] = None
+        self.auth_watchdog_task: Optional[asyncio.Task] = None
+        self.cached_auth_url: Optional[str] = None
+        self._auth_lock: asyncio.Lock = asyncio.Lock()
         self.on_auth_success_cb: Optional[Any] = None
         self._pending_auth_prompt: Optional[str] = None
         self._pending_auth_attachments: list[dict[str, Any]] = []
@@ -2987,10 +3021,29 @@ class AgyProcessOrchestrator:
                         f"Antigravity CLI binary not found at {AGY_BIN}. Ensure `agy` is installed in Termux."
                     )
 
-                token_file = GEMINI_DIR / "antigravity-oauth-token"
-                if not token_file.exists():
-                    logger.info("No token file found. Proactively initiating Google login...")
-                    await self.trigger_in_app_login(turn_id, conversation_id=cid, original_prompt=prompt, original_attachments=attachments)
+                if not is_oauth_token_valid():
+                    logger.info("OAuth token invalid or missing. Triggering auth overlay interception...")
+                    self._pending_auth_prompt = prompt
+                    self._pending_auth_attachments = attachments or []
+                    self.auth_cid = cid
+                    await self.broadcast(
+                        {
+                            "type": "auth_required",
+                            "reason": "expired",
+                            "conversation_id": cid,
+                        }
+                    )
+                    if ctx.active_snapshot:
+                        ctx.active_snapshot.status = "AUTH_REQUIRED"
+                        ctx.active_snapshot.end_time = time.time()
+                    await self.broadcast(
+                        {
+                            "type": "turn_complete",
+                            "conversation_id": cid,
+                            "turn_id": turn_id,
+                            "status": "AUTH_REQUIRED",
+                        }
+                    )
                     return
 
                 # Spawn `agy` with `--output-format stream-json --dangerously-skip-permissions`
@@ -3212,8 +3265,28 @@ class AgyProcessOrchestrator:
                         self._auth_required_detected = True
 
                 if self._auth_required_detected and not was_interrupted:
-                    logger.info("Session expired or authentication required. Triggering in-app login...")
-                    await self.trigger_in_app_login(turn_id, conversation_id=cid, original_prompt=prompt, original_attachments=attachments)
+                    logger.info("Session expired or authentication required during turn. Intercepting...")
+                    self._pending_auth_prompt = prompt
+                    self._pending_auth_attachments = attachments or []
+                    self.auth_cid = cid
+                    await self.broadcast(
+                        {
+                            "type": "auth_required",
+                            "reason": "expired",
+                            "conversation_id": cid,
+                        }
+                    )
+                    if ctx.active_snapshot:
+                        ctx.active_snapshot.status = "AUTH_REQUIRED"
+                        ctx.active_snapshot.end_time = time.time()
+                    await self.broadcast(
+                        {
+                            "type": "turn_complete",
+                            "conversation_id": cid,
+                            "turn_id": turn_id,
+                            "status": "AUTH_REQUIRED",
+                        }
+                    )
                     return
 
                 if was_interrupted:
@@ -3459,6 +3532,7 @@ class AgyProcessOrchestrator:
 
     def _cleanup_auth(self) -> None:
         self.is_authenticating = False
+        self.cached_auth_url = None
         if self.auth_master is not None:
             try:
                 os.close(self.auth_master)
@@ -3475,6 +3549,9 @@ class AgyProcessOrchestrator:
         if self.auth_waiter_task and not self.auth_waiter_task.done():
             self.auth_waiter_task.cancel()
         self.auth_waiter_task = None
+        if self.auth_watchdog_task and not self.auth_watchdog_task.done():
+            self.auth_watchdog_task.cancel()
+        self.auth_watchdog_task = None
         self.auth_turn_id = None
         self.auth_cid = None
 
@@ -3514,22 +3591,8 @@ class AgyProcessOrchestrator:
 
         self._secure_oauth_token()
         self._cleanup_auth()
-        await self.broadcast(
-            {
-                "type": "agent_token",
-                "conversation_id": target_cid,
-                "turn_id": turn_id,
-                "delta": "\n\n**Google Sign-In Successful!** Authentication credentials saved. You are ready to use Antigravity Studio.\n",
-            }
-        )
-        await self.broadcast(
-            {
-                "type": "turn_complete",
-                "conversation_id": target_cid,
-                "turn_id": turn_id,
-                "metrics": {},
-            }
-        )
+
+        # Zero chat pollution: overlay receives auth_success directly
         await self.broadcast({"type": "auth_success"})
         await self.broadcast({"type": "status", "conversation_id": target_cid, "state": "idle", "detail": "Ready"})
         if self.on_auth_success_cb:
@@ -3560,26 +3623,18 @@ class AgyProcessOrchestrator:
                 clean_code = urllib.parse.unquote(m.group(1))
 
         if not clean_code:
+            await self.broadcast({
+                "type": "auth_failed",
+                "error": "Authorization code cannot be empty.",
+            })
             return False
 
         if not self.is_authenticating or not self.auth_proc or self.auth_master is None:
-            await self.broadcast(
-                {
-                    "type": "agent_token",
-                    "turn_id": self._current_turn_id or "auth",
-                    "delta": "\n**Notice:** No active authentication session waiting for a code. Run `/login` to sign in.\n",
-                }
-            )
+            await self.broadcast({
+                "type": "auth_failed",
+                "error": "No active authentication session waiting for a code. Please try signing in again.",
+            })
             return False
-
-        turn_id = self.auth_turn_id or self._current_turn_id or "auth"
-        await self.broadcast(
-            {
-                "type": "agent_token",
-                "turn_id": turn_id,
-                "delta": "\n> ⏳ **Submitting authorization code to Antigravity CLI...**\n",
-            }
-        )
 
         token_file = GEMINI_DIR / "antigravity-oauth-token"
         initial_mtime = token_file.stat().st_mtime if token_file.exists() else 0
@@ -3600,8 +3655,9 @@ class AgyProcessOrchestrator:
                         st = token_file.stat()
                         if st.st_size > 50 and (st.st_mtime > initial_mtime or initial_mtime == 0):
                             try:
-                                token_data = json.loads(token_file.read_text())
-                                if "token" in token_data or "access_token" in token_data:
+                                token_data = json.loads(token_file.read_text(encoding="utf-8"))
+                                tok = token_data.get("token")
+                                if tok or "access_token" in token_data:
                                     success = True
                                     logger.info("Found newly saved oauth token file (%d bytes)", st.st_size)
                                     break
@@ -3644,27 +3700,16 @@ class AgyProcessOrchestrator:
                 return True
             else:
                 logger.error("Authentication failed: token not saved. PTY output: %s", output_tail[-300:])
-                err_hint = ""
+                err_hint = "Google rejected the authorization code (expired or already used). Please try again."
                 lowered_tail = output_tail.lower()
-                if "invalid_grant" in lowered_tail or "invalid" in lowered_tail:
-                    err_hint = " Google rejected the code (it may have expired or already been used)."
+                if "invalid_grant" in lowered_tail:
+                    err_hint = "Google rejected the code (it may have expired or already been used). Please try again."
                 elif "bad request" in lowered_tail:
-                    err_hint = " The code format was invalid."
-                await self.broadcast(
-                    {
-                        "type": "agent_token",
-                        "turn_id": turn_id,
-                        "delta": f"\n\n**Sign-In Failed.**{err_hint} Please close any extra browser tabs and type `/login` in chat to obtain a fresh sign-in link.\n",
-                    }
-                )
-                await self.broadcast(
-                    {
-                        "type": "turn_complete",
-                        "turn_id": turn_id,
-                        "metrics": {},
-                    }
-                )
-                await self.broadcast({"type": "auth_failed"})
+                    err_hint = "The authorization code format was invalid. Please paste the code again."
+                await self.broadcast({
+                    "type": "auth_failed",
+                    "error": err_hint,
+                })
                 self._pending_auth_prompt = None
                 self._pending_auth_attachments = []
                 self._cleanup_auth()
@@ -3673,33 +3718,25 @@ class AgyProcessOrchestrator:
             logger.exception("Error writing auth code to PTY: %s", exc)
             self._pending_auth_prompt = None
             self._pending_auth_attachments = []
-            await self.broadcast(
-                {
-                    "type": "agent_token",
-                    "turn_id": turn_id,
-                    "delta": f"\n\n**Authentication Error:** `{exc}`\n",
-                }
-            )
-            await self.broadcast(
-                {
-                    "type": "turn_complete",
-                    "turn_id": turn_id,
-                    "metrics": {},
-                }
-            )
+            await self.broadcast({
+                "type": "auth_failed",
+                "error": "Error communicating with the authentication process. Please try again.",
+            })
             self._cleanup_auth()
             return False
 
     async def trigger_in_app_login(
         self,
-        turn_id: str,
+        turn_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
         original_prompt: Optional[str] = None,
         original_attachments: Optional[list[dict[str, Any]]] = None,
+        standalone: bool = False,
     ) -> None:
         """
         Interactively spawns `agy` in a pseudo-terminal (PTY) to generate the Google OAuth consent URL,
         broadcasts it to the WebView / Chrome Custom Tabs, and awaits user authorization code submission.
+        Protected by asyncio.Lock (ARGON-V161-03) and 120s watchdog (ARGON-V161-02).
         """
         import fcntl
         import pty
@@ -3707,220 +3744,215 @@ class AgyProcessOrchestrator:
         import struct
         import termios
 
-        # Clean up any existing auth session
-        self._cleanup_auth()
-
-        self.auth_cid = conversation_id
-        self._pending_auth_prompt = original_prompt
-        self._pending_auth_attachments = original_attachments or []
-
-        logger.info("Initiating in-app Google OAuth consent flow...")
-        await self.broadcast(
-            {
-                "type": "agent_token",
-                "conversation_id": conversation_id,
-                "turn_id": turn_id,
-                "delta": "\n> **Google Sign-In Required:** Initializing authentication session...\n",
-            }
-        )
-
-        try:
-            master, slave = pty.openpty()
-            # Crucial: set terminal window size to 100 rows x 1000 cols to prevent agy from paging or wrapping URLs
-            try:
-                winsize = struct.pack("HHHH", 100, 1000, 0, 0)
-                fcntl.ioctl(slave, termios.TIOCSWINSZ, winsize)
-                fcntl.ioctl(master, termios.TIOCSWINSZ, winsize)
-            except Exception:
-                pass
-
-            env = dict(os.environ)
-            env["TERM"] = "xterm-256color"
-
-            proc = await asyncio.create_subprocess_exec(
-                os.environ.get("AGY_BIN", str(AGY_BIN)),
-                stdin=slave,
-                stdout=slave,
-                stderr=slave,
-                env=env,
-                close_fds=True,
-            )
-            os.close(slave)
-
-            # Wait for menu or onboarding screens to appear before selecting option 1
-            output = ""
-            start_wait = time.time()
-            color_scheme_handled = False
-            tos_handled = False
-            login_method_selected = False
-
-            while time.time() - start_wait < 14.0:
-                if proc.returncode is not None:
-                    break
-                await asyncio.sleep(0.15)
-                r, _, _ = select.select([master], [], [], 0.1)
-                if r:
-                    try:
-                        c = os.read(master, 1024).decode("latin1", "ignore")
-                        output += c
-                    except Exception:
-                        break
-
-                if not color_scheme_handled and ("Choose your color scheme" in output or "color scheme:" in output):
-                    await asyncio.sleep(0.2)
-                    try:
-                        os.write(master, b"\r\n")
-                        color_scheme_handled = True
-                    except Exception:
-                        pass
-
-                if not tos_handled and ("Terms of Service" in output or "[Done]" in output):
-                    await asyncio.sleep(0.2)
-                    try:
-                        os.write(master, b"\t\t\r\n")
-                        tos_handled = True
-                    except Exception:
-                        pass
-
-                if not login_method_selected and ("Select login method" in output or "1. Google OAuth" in output):
-                    await asyncio.sleep(0.25)
-                    try:
-                        os.write(master, b"\r\n")
-                        login_method_selected = True
-                        break
-                    except Exception:
-                        break
-
-            if proc.returncode is not None:
-                raise RuntimeError(
-                    f"Antigravity CLI process terminated prematurely (exit code {proc.returncode}). Output: {output.strip() or 'None'}"
-                )
-
-            auth_url = None
-            start_time = time.time()
-            while time.time() - start_time < 15.0:
-                if proc.returncode is not None:
-                    break
-
-                m = re.search(
-                    r'(https://accounts\.google\.com/o/oauth2/auth\?[a-zA-Z0-9_\-\.%&=+]+)',
-                    output
-                )
-                if m:
-                    auth_url = m.group(1)
-                    if "authorization code" in output.lower():
-                        break
-
-                await asyncio.sleep(0.2)
-                r, _, _ = select.select([master], [], [], 0.1)
-                if r:
-                    try:
-                        chunk = os.read(master, 2048).decode("latin1", "ignore")
-                        output += chunk
-                        m = re.search(
-                            r'(https://accounts\.google\.com/o/oauth2/auth\?[a-zA-Z0-9_\-\.%&=+]+)',
-                            output
-                        )
-                        if m:
-                            auth_url = m.group(1)
-                            if "authorization code" in output.lower():
-                                break
-                    except Exception:
-                        break
-
-            if auth_url:
-                self.is_authenticating = True
-                self.auth_proc = proc
-                self.auth_master = master
-                self.auth_turn_id = turn_id
-                self.auth_cid = conversation_id
-
-                logger.info("Captured OAuth URL: %s...", auth_url[:60])
-                await self.broadcast({"type": "open_external_url", "url": auth_url})
-                await self.broadcast(
-                    {
+        async with self._auth_lock:
+            # If an auth flow is already active with cached URL, re-broadcast it
+            if self.is_authenticating:
+                if self.cached_auth_url and self.auth_proc and self.auth_proc.returncode is None:
+                    logger.info("Auth already in progress with cached URL; re-broadcasting.")
+                    await self.broadcast({"type": "auth_url", "url": self.cached_auth_url})
+                    await self.broadcast({"type": "open_external_url", "url": self.cached_auth_url})
+                    await self.broadcast({
                         "type": "auth_required",
                         "conversation_id": conversation_id,
-                        "url": auth_url,
+                        "reason": "expired" if conversation_id else "unauthenticated",
+                        "url": self.cached_auth_url,
                         "turn_id": turn_id,
-                    }
-                )
-                await self.broadcast(
-                    {
-                        "type": "agent_token",
-                        "conversation_id": conversation_id,
-                        "turn_id": turn_id,
-                        "delta": (
-                            f"\n[**Click Here to Sign In with Google**]({auth_url})\n\n"
-                            "**Steps to complete sign-in:**\n"
-                            "1. Tap the link above to sign in with Google in your browser.\n"
-                            "2. Copy the authorization code Google gives you.\n"
-                            "3. **Paste the code directly into the chat prompt below and send it.**\n"
-                        ),
-                    }
-                )
+                    })
+                    return
+                if self.auth_proc and self.auth_proc.returncode is None:
+                    logger.info("Auth already in progress; awaiting URL.")
+                    return
 
-                async def _monitor_proc():
-                    try:
-                        rc = await proc.wait()
-                        if rc == 0:
-                            await self._on_auth_success()
-                        elif self.is_authenticating:
-                            logger.info("Auth process exited with rc=%s", rc)
-                    except asyncio.CancelledError:
-                        pass
-                    except Exception as exc:
-                        logger.warning("Auth monitor error: %s", exc)
+            # Clean up any existing auth session
+            self._cleanup_auth()
 
-                self.auth_waiter_task = asyncio.create_task(_monitor_proc())
-            else:
-                logger.error("Failed to capture OAuth URL from agy.")
+            self.auth_cid = conversation_id
+            if original_prompt:
+                self._pending_auth_prompt = original_prompt
+            if original_attachments:
+                self._pending_auth_attachments = original_attachments
+
+            logger.info("Initiating in-app Google OAuth consent flow...")
+
+            try:
+                master, slave = pty.openpty()
+                # Crucial: set terminal window size to 100 rows x 1000 cols to prevent agy from paging or wrapping URLs
                 try:
-                    if proc.returncode is None:
-                        proc.terminate()
+                    winsize = struct.pack("HHHH", 100, 1000, 0, 0)
+                    fcntl.ioctl(slave, termios.TIOCSWINSZ, winsize)
+                    fcntl.ioctl(master, termios.TIOCSWINSZ, winsize)
                 except Exception:
                     pass
-                try: os.close(master)
-                except Exception: pass
-                await self.broadcast(
-                    {
-                        "type": "agent_token",
-                        "conversation_id": conversation_id,
-                        "turn_id": turn_id,
-                        "delta": "\nCould not automatically generate Google OAuth session. Please retry.\n",
-                    }
+
+                env = dict(os.environ)
+                env["TERM"] = "xterm-256color"
+
+                proc = await asyncio.create_subprocess_exec(
+                    os.environ.get("AGY_BIN", str(AGY_BIN)),
+                    stdin=slave,
+                    stdout=slave,
+                    stderr=slave,
+                    env=env,
+                    close_fds=True,
                 )
-                await self.broadcast({"type": "auth_failed", "conversation_id": conversation_id})
-                await self.broadcast(
-                    {
-                        "type": "turn_complete",
-                        "conversation_id": conversation_id,
-                        "turn_id": turn_id,
-                        "status": "ERROR",
-                    }
-                )
+                os.close(slave)  # ARGON-V161-02: close slave in parent immediately
+
+                # Wait for menu or onboarding screens to appear before selecting option 1
+                output = ""
+                start_wait = time.time()
+                color_scheme_handled = False
+                tos_handled = False
+                login_method_selected = False
+
+                while time.time() - start_wait < 14.0:
+                    if proc.returncode is not None:
+                        break
+                    await asyncio.sleep(0.15)
+                    r, _, _ = select.select([master], [], [], 0.1)
+                    if r:
+                        try:
+                            c = os.read(master, 1024).decode("latin1", "ignore")
+                            output += c
+                        except Exception:
+                            break
+
+                    if not color_scheme_handled and ("Choose your color scheme" in output or "color scheme:" in output):
+                        await asyncio.sleep(0.2)
+                        try:
+                            os.write(master, b"\r\n")
+                            color_scheme_handled = True
+                        except Exception:
+                            pass
+
+                    if not tos_handled and ("Terms of Service" in output or "[Done]" in output):
+                        await asyncio.sleep(0.2)
+                        try:
+                            os.write(master, b"\t\t\r\n")
+                            tos_handled = True
+                        except Exception:
+                            pass
+
+                    if not login_method_selected and ("Select login method" in output or "1. Google OAuth" in output):
+                        await asyncio.sleep(0.25)
+                        try:
+                            os.write(master, b"\r\n")
+                            login_method_selected = True
+                            break
+                        except Exception:
+                            break
+
+                if proc.returncode is not None:
+                    raise RuntimeError(
+                        f"Antigravity CLI process terminated prematurely (exit code {proc.returncode}). Output: {output.strip() or 'None'}"
+                    )
+
+                auth_url = None
+                start_time = time.time()
+                while time.time() - start_time < 15.0:
+                    if proc.returncode is not None:
+                        break
+
+                    m = re.search(
+                        r'(https://accounts\.google\.com/o/oauth2/auth\?[a-zA-Z0-9_\-\.%&=+]+)',
+                        output
+                    )
+                    if m:
+                        auth_url = m.group(1)
+                        if "authorization code" in output.lower():
+                            break
+
+                    await asyncio.sleep(0.2)
+                    r, _, _ = select.select([master], [], [], 0.1)
+                    if r:
+                        try:
+                            chunk = os.read(master, 2048).decode("latin1", "ignore")
+                            output += chunk
+                            m = re.search(
+                                r'(https://accounts\.google\.com/o/oauth2/auth\?[a-zA-Z0-9_\-\.%&=+]+)',
+                                output
+                            )
+                            if m:
+                                auth_url = m.group(1)
+                                if "authorization code" in output.lower():
+                                    break
+                        except Exception:
+                            break
+
+                # ARGON-V161-04: strict URL validation
+                if auth_url and re.match(r"^https://accounts\.google\.com/o/oauth2/auth\?", auth_url):
+                    self.is_authenticating = True
+                    self.auth_proc = proc
+                    self.auth_master = master
+                    self.auth_turn_id = turn_id
+                    self.auth_cid = conversation_id
+                    self.cached_auth_url = auth_url
+
+                    logger.info("Captured OAuth URL: %s...", auth_url[:60])
+                    await self.broadcast({"type": "auth_url", "url": auth_url})
+                    await self.broadcast({"type": "open_external_url", "url": auth_url})
+                    await self.broadcast(
+                        {
+                            "type": "auth_required",
+                            "conversation_id": conversation_id,
+                            "reason": "expired" if conversation_id else "unauthenticated",
+                            "url": auth_url,
+                            "turn_id": turn_id,
+                        }
+                    )
+
+                    # ARGON-V161-02: 120-second watchdog timer to avoid leaked PTY processes
+                    async def _auth_watchdog():
+                        try:
+                            await asyncio.sleep(120.0)
+                            if self.is_authenticating and self.auth_proc == proc:
+                                logger.warning("Auth session timed out after 120s watchdog. Terminating PTY.")
+                                await self.broadcast({
+                                    "type": "auth_failed",
+                                    "error": "Authentication timed out after 2 minutes. Please try again.",
+                                })
+                                self._cleanup_auth()
+                        except asyncio.CancelledError:
+                            pass
+
+                    self.auth_watchdog_task = asyncio.create_task(_auth_watchdog())
+
+                    async def _monitor_proc():
+                        try:
+                            rc = await proc.wait()
+                            if rc == 0:
+                                await self._on_auth_success()
+                            elif self.is_authenticating and self.auth_proc == proc:
+                                logger.info("Auth process exited with rc=%s", rc)
+                        except asyncio.CancelledError:
+                            pass
+                        except Exception as exc:
+                            logger.warning("Auth monitor error: %s", exc)
+
+                    self.auth_waiter_task = asyncio.create_task(_monitor_proc())
+                else:
+                    logger.error("Failed to capture valid OAuth URL from agy.")
+                    try:
+                        if proc.returncode is None:
+                            proc.terminate()
+                    except Exception:
+                        pass
+                    try:
+                        os.close(master)
+                    except Exception:
+                        pass
+                    await self.broadcast({
+                        "type": "auth_failed",
+                        "error": "Could not automatically generate Google OAuth session. Please retry.",
+                    })
+                    self._cleanup_auth()
+            except Exception as exc:
+                err_msg = str(exc).strip() or repr(exc)
+                logger.exception("Error during in-app login initialization: %s", err_msg)
+                await self.broadcast({
+                    "type": "auth_failed",
+                    "error": f"Sign-in initialization error: {err_msg}",
+                })
                 self._cleanup_auth()
-        except Exception as exc:
-            err_msg = str(exc).strip() or repr(exc)
-            logger.exception("Error during in-app login initialization: %s", err_msg)
-            await self.broadcast(
-                {
-                    "type": "agent_token",
-                    "conversation_id": conversation_id,
-                    "turn_id": turn_id,
-                    "delta": f"\n**Sign-in initialization error:** `{err_msg}`\n",
-                }
-            )
-            await self.broadcast({"type": "auth_failed", "conversation_id": conversation_id})
-            await self.broadcast(
-                {
-                    "type": "turn_complete",
-                    "conversation_id": conversation_id,
-                    "turn_id": turn_id,
-                    "status": "ERROR",
-                }
-            )
-            self._cleanup_auth()
 
     async def _consume_stdout_stream(
         self,
@@ -5647,11 +5679,13 @@ class AgyWebServer:
                         self.orchestrator.config.workspace = ws_candidate
 
             branch = get_git_branch(self.orchestrator.config.workspace)
+            is_auth = is_oauth_token_valid()
 
             await websocket.send(
                 json.dumps(
                     {
                         "type": "init_state",
+                        "is_authenticated": is_auth,
                         "default_workspace": self.default_workspace,
                         "config": {
                             "conversation_id": active_cid,
@@ -5675,6 +5709,16 @@ class AgyWebServer:
                     }
                 )
             )
+
+            if not is_auth:
+                await websocket.send(
+                    json.dumps(
+                        {
+                            "type": "auth_required",
+                            "reason": "unauthenticated",
+                        }
+                    )
+                )
 
             # Hydrate current conversation transcript if one is selected
             if active_cid:
@@ -5742,15 +5786,21 @@ class AgyWebServer:
     ) -> None:
         mtype = data.get("type")
 
+        if mtype in ("request_auth_url", "trigger_login"):
+            asyncio.create_task(self.orchestrator.trigger_in_app_login(turn_id=None, standalone=True))
+            return
+
         if mtype == "submit_auth_code":
             code = str(data.get("code") or "").strip()
             if code:
                 asyncio.create_task(self.orchestrator.submit_auth_code(code))
-            return
-
-        if mtype == "trigger_login":
-            turn_id = f"auth-{uuid.uuid4().hex[:6]}"
-            asyncio.create_task(self.orchestrator.trigger_in_app_login(turn_id))
+            else:
+                asyncio.create_task(
+                    self.orchestrator.broadcast({
+                        "type": "auth_failed",
+                        "error": "Authorization code cannot be empty.",
+                    })
+                )
             return
 
         if mtype == "refresh_models":
@@ -7285,8 +7335,7 @@ class AgyWebServer:
             return True
 
         if cmd in ("/login", "/auth"):
-            turn_id = f"auth-{uuid.uuid4().hex[:6]}"
-            asyncio.create_task(self.orchestrator.trigger_in_app_login(turn_id))
+            asyncio.create_task(self.orchestrator.trigger_in_app_login(turn_id=None, standalone=True))
             return True
 
         if cmd in ("/usage", "/quota", "/cost"):

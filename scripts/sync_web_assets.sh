@@ -11,11 +11,19 @@ if [ ! -f "$ARCHIVE" ] || [ ! -d "$AGY_UI_DIR" ]; then
   exit 0
 fi
 
-TEMP_STAGING=$(mktemp -d)
+TAR_CMD="tar"
+if ! tar --help 2>&1 | grep -q -- "--zstd"; then
+  if command -v agy-sh >/dev/null 2>&1; then
+    TAR_CMD="agy-sh tar"
+  fi
+fi
+
+mkdir -p "${HOME}/tmp"
+TEMP_STAGING=$(mktemp -d -p "${HOME}/tmp")
 trap 'rm -rf "$TEMP_STAGING"' EXIT
 
 # Extract existing archive
-tar --zstd -xf "$ARCHIVE" -C "$TEMP_STAGING"
+$TAR_CMD --zstd -xf "$ARCHIVE" -C "$TEMP_STAGING"
 
 # Copy updated agy-ui files into share/agy-ui
 DEST_UI="${TEMP_STAGING}/share/agy-ui"
@@ -42,4 +50,4 @@ if [ -d "${AGY_UI_DIR}/skills" ]; then
 fi
 
 # Repack archive
-tar --zstd -cf "$ARCHIVE" -C "$TEMP_STAGING" .
+$TAR_CMD --zstd -cf "$ARCHIVE" -C "$TEMP_STAGING" .

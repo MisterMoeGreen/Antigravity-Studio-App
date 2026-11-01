@@ -2706,6 +2706,292 @@
       font-weight: 500;
     }
 
+    /* Google Auth Full-Page Overlay (v1.6.1) */
+    .auth-page-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: rgba(8, 11, 18, 0.94);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      box-sizing: border-box;
+      animation: fadeIn 0.25s ease-out;
+    }
+
+    html.light .auth-page-overlay {
+      background: rgba(15, 23, 42, 0.88);
+    }
+
+    .auth-card {
+      width: 100%;
+      max-width: 420px;
+      background: var(--bg-surface, #141824);
+      border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
+      border-radius: 20px;
+      padding: 24px 20px;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65);
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      box-sizing: border-box;
+    }
+
+    .auth-logo-badge {
+      width: 56px;
+      height: 56px;
+      border-radius: 16px;
+      background: #090d16;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto;
+    }
+
+    .auth-logo-badge img {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+    }
+
+    .auth-header {
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .auth-title {
+      margin: 0;
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--text-primary, #f8fafc);
+    }
+
+    .auth-subtitle {
+      margin: 0;
+      font-size: 0.88rem;
+      color: var(--text-secondary, #94a3b8);
+      line-height: 1.45;
+    }
+
+    .auth-alert {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      border-radius: 12px;
+      font-size: 0.85rem;
+      line-height: 1.4;
+      box-sizing: border-box;
+    }
+
+    .auth-alert.warning {
+      background: rgba(245, 158, 11, 0.12);
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      color: #f59e0b;
+    }
+
+    .auth-alert.error {
+      background: rgba(244, 63, 94, 0.12);
+      border: 1px solid rgba(244, 63, 94, 0.35);
+      color: #f43f5e;
+    }
+
+    .auth-alert.success {
+      background: rgba(16, 185, 129, 0.12);
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      color: #10b981;
+    }
+
+    .auth-alert-icon {
+      font-size: 1rem;
+      flex-shrink: 0;
+    }
+
+    .auth-alert-msg {
+      flex: 1;
+    }
+
+    .auth-action-block {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      align-items: center;
+      width: 100%;
+    }
+
+    .btn-auth-google {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      width: 100%;
+      height: 48px;
+      background: #ffffff;
+      color: #1f2937;
+      font-weight: 600;
+      font-size: 0.95rem;
+      border-radius: 12px;
+      border: none;
+      cursor: pointer;
+      transition: transform 0.1s ease, filter 0.15s ease, opacity 0.2s ease;
+      user-select: none;
+    }
+
+    .btn-auth-google:active {
+      transform: scale(0.98);
+      filter: brightness(0.92);
+    }
+
+    .btn-auth-google:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+
+    .auth-hint {
+      font-size: 0.78rem;
+      color: var(--text-muted, #64748b);
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      justify-content: center;
+      text-align: center;
+    }
+
+    .auth-hint a {
+      color: var(--accent-primary, #6366f1);
+      text-decoration: underline;
+      cursor: pointer;
+    }
+
+    .auth-input-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      width: 100%;
+    }
+
+    .auth-input-label {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-secondary, #94a3b8);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .auth-input-wrap {
+      position: relative;
+      display: flex;
+      align-items: center;
+      width: 100%;
+    }
+
+    .auth-text-input {
+      width: 100%;
+      height: 46px;
+      padding: 0 74px 0 14px;
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.15));
+      border-radius: 12px;
+      color: var(--text-primary, #f8fafc);
+      font-family: var(--font-mono, monospace);
+      font-size: 0.88rem;
+      box-sizing: border-box;
+      outline: none;
+      transition: border-color 0.15s ease;
+    }
+
+    html.light .auth-text-input {
+      background: #f8fafc;
+      border-color: rgba(15, 23, 42, 0.18);
+      color: #0f172a;
+    }
+
+    .auth-text-input:focus {
+      border-color: var(--accent-primary, #6366f1);
+    }
+
+    .btn-input-paste {
+      position: absolute;
+      right: 6px;
+      top: 50%;
+      transform: translateY(-50%);
+      height: 32px;
+      padding: 0 12px;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 8px;
+      color: var(--text-primary, #f8fafc);
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s ease;
+    }
+
+    html.light .btn-input-paste {
+      background: rgba(0, 0, 0, 0.06);
+      border-color: rgba(0, 0, 0, 0.12);
+      color: #0f172a;
+    }
+
+    .btn-input-paste:active {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    .auth-input-help {
+      font-size: 0.75rem;
+      color: var(--text-muted, #64748b);
+      line-height: 1.35;
+    }
+
+    .btn-auth-submit {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      height: 46px;
+      background: var(--accent-primary, #6366f1);
+      color: #ffffff;
+      font-weight: 600;
+      font-size: 0.92rem;
+      border-radius: 12px;
+      border: none;
+      cursor: pointer;
+      transition: opacity 0.2s ease, transform 0.1s ease;
+      user-select: none;
+    }
+
+    .btn-auth-submit:active:not(:disabled) {
+      transform: scale(0.98);
+    }
+
+    .btn-auth-submit:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      filter: grayscale(0.5);
+      pointer-events: none;
+    }
+
+    .submit-spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      border-top-color: #ffffff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      display: inline-block;
+    }
+
   </style>
 </head>
 <body>
@@ -2819,6 +3105,71 @@
         </button>
       </div>
     </footer>
+  </div>
+
+  <!-- Dedicated Google Authentication Full-Page Overlay (v1.6.1) -->
+  <div class="auth-page-overlay" id="loginOverlay" style="display: none;">
+    <div class="auth-card">
+      <div class="auth-logo-badge">
+        <img src="/icon-192.png" alt="Antigravity Studio" />
+      </div>
+      
+      <div class="auth-header">
+        <h2 class="auth-title">Google Sign-In Required</h2>
+        <p class="auth-subtitle" id="authSubtitle">
+          Sign in with your Google account to connect Antigravity CLI and unlock full AI capabilities.
+        </p>
+      </div>
+
+      <!-- Inline Status / Error Alert Banner -->
+      <div class="auth-alert" id="authAlert" style="display: none;">
+        <span class="auth-alert-icon" id="authAlertIcon">⚠️</span>
+        <span class="auth-alert-msg" id="authAlertMsg"></span>
+      </div>
+
+      <!-- Action 1: Sign in with Google Button -->
+      <div class="auth-action-block">
+        <button type="button" class="btn-auth-google" id="btnLoginGoogle">
+          <svg class="google-icon" viewBox="0 0 24 24" width="20" height="20">
+            <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"/>
+            <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.34 24 12 24z"/>
+            <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z"/>
+            <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.34 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/>
+          </svg>
+          <span id="labelLoginGoogle">Sign In with Google</span>
+        </button>
+        <div class="auth-hint" id="authUrlHint" style="display: none;">
+          <span>Browser didn't open?</span>
+          <a href="#" id="linkDirectAuth" target="_blank" rel="noopener">Open sign-in link manually</a>
+        </div>
+      </div>
+
+      <!-- Action 2 & 3: Authorization Code Input & Submit -->
+      <div class="auth-input-group">
+        <label class="auth-input-label" for="authCodeInput">Authorization Code</label>
+        <div class="auth-input-wrap">
+          <input 
+            type="text" 
+            id="authCodeInput" 
+            class="auth-text-input" 
+            placeholder="Paste authorization code here" 
+            autocomplete="off" 
+            autocorrect="off" 
+            autocapitalize="off" 
+            spellcheck="false" 
+          />
+          <button type="button" class="btn-input-paste" id="btnPasteAuthCode" title="Paste from clipboard">
+            Paste
+          </button>
+        </div>
+        <span class="auth-input-help">Google displays this code in your browser after signing in.</span>
+      </div>
+
+      <button type="button" class="btn-auth-submit" id="btnSubmitAuthCode" disabled>
+        <span class="submit-spinner" id="authSubmitSpinner" style="display: none;"></span>
+        <span id="labelSubmitAuth">Confirm & Finish Sign-In</span>
+      </button>
+    </div>
   </div>
 
   <!-- Shared Modal & Action Backdrops -->
@@ -3713,7 +4064,7 @@
         { cmd: '/models', desc: 'Select model and reasoning effort', action: () => openModelSheet() },
         { cmd: '/mode', desc: 'Switch execution mode (default, accept-edits, plan)', action: () => openModeSheet() },
         { cmd: '/quota', desc: 'Display subscription quotas remaining & context window', direct: true },
-        { cmd: '/login', desc: 'Sign in with Google to authenticate CLI & refresh models', direct: true },
+        { cmd: '/login', desc: 'Sign in with Google to authenticate CLI & refresh models', action: () => { authOverlay.show('required'); sendWs({ type: 'request_auth_url' }); } },
         { cmd: '/status', desc: 'Inspect device hardware & CLI diagnostics', direct: true },
         { cmd: '/version', desc: 'Display application and AGY CLI runtime versions', direct: true },
         { cmd: '/clear', desc: 'Start a fresh conversation session', direct: true },
@@ -3791,6 +4142,188 @@
       const btnCloseDeleteModal = document.getElementById('btnCloseDeleteModal');
       const btnCancelDelete = document.getElementById('btnCancelDelete');
       const btnConfirmDelete = document.getElementById('btnConfirmDelete');
+
+      // ---------------------------------------------------------------------
+      // Google Authentication Overlay Controller (v1.6.1)
+      // ---------------------------------------------------------------------
+      function cleanAuthCode(raw) {
+        if (!raw) return '';
+        let clean = String(raw).trim().replace(/^['"`]+|['"`]+$/g, '');
+        if (clean.includes('code=')) {
+          const m = clean.match(/[?&]code=([^&\s]+)/);
+          if (m && m[1]) {
+            try {
+              clean = decodeURIComponent(m[1]);
+            } catch (_) {
+              clean = m[1];
+            }
+          }
+        }
+        return clean.trim();
+      }
+
+      const authOverlay = {
+        el: document.getElementById('loginOverlay'),
+        btnGoogle: document.getElementById('btnLoginGoogle'),
+        labelGoogle: document.getElementById('labelLoginGoogle'),
+        inputCode: document.getElementById('authCodeInput'),
+        btnPaste: document.getElementById('btnPasteAuthCode'),
+        btnSubmit: document.getElementById('btnSubmitAuthCode'),
+        labelSubmit: document.getElementById('labelSubmitAuth'),
+        spinnerSubmit: document.getElementById('authSubmitSpinner'),
+        alertBox: document.getElementById('authAlert'),
+        alertMsg: document.getElementById('authAlertMsg'),
+        alertIcon: document.getElementById('authAlertIcon'),
+        subtitle: document.getElementById('authSubtitle'),
+        urlHint: document.getElementById('authUrlHint'),
+        linkDirect: document.getElementById('linkDirectAuth'),
+
+        show(reason = 'required') {
+          hideBootSplash();
+          if (this.el) {
+            this.el.style.display = 'flex';
+          }
+          this.resetState();
+          if (reason === 'expired') {
+            if (this.subtitle) {
+              this.subtitle.textContent = 'Your Google session has expired. Please sign in again to continue.';
+            }
+            this.showAlert('Your session has expired. Please sign in again.', 'warning');
+          } else {
+            if (this.subtitle) {
+              this.subtitle.textContent = 'Sign in with your Google account to connect Antigravity CLI and unlock full AI capabilities.';
+            }
+          }
+        },
+
+        hide() {
+          if (this.el) {
+            this.el.style.display = 'none';
+          }
+          this.resetState();
+        },
+
+        resetState() {
+          if (this.inputCode) {
+            this.inputCode.value = '';
+            this.inputCode.disabled = false;
+          }
+          if (this.btnSubmit) {
+            this.btnSubmit.disabled = true;
+          }
+          if (this.btnGoogle) {
+            this.btnGoogle.disabled = false;
+          }
+          if (this.labelGoogle) {
+            this.labelGoogle.textContent = 'Sign In with Google';
+          }
+          if (this.labelSubmit) {
+            this.labelSubmit.textContent = 'Confirm & Finish Sign-In';
+          }
+          if (this.spinnerSubmit) {
+            this.spinnerSubmit.style.display = 'none';
+          }
+          if (this.alertBox) {
+            this.alertBox.style.display = 'none';
+          }
+          if (this.urlHint) {
+            this.urlHint.style.display = 'none';
+          }
+        },
+
+        showAlert(message, type = 'error') {
+          if (!this.alertBox) return;
+          this.alertBox.style.display = 'flex';
+          this.alertBox.className = `auth-alert ${type}`;
+          if (this.alertIcon) {
+            this.alertIcon.textContent = type === 'warning' ? '⚠️' : (type === 'success' ? '✅' : '❌');
+          }
+          if (this.alertMsg) {
+            this.alertMsg.textContent = message;
+          }
+        },
+
+        setSubmitting(isSubmitting) {
+          if (this.inputCode) {
+            this.inputCode.disabled = isSubmitting;
+          }
+          if (this.btnSubmit) {
+            const hasVal = this.inputCode && cleanAuthCode(this.inputCode.value).length > 0;
+            this.btnSubmit.disabled = isSubmitting || !hasVal;
+          }
+          if (this.btnGoogle) {
+            this.btnGoogle.disabled = isSubmitting;
+          }
+          if (this.spinnerSubmit) {
+            this.spinnerSubmit.style.display = isSubmitting ? 'inline-block' : 'none';
+          }
+          if (this.labelSubmit) {
+            this.labelSubmit.textContent = isSubmitting ? 'Verifying Code...' : 'Confirm & Finish Sign-In';
+          }
+        },
+
+        init() {
+          if (!this.el) return;
+
+          if (this.btnGoogle) {
+            this.btnGoogle.addEventListener('click', () => {
+              this.btnGoogle.disabled = true;
+              if (this.labelGoogle) this.labelGoogle.textContent = 'Opening Sign-In...';
+              sendWs({ type: 'request_auth_url' });
+            });
+          }
+
+          if (this.inputCode) {
+            this.inputCode.addEventListener('input', () => {
+              const clean = cleanAuthCode(this.inputCode.value);
+              if (this.btnSubmit) {
+                this.btnSubmit.disabled = clean.length === 0;
+              }
+            });
+
+            this.inputCode.addEventListener('keydown', (e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                const clean = cleanAuthCode(this.inputCode.value);
+                if (clean && this.btnSubmit && !this.btnSubmit.disabled) {
+                  this.btnSubmit.click();
+                }
+              }
+            });
+          }
+
+          if (this.btnPaste) {
+            this.btnPaste.addEventListener('click', async () => {
+              try {
+                if (navigator.clipboard && navigator.clipboard.readText) {
+                  const text = await navigator.clipboard.readText();
+                  const clean = cleanAuthCode(text);
+                  if (clean) {
+                    this.inputCode.value = clean;
+                    if (this.btnSubmit) this.btnSubmit.disabled = false;
+                    this.inputCode.focus();
+                    return;
+                  }
+                }
+              } catch (err) {
+                console.warn('Clipboard read error:', err);
+              }
+              if (this.inputCode) this.inputCode.focus();
+              showToast('Tap and hold in the box to paste');
+            });
+          }
+
+          if (this.btnSubmit) {
+            this.btnSubmit.addEventListener('click', () => {
+              const code = cleanAuthCode(this.inputCode ? this.inputCode.value : '');
+              if (!code) return;
+              this.setSubmitting(true);
+              sendWs({ type: 'submit_auth_code', code: code });
+            });
+          }
+        }
+      };
+      authOverlay.init();
 
       let targetSession = null;
       let targetBubbleInfo = null;
@@ -4739,6 +5272,11 @@
             if (msg.is_authenticating) {
               state.isAuthenticating = true;
             }
+            if (msg.is_authenticated === false) {
+              authOverlay.show('required');
+            } else if (msg.is_authenticated === true) {
+              authOverlay.hide();
+            }
             state.wsInitialized = true;
             const pendingCid = state.pendingDeepLinkCid || (
               window.AndroidApp && typeof window.AndroidApp.consumePendingDeepLink === 'function'
@@ -5144,26 +5682,41 @@
             showToast('Rewound to prompt');
             break;
 
+          case 'auth_url':
+            state.isAuthenticating = true;
+            if (msg.url) {
+              if (authOverlay.urlHint) authOverlay.urlHint.style.display = 'flex';
+              if (authOverlay.linkDirect) authOverlay.linkDirect.href = msg.url;
+            }
+            if (authOverlay.btnGoogle) authOverlay.btnGoogle.disabled = false;
+            if (authOverlay.labelGoogle) authOverlay.labelGoogle.textContent = 'Re-open Sign-In Page';
+            break;
+
           case 'auth_required':
             state.isAuthenticating = true;
             stopLiveProgress();
-            promptInput.placeholder = 'Paste Google authorization code here and send...';
-            promptInput.focus();
+            authOverlay.show(msg.reason || 'required');
+            if (msg.url) {
+              if (authOverlay.urlHint) authOverlay.urlHint.style.display = 'flex';
+              if (authOverlay.linkDirect) authOverlay.linkDirect.href = msg.url;
+            }
             break;
 
           case 'auth_success':
             state.isAuthenticating = false;
-            promptInput.placeholder = DEFAULT_PLACEHOLDER;
-            stopLiveProgress();
-            showToast('Google Sign-In Successful!');
+            authOverlay.showAlert('Sign-In Confirmed! Setting up runtime...', 'success');
+            setInitializingControlsState(false);
+            setTimeout(() => {
+              authOverlay.hide();
+            }, 600);
             sendWs({ type: 'refresh_models' });
+            showToast('Google Sign-In Successful!');
             break;
 
           case 'auth_failed':
             state.isAuthenticating = false;
-            promptInput.placeholder = DEFAULT_PLACEHOLDER;
-            stopLiveProgress();
-            showToast('Sign-In Failed. Type /login to retry.');
+            authOverlay.setSubmitting(false);
+            authOverlay.showAlert(msg.error || 'Invalid or expired code. Please try signing in again.', 'error');
             break;
 
           case 'models_updated':
