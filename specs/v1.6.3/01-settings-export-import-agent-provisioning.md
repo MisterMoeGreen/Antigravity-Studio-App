@@ -3,7 +3,7 @@
 > **Target Release**: `v1.6.3`  
 > **Subsystem**: Frontend Presentation & Backend System Management (`agy-ui/index.html`, `agy-ui/server.py`)  
 > **Component**: Configuration Backup/Restore Subsystem & Self-Provisioning Prompt Pipeline  
-> **Status**: **DRAFT SPECIFICATION FOR ARGON REVIEW**
+> **Status**: **APPROVED & HARDENED BY ARGON ARCHITECTURAL AUDIT**
 
 ---
 
@@ -12,7 +12,7 @@
 As users develop workflows inside Antigravity Studio, their environment accumulates critical custom configurations across five distinct subsystems:
 1. **Developer SSH Keys**: Ed25519 and RSA private/public keys in `~/.ssh/` used for GitHub/GitLab deployment and remote server operations.
 2. **API Keys & Credentials**: Provider tokens (e.g., `ANTHROPIC_API_KEY`, `TAVILY_API_KEY`, `OPENAI_API_KEY`) stored in `~/.gemini/config/api_keys.json`.
-3. **Custom Skills**: User-defined agent workflow instructions and domain guides stored in `~/.gemini/config/skills/`.
+3. **Custom Skills**: User-defined agent workflow instructions, helper scripts, and domain guides stored in `~/.gemini/config/skills/`.
 4. **Model Context Protocol (MCP) Servers**: Stdio and Streamable HTTP MCP tools configured in `~/.gemini/config/mcp_config.json`.
 5. **Alpine Linux Packages**: Compilers, interpreters, and system utilities (`nodejs`, `npm`, `gcc`, `rust`, `python3`, `git`, `ripgrep`) installed in the PRoot container subsystem.
 
@@ -24,8 +24,10 @@ When upgrading devices, migrating to a new smartphone, or performing a clean ins
 ### The Self-Provisioning Agent Solution
 Instead of an opaque database dump, Antigravity Studio `v1.6.3` introduces a **Human-Readable, Agent-Executable Markdown Provisioning Bundle**:
 - **Granular Export**: Users select exactly which subsystems to export via touch checkboxes.
+- **Recursive Multi-File Skill Bundling**: Custom skills export all constituent files (`SKILL.md`, `scripts/`, `references/`), guaranteeing complete restoration.
 - **Self-Documenting & Self-Provisioning**: The generated `.md` file contains both structured configuration payloads and explicit, step-by-step execution directives for the Antigravity AI Agent.
 - **Zero-Overwrite Invariant**: The bundle instructs the AI agent to inspect the target system and **never overwrite** existing keys, skills, or MCP servers with matching names.
+- **Privacy Shield**: The UI shows a compact card in the chat viewport instead of dumping hundreds of lines of private keys on screen, and the agent is strictly prohibited from echoing private keys or API tokens.
 - **1-Tap Import via New Chat Session**: Importing the `.md` file validates its Antigravity Studio signature, creates a fresh conversation session, and prompts the AI agent to autonomously execute the setup, install missing packages, set strict UNIX permissions (`0600`/`0700`), and present a clean summary report on the mobile screen.
 
 ---
@@ -39,7 +41,7 @@ flowchart TD
         E2 --> E3["User Taps 'Export Backup (.md)'"]
         E3 --> E4["Backend Bundles Data & Calculates SHA-256"]
         E4 --> E5["Embeds Agent Instructions & Invariants"]
-        E5 --> E6["Browser Triggers .md Download Prompt<br/>& Staged to /Download/"]
+        E5 --> E6["Backend Writes to /storage/emulated/0/Download/<br/>& UI Displays Toast"]
     end
 
     subgraph Import ["Import & Provisioning Flow"]
@@ -47,15 +49,16 @@ flowchart TD
         I2 --> I3["File Picker Uploads .md"]
         I3 --> I4{"Validation Engine<br/>1. Extension == .md<br/>2. Magic Header Present?<br/>3. Valid Frontmatter & Checksum?"}
         I4 -- "Validation Failed" --> I5["Display Mobile Error Alert<br/>(Rejection Reason)"]
-        I4 -- "Validation Passed" --> I6["Display Preview Modal<br/>(Counts of Keys, Skills, MCPs, Pkgs)"]
+        I4 -- "Validation Passed" --> I6["Display Preview Modal<br/>(Accurate Counts of Keys, Skills, MCPs, Pkgs)"]
         I6 --> I7["User Taps 'Start Setup Agent'"]
         I7 --> I8["Close Settings & Create New Chat Session"]
-        I8 --> I9["Dispatch Markdown as User Prompt"]
+        I8 --> I9["Display Compact User Card in Chat &<br/>Dispatch Markdown via { type: 'user_prompt' }"]
         I9 --> I10["AI Agent Autonomously Provisions System"]
         I10 --> I11["Checks Existing Items (Zero-Overwrite)"]
-        I11 --> I12["Restores Missing Keys (0600) & Skills"]
-        I12 --> I13["Installs Missing Packages (apk add --no-cache)"]
-        I13 --> I14["Agent Renders Mobile Completion Summary"]
+        I10 --> I12["Restores Missing Keys (0600) & Skills (Recursively)"]
+        I12 --> I13["Reconciles ~/.ssh/config & api_keys.json envelope"]
+        I13 --> I14["Installs Missing Packages (apk add --no-cache)"]
+        I14 --> I15["Agent Renders Mobile Completion Summary<br/>(No Private Tokens Echoed)"]
     end
 ```
 
@@ -76,33 +79,34 @@ sequenceDiagram
     Note over User,FS: Phase 1: Configuration Export
     User->>UI: Selects checkboxes & taps "Export Backup"
     UI->>Srv: WebSocket: { type: "export_configurations", categories: [...] }
-    Srv->>FS: Read ~/.ssh/*, api_keys.json, skills/, mcp_config.json, /etc/apk/world
-    Srv->>Srv: Compute SHA-256 checksum & format Markdown with Agent Directives
-    Srv->>FS: Write backup copy to /storage/emulated/0/Download/
-    Srv-->>UI: { type: "export_configurations_result", filename: "...", content: "..." }
-    UI->>UI: Trigger browser download via Blob / HTML5 download link
-    UI-->>User: Toast: "Export saved to Downloads"
+    Srv->>FS: Read ~/.ssh/*, api_keys.json, skills/ (recursive), mcp_config.json, /etc/apk/world
+    Srv->>Srv: Assemble body, compute SHA-256 over post-frontmatter content
+    Srv->>FS: Write backup directly to /storage/emulated/0/Download/
+    Srv-->>UI: { type: "export_configurations_result", filename: "...", destination: "..." }
+    UI-->>User: Toast: "Export saved to Downloads folder"
 
     Note over User,Agent: Phase 2: Configuration Import & Validation
     User->>UI: Taps "Select Backup File" & selects .md
     UI->>UI: Read file via FileReader API
     UI->>UI: Validate Magic Signature (<!-- ANTIGRAVITY_STUDIO_EXPORT_V1 -->)
-    UI->>UI: Validate YAML frontmatter & SHA-256 checksum
+    UI->>UI: Validate YAML frontmatter & SHA-256 checksum over post-frontmatter body
     alt Validation Failed
         UI-->>User: Show inline error alert with rejection details
     else Validation Succeeded
-        UI->>UI: Show Confirmation Sheet with detected item tallies
+        UI->>UI: Show Confirmation Sheet with section-parsed item tallies
         User->>UI: Taps "Start Setup Agent"
-        UI->>UI: Close Settings Hub
+        UI->>UI: Close Settings Hub & Confirmation Sheet
         UI->>UI: Reset session state (state.conversationId = null)
-        UI->>UI: Clear chat viewport & render welcome view
-        UI->>Srv: WebSocket: { type: "user_message", prompt_text: <full_md_content> }
+        UI->>UI: Clear chat viewport & render compact badge: 📦 Restoring Provisioning Bundle
+        UI->>Srv: WebSocket: { type: "user_prompt", prompt: <full_md_content> }
         Srv->>Orch: Spawn turn with provisioning prompt
         Orch->>Agent: Deliver markdown prompt
-        Agent->>FS: Inspect existing SSH, API keys, skills, MCP configs
-        Agent->>FS: Create missing SSH keys (0600), API keys (0600), Skills, MCPs
+        Agent->>FS: Bootstrap directories (mkdir -p ~/.ssh ~/.gemini/config/skills)
+        Agent->>FS: Inspect existing SSH, API keys, skills, MCP configs (Zero-Overwrite)
+        Agent->>FS: Restore missing SSH keys (0600), API keys into envelope (0600), Skills, MCPs
+        Agent->>FS: Reconcile ~/.ssh/config IdentityFile entries
         Agent->>FS: Run apk add --no-cache for missing world packages
-        Agent-->>UI: Stream live progress & final Mobile Summary Report
+        Agent-->>UI: Stream live progress & final Mobile Summary Report (Zero Raw Secrets)
         UI-->>User: Render completion status in chat
     end
 ```
@@ -119,7 +123,6 @@ Within the Settings Hub menu group (`.settings-menu-group`), add a dedicated men
 <div class="settings-menu-item" data-target="viewExportImport">
   <div class="settings-menu-icon">
     <svg class="fa-icon" viewBox="0 0 576 512" aria-hidden="true" focusable="false">
-      <!-- FontAwesome box-archive / arrow-right-arrow-left icon -->
       <path fill="currentColor" d="M384 121.9c0-6.3-2.5-12.4-7-16.9L313.1 41c-4.5-4.5-10.6-7-17-7H64C28.7 34 0 62.7 0 98v316c0 35.3 28.7 64 64 64h384c35.3 0 64-28.7 64-64V250.1c0-6.3-2.5-12.4-7-16.9l-63.9-63.9c-4.5-4.5-10.6-7-17-7.4H384v-40zM320 68l44 44h-44V68zM48 98c0-8.8 7.2-16 16-16h224v64c0 17.7 14.3 32 32 32h64v240c0 8.8-7.2 16-16 16H64c-8.8 0-16-7.2-16-16V98zm480 94.1V414c0 17.7-14.3 32-32 32s-32-14.3-32-32V224h-48c-8.8 0-16-7.2-16-16v-48h32l96 96.1z"/>
     </svg>
   </div>
@@ -154,7 +157,7 @@ The subview provides two clear mobile touch cards: **Export Configurations** and
     <div class="settings-card">
       <div class="card-title">Export Configurations</div>
       <div class="card-subtitle">
-        Bundle your selected settings into a self-provisioning Markdown file. Download and import on any device to automatically setup your environment.
+        Bundle your selected settings into a self-provisioning Markdown file. Saved directly to your device's Downloads folder to easily migrate to any device.
       </div>
 
       <div class="export-checkbox-list">
@@ -178,7 +181,7 @@ The subview provides two clear mobile touch cards: **Export Configurations** and
           <input type="checkbox" id="chkExportSkills" class="form-checkbox" checked>
           <div class="checkbox-text">
             <span class="checkbox-label">Custom Skills</span>
-            <span class="checkbox-desc">Global workflow skills in ~/.gemini/config/skills/</span>
+            <span class="checkbox-desc">Global workflow skills & scripts in ~/.gemini/config/skills/</span>
           </div>
         </label>
 
@@ -220,7 +223,8 @@ The subview provides two clear mobile touch cards: **Export Configurations** and
         Upload an Antigravity Studio export file. The AI agent will validate the configuration and autonomously restore missing keys, skills, and tools in a new session.
       </div>
 
-      <input type="file" id="inputImportConfig" accept=".md,text/markdown" style="display:none;">
+      <!-- Accept broadened for Android SAF compatibility; JS enforces .md extension -->
+      <input type="file" id="inputImportConfig" accept=".md,text/markdown,text/plain,application/octet-stream,*/*" style="display:none;">
 
       <button class="btn btn-primary btn-block" id="btnSelectImportFile">
         <svg class="fa-icon btn-icon" viewBox="0 0 512 512"><path fill="currentColor" d="M288 109.3L288 352c0 17.7-14.3 32-32 32s-32-14.3-32-32l0-242.7-73.4 73.4c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3l128-128c12.5-12.5 32.8-12.5 45.3 0l128 128c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L288 109.3zM64 352c-35.3 0-64 28.7-64 64l0 32c0 35.3 28.7 64 64 64l384 0c35.3 0 64-28.7 64-64l0-32c0-35.3-28.7-64-64-64l-64 0c-17.7 0-32 14.3-32 32s14.3 32 32 32l64 0 0 32L64 448l0-32 64 0c17.7 0 32-14.3 32-32s-14.3-32-32-32L64 352z"/></svg>
@@ -241,12 +245,11 @@ The subview provides two clear mobile touch cards: **Export Configurations** and
 When a file passes validation, this sheet confirms the detected items before launching the setup agent:
 
 ```html
-<div class="action-sheet-overlay" id="importConfirmBackdrop"></div>
 <div class="action-sheet bottom-sheet" id="importConfirmSheet" aria-hidden="true">
   <div class="sheet-header">
     <div class="sheet-title">Ready to Restore Configuration</div>
     <button class="icon-btn" id="btnCloseImportConfirm">
-      <svg class="fa-icon" viewBox="0 0 384 512"><path fill="currentColor" d="M342.6 150.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L192 210.7 86.6 105.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L146.7 256 41.4 361.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192 301.3 297.4 406.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L237.3 256 342.6 150.6z"/></svg>
+      <svg class="fa-icon" viewBox="0 0 384 512" aria-hidden="true"><path fill="currentColor" d="M342.6 150.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L192 210.7 86.6 105.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L146.7 256 41.4 361.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192 301.3 297.4 406.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L237.3 256 342.6 150.6z"/></svg>
     </button>
   </div>
   <div class="sheet-body">
@@ -290,11 +293,11 @@ flowchart TD
 | :--- | :--- | :--- |
 | **File Extension** | File name must end in `.md` or `.markdown` (case-insensitive). | *"Please select a valid Markdown (.md) backup file."* |
 | **MIME / File Size** | Size must be between 100 bytes and 10 MB (`10,485,760` bytes). | *"File size exceeds 10 MB or file is empty."* |
-| **Magic Header** | The exact string `<!-- ANTIGRAVITY_STUDIO_EXPORT_V1 -->` must appear on Line 1. | *"Invalid backup file: Missing Antigravity Studio export signature."* |
+| **Magic Header** | The exact string `<!-- ANTIGRAVITY_STUDIO_EXPORT_V1 -->` must appear on Line 1. | *"Invalid backup file: Missing Antigravity Studio export signature on Line 1."* |
 | **YAML Frontmatter** | Delimited by `---` immediately after magic header; contains `generator: "Antigravity Studio"`. | *"Corrupted backup header: Invalid generator specification."* |
 | **Export Version** | `export_version` must equal `"1.0"`. | *"Unsupported export version. Please update Antigravity Studio."* |
 | **Category Declarations** | `categories:` array contains at least one recognized category (`ssh_keys`, `api_keys`, `skills`, `mcps`, `packages`). | *"Export contains no valid configuration sections."* |
-| **SHA-256 Checksum** | `checksum: sha256:<hex>` must match the SHA-256 hash of the content following the frontmatter `---`. | *"Integrity check failed: Checksum mismatch indicates file was modified or corrupted."* |
+| **SHA-256 Checksum** | `checksum: sha256:<hex>` must match the SHA-256 digest of the entire content following the frontmatter `---`. | *"Integrity check failed: Checksum mismatch indicates file was modified or corrupted."* |
 
 ### 5.2 Client-Side Validation Implementation
 ```javascript
@@ -320,16 +323,16 @@ async function validateExportMarkdown(file) {
     throw new Error('Invalid backup file: Missing Antigravity Studio export signature on Line 1.');
   }
 
-  // 4. Extract frontmatter
+  // 4. Extract frontmatter and entire post-frontmatter body
   const fmMatch = text.match(/^<!-- ANTIGRAVITY_STUDIO_EXPORT_V1 -->\s*\r?\n---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
   if (!fmMatch) {
     throw new Error('Corrupted export file: Missing YAML frontmatter block.');
   }
 
   const rawFrontmatter = fmMatch[1];
-  const payloadBody = fmMatch[2];
+  const postFrontmatterBody = fmMatch[2];
 
-  // Parse simple YAML fields
+  // Parse YAML fields
   const meta = {};
   for (const fline of rawFrontmatter.split(/\r?\n/)) {
     const kv = fline.match(/^([a-z_]+):\s*(.+)$/i);
@@ -345,31 +348,50 @@ async function validateExportMarkdown(file) {
     throw new Error(`Unsupported export version (${meta.export_version || 'unknown'}).`);
   }
 
-  // 5. Verify Checksum (Normalize CRLF to LF to ensure cross-platform consistency)
+  // 5. Verify Checksum over entire post-frontmatter body (CRLF normalized to LF)
   if (meta.checksum && meta.checksum.startsWith('sha256:')) {
-    const expectedHash = meta.checksum.split(':')[1].trim();
-    const normalizedPayload = payloadBody.replace(/\r\n/g, '\n').trim();
+    const expectedHash = meta.checksum.split(':')[1].trim().toLowerCase();
+    const normalizedBody = postFrontmatterBody.replace(/\r\n/g, '\n').trim();
     const encoder = new TextEncoder();
-    const data = encoder.encode(normalizedPayload);
+    const data = encoder.encode(normalizedBody);
     const hashBuffer = await crypto.subtle.digest('SHA-256', data);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const computedHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    const computedHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('').toLowerCase();
 
     if (computedHash !== expectedHash) {
-      throw new Error('Integrity check failed: The export file content does not match its SHA-256 checksum.');
+      throw new Error('Integrity check failed: Checksum mismatch indicates file was modified or corrupted.');
     }
   }
 
-  // 6. Extract summary tallies for confirmation sheet
+  // 6. Section-scoped item tallies extraction
   const tallies = {
-    ssh_keys: (payloadBody.match(/### SSH Key:\s*`([^`]+)`/g) || []).length,
-    api_keys: (payloadBody.match(/"value":\s*"[^"]+"/g) || []).length,
-    skills: (payloadBody.match(/### Skill:\s*`([^`]+)`/g) || []).length,
-    mcps: (payloadBody.match(/### MCP Server:\s*`([^`]+)`/g) || []).length,
+    ssh_keys: (postFrontmatterBody.match(/### SSH Key:\s*`([^`]+)`/g) || []).length,
+    api_keys: 0,
+    skills: (postFrontmatterBody.match(/### Skill:\s*`([^`]+)`/g) || []).length,
+    mcps: 0,
     packages: 0,
   };
 
-  const pkgMatch = payloadBody.match(/## Section: Alpine Linux Packages[\s\S]*?```json\s*([\s\S]*?)\s*```/);
+  // Parse API Keys section JSON block
+  const apiMatch = postFrontmatterBody.match(/## Section: API Keys[\s\S]*?```json\s*([\s\S]*?)\s*```/);
+  if (apiMatch) {
+    try {
+      const keys = JSON.parse(apiMatch[1]);
+      tallies.api_keys = typeof keys === 'object' && keys !== null ? Object.keys(keys).length : 0;
+    } catch (_) {}
+  }
+
+  // Parse MCP Servers section JSON block
+  const mcpMatch = postFrontmatterBody.match(/## Section: MCP Servers[\s\S]*?```json\s*([\s\S]*?)\s*```/);
+  if (mcpMatch) {
+    try {
+      const mcps = JSON.parse(mcpMatch[1]);
+      tallies.mcps = typeof mcps === 'object' && mcps !== null ? Object.keys(mcps).length : 0;
+    } catch (_) {}
+  }
+
+  // Parse Alpine Linux Packages section JSON block
+  const pkgMatch = postFrontmatterBody.match(/## Section: Alpine Linux Packages[\s\S]*?```json\s*([\s\S]*?)\s*```/);
   if (pkgMatch) {
     try {
       const pkgs = JSON.parse(pkgMatch[1]);
@@ -377,7 +399,7 @@ async function validateExportMarkdown(file) {
     } catch (_) {}
   }
 
-  return { text, meta, tallies };
+  return { text, meta, tallies, postFrontmatterBody };
 }
 ```
 
@@ -421,25 +443,35 @@ You are operating inside the Antigravity Studio environment backed by an integra
 - MCP Config: `~/.gemini/config/mcp_config.json`
 
 ### Mandatory Safety Rules:
-1. **CRITICAL ZERO-OVERWRITE INVARIANT**:
+1. **DIRECTORY BOOTSTRAP**:
+   - Ensure all target directories exist before writing files:
+     `mkdir -p ~/.ssh ~/.gemini/config ~/.gemini/config/skills ~/.gemini/config/rules`
+2. **CRITICAL ZERO-OVERWRITE INVARIANT**:
    - **NEVER** overwrite an existing key, file, skill, or MCP server if one with the same name already exists on disk.
    - For every item in this document:
      - **SSH Keys**: Check if `~/.ssh/<name>` or `~/.ssh/<name>.pub` exists. If it exists, skip it and record as `[PRESERVED]`.
-     - **API Keys**: Read `~/.gemini/config/api_keys.json`. If key name already exists, skip it and record as `[PRESERVED]`.
+     - **API Keys**: Read `~/.gemini/config/api_keys.json`. If key name already exists in `"keys"`, skip it and record as `[PRESERVED]`.
      - **Skills**: Check if directory `~/.gemini/config/skills/<skill_name>/` exists. If it exists, skip it and record as `[PRESERVED]`.
-     - **MCP Servers**: Read `~/.gemini/config/mcp_config.json`. If server name already exists in `mcpServers`, skip it and record as `[PRESERVED]`.
+     - **MCP Servers**: Read `~/.gemini/config/mcp_config.json`. If server name already exists in `"mcpServers"`, skip it and record as `[PRESERVED]`.
      - **Packages**: Check if package is installed via `apk info -e <pkg_name>`. If installed, skip it and record as `[PRESERVED]`.
-2. **STRICT UNIX PERMISSIONS**:
+3. **STRICT UNIX PERMISSIONS**:
    - `~/.ssh` directory must have permissions `0700` (`chmod 700 ~/.ssh`).
    - Private SSH keys must have permissions `0600` (`chmod 600 ~/.ssh/<name>`).
    - Public SSH keys must have permissions `0644` (`chmod 644 ~/.ssh/<name>.pub`).
    - `api_keys.json` and `mcp_config.json` must strictly have permissions `0600` (`chmod 600 <file>`).
-3. **PACKAGE INSTALLATION**:
+4. **API KEYS STORE ENVELOPE PRESERVATION**:
+   - When updating `~/.gemini/config/api_keys.json`, strictly maintain the outer envelope:
+     `{ "version": 1, "updated_at": <epoch_timestamp>, "keys": { "<KEY_NAME>": { "value": "...", "description": "..." } } }`
+   - Merge new keys into `"keys"`; do not replace the outer envelope with a flat dictionary.
+5. **SSH CONFIG RECONCILIATION**:
+   - For each restored private SSH key, ensure `~/.ssh/config` has an `IdentityFile ~/.ssh/<name>` entry so Git commands automatically utilize the identity.
+6. **PACKAGE INSTALLATION**:
    - For all missing packages listed under Alpine Linux Packages, install in batch using:
      `apk add --no-cache <pkg1> <pkg2> ...` via your `run_command` tool.
-4. **COMPLETION REPORTING**:
+7. **PRIVACY SHIELD & COMPLETION REPORTING**:
+   - **CRITICAL**: NEVER echo, print, or log private key strings or API token secrets in your chat output!
    - At the conclusion of execution, output a clear, compact summary formatted for a narrow mobile screen using markdown bullet points:
-     - `[CREATED]` items successfully added.
+     - `[CREATED]` items successfully added (name only).
      - `[PRESERVED]` items skipped because they already existed.
      - `[INSTALLED]` container packages added.
      - `[ERRORS]` any failures encountered (or "None").
@@ -468,7 +500,7 @@ b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAA...
 
 ## Section: API Keys
 
-Configure into `~/.gemini/config/api_keys.json` and regenerate `~/.gemini/config/rules/api_keys_manifest.md`:
+Merge into the `"keys"` object inside `~/.gemini/config/api_keys.json` and regenerate `~/.gemini/config/rules/api_keys_manifest.md`:
 
 ```json
 {
@@ -489,14 +521,24 @@ Configure into `~/.gemini/config/api_keys.json` and regenerate `~/.gemini/config
 
 ### Skill: `argon-agent`
 - **Folder**: `~/.gemini/config/skills/argon-agent/`
-- **File**: `~/.gemini/config/skills/argon-agent/SKILL.md`
 
+#### File: `SKILL.md`
 ```markdown
 ---
 name: argon-agent
 description: Architectural review, security auditing, and system hardening specialist.
 ---
 # Argon Agent System Instructions...
+```
+
+#### File: `scripts/call_argon.py`
+```python
+# Argon runner script...
+```
+
+#### File: `references/audit_matrix.md`
+```markdown
+# Audit Matrix...
 ```
 
 ---
@@ -621,22 +663,34 @@ async def generate_config_export_bundle(categories: list[str]) -> tuple[str, str
             }
             body_sections.append(
                 "## Section: API Keys\n\n"
-                "Configure into `~/.gemini/config/api_keys.json` and regenerate `~/.gemini/config/rules/api_keys_manifest.md`:\n\n"
+                "Merge into the `\"keys\"` object inside `~/.gemini/config/api_keys.json` and regenerate `~/.gemini/config/rules/api_keys_manifest.md`:\n\n"
                 f"```json\n{json.dumps(export_keys, indent=2)}\n```"
             )
 
-    # 3. Custom Skills
+    # 3. Custom Skills (Recursive Bundling)
     if "skills" in categories and GLOBAL_SKILLS_DIR.is_dir():
         skill_blocks = []
         for sdir in sorted(GLOBAL_SKILLS_DIR.iterdir()):
             if sdir.is_dir() and (sdir / "SKILL.md").exists():
-                skill_content = (sdir / "SKILL.md").read_text(encoding="utf-8")
-                skill_blocks.append(
-                    f"### Skill: `{sdir.name}`\n"
-                    f"- **Folder**: `~/.gemini/config/skills/{sdir.name}/`\n"
-                    f"- **File**: `~/.gemini/config/skills/{sdir.name}/SKILL.md`\n\n"
-                    f"```markdown\n{skill_content}\n```"
-                )
+                file_blocks = []
+                for spath in sorted(sdir.rglob("*")):
+                    if spath.is_file():
+                        rel = spath.relative_to(sdir).as_posix()
+                        if "__pycache__" in rel or rel.startswith("."):
+                            continue
+                        try:
+                            fcontent = spath.read_text(encoding="utf-8", errors="replace")
+                            file_blocks.append(
+                                f"#### File: `{rel}`\n```\n{fcontent}\n```"
+                            )
+                        except Exception as exc:
+                            logger.warning("Could not read skill file %s: %s", spath, exc)
+                if file_blocks:
+                    skill_blocks.append(
+                        f"### Skill: `{sdir.name}`\n"
+                        f"- **Folder**: `~/.gemini/config/skills/{sdir.name}/`\n\n"
+                        + "\n\n".join(file_blocks)
+                    )
         if skill_blocks:
             body_sections.append("## Section: Custom Skills\n\n" + "\n\n---\n\n".join(skill_blocks))
 
@@ -665,11 +719,34 @@ async def generate_config_export_bundle(categories: list[str]) -> tuple[str, str
                 f"```json\n{json.dumps(pkg_names, indent=2)}\n```"
             )
 
-    payload_body = "\n\n---\n\n".join(body_sections)
+    # Build Preamble & Directives
+    preamble = (
+        f"# Antigravity Studio Environment Self-Provisioning Bundle\n\n"
+        f"> **NOTICE TO AI AGENT**: You have been invoked to restore an exported configuration bundle inside Antigravity Studio on Android. Follow the instructions and safety invariants below strictly.\n\n"
+        f"---\n\n"
+        f"## Agent Execution Directives & Safety Invariants\n\n"
+        f"You are operating inside the Antigravity Studio environment backed by an integrated Alpine Linux container subsystem (PRoot).\n\n"
+        f"### Mandatory Safety Rules:\n"
+        f"1. **DIRECTORY BOOTSTRAP**: Ensure directories exist (`mkdir -p ~/.ssh ~/.gemini/config ~/.gemini/config/skills ~/.gemini/config/rules`).\n"
+        f"2. **CRITICAL ZERO-OVERWRITE INVARIANT**: NEVER overwrite an existing key, file, skill, or MCP server if one with the same name already exists on disk.\n"
+        f"   - **SSH Keys**: Check `~/.ssh/<name>` and `~/.ssh/<name>.pub`. If present, skip and mark `[PRESERVED]`.\n"
+        f"   - **API Keys**: Read `~/.gemini/config/api_keys.json`. If key already exists in `\"keys\"`, skip and mark `[PRESERVED]`.\n"
+        f"   - **Skills**: Check `~/.gemini/config/skills/<name>/`. If present, skip and mark `[PRESERVED]`.\n"
+        f"   - **MCP Servers**: Read `~/.gemini/config/mcp_config.json`. If present, skip and mark `[PRESERVED]`.\n"
+        f"   - **Packages**: Check `apk info -e <pkg>`. If installed, skip and mark `[PRESERVED]`.\n"
+        f"3. **STRICT UNIX PERMISSIONS**: Set `~/.ssh` to 0700, private keys to 0600, public keys to 0644, and config JSON files to 0600.\n"
+        f"4. **API KEYS STORE ENVELOPE PRESERVATION**: Merge keys into the `\"keys\"` object inside `~/.gemini/config/api_keys.json` without modifying outer metadata.\n"
+        f"5. **SSH CONFIG RECONCILIATION**: Ensure `~/.ssh/config` contains `IdentityFile ~/.ssh/<name>` for each restored key.\n"
+        f"6. **PACKAGE INSTALLATION**: Install missing packages with `apk add --no-cache <pkg1> <pkg2> ...`.\n"
+        f"7. **PRIVACY SHIELD & COMPLETION REPORTING**: NEVER echo private keys or API tokens in chat output. Render a clean mobile summary list using `[CREATED]`, `[PRESERVED]`, `[INSTALLED]`, and `[ERRORS]` badges.\n\n"
+    )
 
-    # Normalize newlines to LF for cross-platform SHA-256 computation
-    normalized_payload = payload_body.replace("\r\n", "\n").strip()
-    checksum = hashlib.sha256(normalized_payload.encode("utf-8")).hexdigest()
+    # Post-frontmatter body is preamble + sections
+    post_frontmatter_body = preamble + "---\n\n" + "\n\n---\n\n".join(body_sections)
+
+    # Normalize CRLF to LF for consistent SHA-256 computation
+    normalized_body = post_frontmatter_body.replace("\r\n", "\n").strip()
+    checksum = hashlib.sha256(normalized_body.encode("utf-8")).hexdigest()
 
     # Frontmatter Header
     header = (
@@ -682,26 +759,11 @@ async def generate_config_export_bundle(categories: list[str]) -> tuple[str, str
         f"categories:\n" + "\n".join(f"  - {c}" for c in categories) + "\n"
         f'checksum: "sha256:{checksum}"\n'
         f"---\n\n"
-        f"# Antigravity Studio Environment Self-Provisioning Bundle\n\n"
-        f"> **NOTICE TO AI AGENT**: You have been invoked to restore an exported configuration bundle inside Antigravity Studio on Android. Follow the instructions and safety invariants below strictly.\n\n"
-        f"---\n\n"
-        f"## Agent Execution Directives & Safety Invariants\n\n"
-        f"You are operating inside the Antigravity Studio environment backed by an integrated Alpine Linux container subsystem (PRoot).\n\n"
-        f"### Mandatory Safety Rules:\n"
-        f"1. **CRITICAL ZERO-OVERWRITE INVARIANT**: NEVER overwrite an existing key, file, skill, or MCP server if one with the same name already exists on disk.\n"
-        f"   - **SSH Keys**: Check `~/.ssh/<name>` and `~/.ssh/<name>.pub`. If present, skip and mark `[PRESERVED]`.\n"
-        f"   - **API Keys**: Read `~/.gemini/config/api_keys.json`. If key already exists, skip and mark `[PRESERVED]`.\n"
-        f"   - **Skills**: Check `~/.gemini/config/skills/<name>/`. If present, skip and mark `[PRESERVED]`.\n"
-        f"   - **MCP Servers**: Read `~/.gemini/config/mcp_config.json`. If present, skip and mark `[PRESERVED]`.\n"
-        f"   - **Packages**: Check `apk info -e <pkg>`. If installed, skip and mark `[PRESERVED]`.\n"
-        f"2. **STRICT UNIX PERMISSIONS**: Set `~/.ssh` to 0700, private keys to 0600, public keys to 0644, and config JSON files to 0600.\n"
-        f"3. **PACKAGE INSTALLATION**: Install missing packages with `apk add --no-cache <pkg1> <pkg2> ...`.\n"
-        f"4. **COMPLETION REPORTING**: Render a clean mobile summary list using `[CREATED]`, `[PRESERVED]`, `[INSTALLED]`, and `[ERRORS]` badges.\n\n"
     )
 
-    full_content = header + payload_body
+    full_content = header + post_frontmatter_body
 
-    # Save copy to /storage/emulated/0/Download/
+    # Save copy directly to /storage/emulated/0/Download/
     download_dir = Path("/storage/emulated/0/Download")
     download_dir.mkdir(parents=True, exist_ok=True)
     dest_path = download_dir / filename
@@ -718,7 +780,7 @@ When the user taps **"Start Setup Agent"** in `#importConfirmSheet`:
 1. The modal and Settings Hub are dismissed immediately.
 2. The active conversation state is reset to a clean new turn:
    ```javascript
-   function launchProvisioningSession(markdownPrompt) {
+   function launchProvisioningSession(markdownPrompt, tallies) {
      // Close modals and hub
      closeImportConfirmSheet();
      closeSettingsHub();
@@ -740,8 +802,30 @@ When the user taps **"Start Setup Agent"** in `#importConfirmSheet`:
      stopLiveProgress();
      resetSendButtonToIdle();
 
-     // Dispatch markdown prompt to AI Agent
-     dispatchUserPrompt(markdownPrompt);
+     // Compose compact mobile bubble text instead of dumping raw keys
+     const summaryParts = [];
+     if (tallies.ssh_keys) summaryParts.push(`${tallies.ssh_keys} SSH keys`);
+     if (tallies.api_keys) summaryParts.push(`${tallies.api_keys} API keys`);
+     if (tallies.skills) summaryParts.push(`${tallies.skills} skills`);
+     if (tallies.mcps) summaryParts.push(`${tallies.mcps} MCPs`);
+     if (tallies.packages) summaryParts.push(`${tallies.packages} packages`);
+     const summaryText = summaryParts.join(', ') || 'configurations';
+
+     const compactDisplay = `📦 **Restoring Antigravity Studio Provisioning Bundle**\n\nRestoring ${summaryText} into environment...`;
+
+     // Render compact badge in viewport
+     appendUserBubble(compactDisplay, []);
+
+     // Dispatch full markdown prompt via WebSocket
+     sendWs({
+       type: 'user_prompt',
+       prompt: markdownPrompt,
+       attachments: [],
+       conversation_id: null,
+       model: state.model,
+       mode: state.mode,
+       effort: state.effort,
+     });
    }
    ```
 3. The AI agent executes in the newly created session, reads the embedded directives, interacts with the filesystem, installs missing packages, and logs progress live into the chat viewport.
@@ -750,24 +834,27 @@ When the user taps **"Start Setup Agent"** in `#importConfirmSheet`:
 
 ## 9. Implementation Acceptance Criteria (AC)
 
-- [ ] **AC-1.6.3.9 (Settings Navigation)**: Settings Hub contains an "Export & Import" menu item that navigates to `#viewExportImport` with back-navigation support.
-- [ ] **AC-1.6.3.10 (Touch Checkbox Selection)**: The Export view presents 5 checkboxes (`SSH Keys`, `API Keys`, `Custom Skills`, `MCP Servers`, `Packages`) and a "Select All / Deselect All" toggle.
-- [ ] **AC-1.6.3.11 (Markdown Export Download)**: Tapping "Export Backup (.md)" triggers a browser download prompt with filename `AntigravityStudio-Backup-YYYYMMDD_HHMMSS.agy.md` and copies it to `/storage/emulated/0/Download/`.
+- [ ] **AC-1.6.3.9 (Settings Navigation)**: Settings Hub contains an "Export & Import" menu item that navigates to `#viewExportImport` with back-navigation support and proper dismiss handling.
+- [ ] **AC-1.6.3.10 (Touch Checkbox Selection)**: The Export view presents 5 checkboxes (`SSH Keys`, `API Keys`, `Custom Skills`, `MCP Servers`, `Packages`) and a "Select All / Deselect All" toggle with a minimum 44px touch target.
+- [ ] **AC-1.6.3.11 (Direct Storage Export & Notification)**: Tapping "Export Backup (.md)" generates `AntigravityStudio-Backup-YYYYMMDD_HHMMSS.agy.md`, writes it directly to `/storage/emulated/0/Download/`, and notifies the user with an in-app toast.
 - [ ] **AC-1.6.3.12 (Export Security Warning)**: The Export view displays a prominent security warning regarding unencrypted credentials in the exported Markdown.
 - [ ] **AC-1.6.3.13 (File Type & Extension Check)**: Importing a non-Markdown file (e.g. `.json`, `.png`, `.bin`) is rejected with an inline error alert.
-- [ ] **AC-1.6.3.14 (Magic Header & Signature Validation)**: Uploading an arbitrary `.md` file that lacks `<!-- ANTIGRAVITY_STUDIO_EXPORT_V1 -->` or has an invalid generator frontmatter fails validation with a clear error banner.
-- [ ] **AC-1.6.3.15 (Integrity & SHA-256 Check)**: If the Markdown body content has been altered, validation detects the SHA-256 checksum mismatch and aborts import.
-- [ ] **AC-1.6.3.16 (Confirmation Sheet Preview)**: A valid file displays `#importConfirmSheet` with accurate item counts for SSH keys, API keys, skills, MCP servers, and packages.
-- [ ] **AC-1.6.3.17 (New Session Initialization)**: Tapping "Start Setup Agent" closes Settings Hub, resets the active conversation ID, and submits the full Markdown content as the opening prompt.
-- [ ] **AC-1.6.3.18 (Zero-Overwrite Invariant)**: The agent strictly respects existing configurations and does not overwrite existing SSH keys, API keys, skills, or MCP configurations.
+- [ ] **AC-1.6.3.14 (Magic Header & Signature Validation)**: Uploading an arbitrary `.md` file that lacks `<!-- ANTIGRAVITY_STUDIO_EXPORT_V1 -->` on Line 1 or has an invalid generator frontmatter fails validation with a clear error banner.
+- [ ] **AC-1.6.3.15 (Integrity & SHA-256 Check)**: The SHA-256 checksum is computed over the entire post-frontmatter payload body. Any tampering or truncation is detected and aborts import.
+- [ ] **AC-1.6.3.16 (Confirmation Sheet Preview)**: A valid file displays `#importConfirmSheet` with accurate item counts for SSH keys, API keys, skills, MCP servers, and packages, parsed from section blocks.
+- [ ] **AC-1.6.3.17 (New Session Initialization & Privacy Shield)**: Tapping "Start Setup Agent" closes Settings Hub, resets the active conversation ID, dispatches `{ type: "user_prompt" }`, and renders a compact card badge (`📦 Restoring Environment Bundle`) in the chat bubble.
+- [ ] **AC-1.6.3.18 (Zero-Overwrite Invariant)**: The agent strictly respects existing configurations and does not overwrite existing SSH keys, API keys, skills, or MCP configurations, labeling them `[PRESERVED]`.
 - [ ] **AC-1.6.3.19 (UNIX Permission Enforcement)**: Restored private keys receive mode `0600`, public keys `0644`, and config files `0600`.
+- [ ] **AC-1.6.3.20 (Recursive Skill Bundling)**: Custom skills export all constituent files (`scripts/`, `references/`), ensuring full functional integrity after restoration.
+- [ ] **AC-1.6.3.21 (API Keys Store Schema Envelope)**: The agent directives mandate updating the `"keys"` object inside `~/.gemini/config/api_keys.json` with the standard versioned schema envelope.
+- [ ] **AC-1.6.3.22 (SSH Config & Directory Bootstrap)**: The agent directives mandate creating missing parent directories (`mkdir -p`) and reconciling `~/.ssh/config` `IdentityFile` entries for all restored keys.
 
 ---
 
 ## 10. Gemini 4 Argon Architectural Review & Security Hardening
 
 - **Auditor**: `argon-agent (high-reasoning)`
-- **Overall Status**: **AUDITED & HARDENED (6 Architectural Mitigations Integrated)**
+- **Overall Status**: **AUDITED & HARDENED (13 Architectural Mitigations Integrated)**
 
 ### Critical Mitigations Matrix
 | Issue ID | Severity | Subsystem | Threat & Impact | Architectural Mitigation |
@@ -777,4 +864,11 @@ When the user taps **"Start Setup Agent"** in `#importConfirmSheet`:
 | **ARGON-V163-03** | MEDIUM | Data Overwrite Hazards | Importing an export on a machine with existing keys could clobber or wipe user credentials. | Hardcode the **Zero-Overwrite Invariant** into the agent directives: AI Agent must verify existence before creating any item and label collisions as `[PRESERVED]`. |
 | **ARGON-V163-04** | MEDIUM | Denial of Service / File Flooding | User uploading a multi-gigabyte file could crash the WebView process via memory exhaustion. | Hardcap file upload size at 10 MB in JavaScript `FileReader` before reading into memory; reject larger files immediately. |
 | **ARGON-V163-05** | LOW | Package Name Injection | Malformed package names in the packages section could attempt command injection during `apk add`. | Agent directives mandate strict package name sanitization (`^[a-zA-Z0-9_\-\.\+]+$`), passing arguments as discrete array parameters to `run_command` without shell interpolation. |
-| **ARGON-V163-06** | MEDIUM | Checksum Invalidation | CRLF vs LF line ending translation across OS platforms (e.g. Windows/Android/Git) causes false checksum mismatch failures. | Normalize all payload line breaks (`payloadBody.replace(/\r\n/g, '\n').trim()`) before computing or verifying the SHA-256 digest in both Python and JavaScript. |
+| **ARGON-V163-06** | MEDIUM | Checksum Line-Ending Drift | CRLF vs LF translation across OS platforms (Windows, Android, Git) causes false SHA-256 checksum failures. | Unconditionally normalize all payload line endings (`replace(/\r\n/g, '\n').trim()`) prior to computing or validating the SHA-256 digest in both frontend and backend. |
+| **ARGON-V163-07** | **CRITICAL** | SHA-256 Payload Mismatch | Python computed hash over sections only, but JavaScript hashed post-frontmatter body including preamble, causing 100% verification failure. | Python and JavaScript both compute SHA-256 over the entire body following the closing frontmatter delimiter `---`. |
+| **ARGON-V163-08** | **CRITICAL** | Multi-File Skill Stripping | Exporting only `SKILL.md` drops `scripts/` and `references/`, breaking multi-file skills like `argon-agent` and `skoda-control`. | Recursively traverse skill directories and bundle all constituent files preserving relative file paths. |
+| **ARGON-V163-09** | **HIGH** | API Keys Store Corruption | Flat JSON structure in prompt could lead agent to overwrite `api_keys.json` without the `{"version": 1, "updated_at": ..., "keys": {...}}` envelope, wiping all keys. | Explicitly mandate the envelope schema and instruct agent to merge into the `"keys"` dictionary. |
+| **ARGON-V163-10** | **HIGH** | Confirmation Tally Errors | Regex matching `### MCP Server:` failed because MCPs are emitted as a JSON dictionary; `"value":` matched globally across skills. | Parse specific section blocks (`JSON.parse` the fenced block in Section: MCP Servers and API Keys) to extract true item counts. |
+| **ARGON-V163-11** | **HIGH** | Android SAF MIME Trap | Using `accept=".md,text/markdown"` causes Android SAF file picker to gray out `.md` files on devices lacking markdown MIME mapping. | Broaden `accept` to include `.md,text/markdown,text/plain,application/octet-stream,*/*` and enforce the `.md` extension in client JS. |
+| **ARGON-V163-12** | **MEDIUM** | Chat Viewport Privacy Leak | Dumping raw markdown prompt into chat bubble displays private keys on mobile screen; WebSocket protocol used `user_message` instead of `user_prompt`. | Use `user_prompt` and render a compact badge (`📦 Restoring Environment Bundle`) in chat; instruct agent never to echo private keys in output. |
+| **ARGON-V163-13** | **MEDIUM** | SSH Config & Directory Bootstrap | Restoring keys without updating `~/.ssh/config` prevents Git from resolving non-default key identities; missing parent dirs cause write errors. | Mandate `mkdir -p` and append `IdentityFile` entries in `~/.ssh/config` for all restored keys. |
