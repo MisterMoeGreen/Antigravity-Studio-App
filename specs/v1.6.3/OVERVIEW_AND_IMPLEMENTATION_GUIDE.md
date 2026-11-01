@@ -68,13 +68,15 @@ specs/v1.6.3/
 - [ ] **AC-1.6.3.29 (Successful Decryption & Restore Pipeline Hand-Off)**: Entering the correct password derives the key via `scrypt`, decrypts the payload in RAM, validates the inner SHA-256 checksum, and seamlessly invokes the local restoration engine.
 - [ ] **AC-1.6.3.30 (Legacy V1 Backward Compatibility)**: Uploading an unencrypted `V1` backup (`<!-- ANTIGRAVITY_STUDIO_EXPORT_V1 -->`) displays a legacy notice and restores normally without requiring a password.
 - [ ] **AC-1.6.3.31 (Mobile Touch Standards & Zero-Latency)**: Password toggle buttons and modal actions adhere to 44px minimum touch targets and 300ms tap elimination rules.
+- [ ] **AC-1.6.3.32 (KDF Parameter Clamping & DoS Defense)**: Scrypt parameter values in frontmatter exceeding safety bounds ($N > 65536$, $r > 16$, $p > 4$) are rejected immediately before key derivation.
+- [ ] **AC-1.6.3.33 (Dual-Layer Integrity Verification)**: Outer SHA-256 of the Base64 ciphertext is verified prior to scrypt derivation; inner SHA-256 is verified after AEAD decryption.
 
 ---
 
 ## 4. Gemini 4 Argon Architectural Review & Security Hardening
 
 - **Auditor**: `argon-agent (high-reasoning)`
-- **Overall Status**: **AUDITED & HARDENED (20 Architectural Mitigations Integrated)**
+- **Overall Status**: **AUDITED & HARDENED (27 Architectural Mitigations Integrated)**
 
 ### Critical Mitigations Matrix
 
@@ -100,3 +102,10 @@ specs/v1.6.3/
 | **ARGON-V163-18** | **MEDIUM** | Partial Failure Resiliency | If `apk add` fails due to lack of network, aborting entire restore gives false impression that keys also failed. | Decouple filesystem restoration from network package installation. If `apk add` fails, record in `packages.failed`, but report overall `success: true` with a clear partial warning. |
 | **ARGON-V163-19** | **MEDIUM** | Stale Settings Hub Cache | Restoring configurations leaves Settings Hub views showing stale cached data until app restart. | On `import_configurations_result`, automatically dispatch WebSocket refresh commands (`list_ssh_keys`, `list_skills`, `list_mcp_servers`, `list_installed_packages`). |
 | **ARGON-V163-20** | **MEDIUM** | Memory Flooding via Oversized Bundle | An oversized `.md` file could exhaust Termux heap memory during regex parsing. | Enforce a hard 10 MB ceiling in `server.py` (`len(content) <= 10 * 1024 * 1024`) prior to running regex parsing or SHA-256 computation. |
+| **ARGON-V163-21** | **HIGH** | KDF / Resource Exhaustion | Attacker crafts a `.agy.md` bundle with excessive scrypt parameters (`kdf_n: 1048576`), causing Android OS OOM kill or freeze. | Strictly enforce parameter limits ($N \le 65536, r \le 16, p \le 4$) in `server.py` before invoking `hashlib.scrypt`. |
+| **ARGON-V163-22** | **MEDIUM** | Android IME / Keyboard Leak | Android third-party keyboards cache text input from standard fields into cloud predictive dictionaries. | Set `autocomplete="new-password"` / `current-password`, `autocorrect="off"`, `autocapitalize="off"`, `spellcheck="false"`. |
+| **ARGON-V163-23** | **HIGH** | CSPRNG Nonce Entropy | Pseudo-random or static nonces in AES-GCM allow catastrophic key recovery upon single collision. | Use `secrets.token_bytes(16)` for salt and `secrets.token_bytes(12)` for nonce; forbid user-supplied nonces. |
+| **ARGON-V163-24** | **MEDIUM** | Premature CPU Burn | Computing memory-hard scrypt derivation on truncated or corrupted files wastes CPU and mobile battery. | Enforce outer SHA-256 integrity check against the Base64 ciphertext block *prior* to running scrypt key derivation. |
+| **ARGON-V163-25** | **LOW** | Decryption Error Leakage | Exposing specific cryptographic exception messages (`InvalidTag` vs `ValueError`) leaks ciphertext structure. | Uniformly map all AEAD tag and ciphertext failures to `"Incorrect password or corrupted backup file."` |
+| **ARGON-V163-26** | **HIGH** | Import Concurrency Race | User double-tapping "Decrypt & Restore" triggers concurrent scrypt derivations and package operations. | Immediately disable submit button on tap, show spinner, and serialize execution under `IMPORT_MUTATION_LOCK`. |
+| **ARGON-V163-27** | **CRITICAL** | Monolith Python AST Class Scoping | Inserting helper functions inside `server.py` without proper indentation breaks class scope (`ARGON-08`). | Implement crypto utilities as pure module-level functions; verify AST via `scripts/verify_architectural_invariants.py`. |
