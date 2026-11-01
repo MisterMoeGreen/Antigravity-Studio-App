@@ -7,6 +7,8 @@ Executed automatically during Gradle preBuild to prevent regressions.
 import ast
 import os
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -144,7 +146,22 @@ def check_javascript_syntax():
                 sys.exit(1)
         print(f"  ✓ JavaScript syntax verified across {len(script_matches)} script blocks (esprima).")
     except ImportError:
-        print("  ⚠ esprima not installed; skipping deep JS AST syntax check.")
+        node_bin = shutil.which("node")
+        if node_bin:
+            script_matches = list(re.finditer(r'<script(?:\s+[^>]*)?>(.*?)</script>', html, re.DOTALL))
+            for m in script_matches:
+                start_pos = m.start(1)
+                line_offset = html[:start_pos].count('\n') + 1
+                script_text = m.group(1)
+                if not script_text.strip():
+                    continue
+                res = subprocess.run([node_bin, "-c", "-"], input=script_text, capture_output=True, text=True)
+                if res.returncode != 0:
+                    print(f"ERROR: JavaScript syntax error in index.html (near line {line_offset}):\n{res.stderr.strip()}")
+                    sys.exit(1)
+            print(f"  ✓ JavaScript syntax verified across {len(script_matches)} script blocks (node -c).")
+        else:
+            print("  ⚠ Neither esprima nor node installed; skipping deep JS AST syntax check.")
 
 
 if __name__ == "__main__":
