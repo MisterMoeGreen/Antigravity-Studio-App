@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import datetime
+import hashlib
 import io
 import json
 import logging
@@ -1503,6 +1504,167 @@ async def upgrade_all_packages() -> tuple[bool, str]:
         if code != 0:
             return False, f"Failed to upgrade packages: {output.strip()}"
         return True, "Successfully upgraded all packages"
+
+
+# ---------------------------------------------------------------------------
+# Configuration Export Bundle Generator (v1.6.3)
+# ---------------------------------------------------------------------------
+
+async def generate_config_export_bundle(categories: list[str]) -> tuple[str, str, str]:
+    now_ts = time.strftime("%Y%m%d_%H%M%S")
+    iso_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    filename = f"AntigravityStudio-Backup-{now_ts}.agy.md"
+
+    body_sections: list[str] = []
+
+    # 1. SSH Keys
+    if "ssh_keys" in categories:
+        keys = await list_ssh_keys()
+        ssh_blocks = []
+        for k in keys:
+            name = k.get("name")
+            if not name or name in RESERVED_SSH_NAMES:
+                continue
+            pub_path = SSH_DIR / f"{name}.pub"
+            priv_path = SSH_DIR / name
+            pub_text = pub_path.read_text(encoding="utf-8").strip() if pub_path.exists() else ""
+            priv_text = priv_path.read_text(encoding="utf-8").strip() if priv_path.exists() else ""
+            if pub_text and priv_text:
+                ssh_blocks.append(
+                    f"### SSH Key: `{name}`\n"
+                    f"- **Key Type**: {k.get('key_type', 'UNKNOWN')}\n"
+                    f"- **Fingerprint**: `{k.get('fingerprint', 'N/A')}`\n\n"
+                    f"#### Public Key (`~/.ssh/{name}.pub`)\n```text\n{pub_text}\n```\n\n"
+                    f"#### Private Key (`~/.ssh/{name}`)\n```text\n{priv_text}\n```"
+                )
+        if ssh_blocks:
+            body_sections.append("## Section: SSH Keys\n\n" + "\n\n---\n\n".join(ssh_blocks))
+
+    # 2. API Keys
+    if "api_keys" in categories:
+        store = load_api_keys_store()
+        raw_keys = store.get("keys", {})
+        if raw_keys:
+            export_keys = {
+                k: {"value": v.get("value", ""), "description": v.get("description", "")}
+                for k, v in raw_keys.items() if v.get("value")
+            }
+            if export_keys:
+                body_sections.append(
+                    "## Section: API Keys\n\n"
+                    "Merge into the `\"keys\"` object inside `~/.gemini/config/api_keys.json` and regenerate `~/.gemini/config/rules/api_keys_manifest.md`:\n\n"
+                    f"```json\n{json.dumps(export_keys, indent=2)}\n```"
+                )
+
+    # 3. Custom Skills (Recursive Multi-File Bundling)
+    if "skills" in categories and GLOBAL_SKILLS_DIR.is_dir():
+        skill_blocks = []
+        for sdir in sorted(GLOBAL_SKILLS_DIR.iterdir()):
+            if sdir.is_dir() and (sdir / "SKILL.md").exists():
+                file_blocks = []
+                for spath in sorted(sdir.rglob("*")):
+                    if spath.is_file():
+                        rel = spath.relative_to(sdir).as_posix()
+                        if "__pycache__" in rel or rel.startswith(".") or "/." in rel:
+                            continue
+                        try:
+                            fcontent = spath.read_text(encoding="utf-8", errors="replace")
+                            file_blocks.append(
+                                f"#### File: `{rel}`\n```\n{fcontent}\n```"
+                            )
+                        except Exception as exc:
+                            logger.warning("Could not read skill file %s: %s", spath, exc)
+                if file_blocks:
+                    skill_blocks.append(
+                        f"### Skill: `{sdir.name}`\n"
+                        f"- **Folder**: `~/.gemini/config/skills/{sdir.name}/`\n\n"
+                        + "\n\n".join(file_blocks)
+                    )
+        if skill_blocks:
+            body_sections.append("## Section: Custom Skills\n\n" + "\n\n---\n\n".join(skill_blocks))
+
+    # 4. MCP Servers
+    if "mcps" in categories and MCP_CONFIG_FILE.exists():
+        try:
+            mcp_data = json.loads(MCP_CONFIG_FILE.read_text(encoding="utf-8"))
+            servers = mcp_data.get("mcpServers", {})
+            if servers:
+                body_sections.append(
+                    "## Section: MCP Servers\n\n"
+                    "Merge the following entries into `mcpServers` in `~/.gemini/config/mcp_config.json`:\n\n"
+                    f"```json\n{json.dumps(servers, indent=2)}\n```"
+                )
+        except Exception as exc:
+            logger.warning("Could not parse MCP config for export: %s", exc)
+
+    # 5. Packages
+    if "packages" in categories:
+        pkg_data = get_installed_packages()
+        pkg_names = [p["name"] for p in pkg_data.get("packages", [])]
+        if pkg_names:
+            body_sections.append(
+                "## Section: Alpine Linux Packages\n\n"
+                "Verify and install missing packages with `apk add --no-cache`:\n\n"
+                f"```json\n{json.dumps(pkg_names, indent=2)}\n```"
+            )
+
+    preamble = (
+        f"# Antigravity Studio Environment Self-Provisioning Bundle\n\n"
+        f"> **NOTICE TO AI AGENT**: You have been invoked to restore an exported configuration bundle inside Antigravity Studio on Android. Follow the instructions and safety invariants below strictly.\n\n"
+        f"---\n\n"
+        f"## Agent Execution Directives & Safety Invariants\n\n"
+        f"You are operating inside the Antigravity Studio environment backed by an integrated Alpine Linux container subsystem (PRoot).\n\n"
+        f"### Mandatory Safety Rules:\n"
+        f"1. **DIRECTORY BOOTSTRAP**: Ensure directories exist (`mkdir -p ~/.ssh ~/.gemini/config ~/.gemini/config/skills ~/.gemini/config/rules`).\n"
+        f"2. **CRITICAL ZERO-OVERWRITE INVARIANT**: NEVER overwrite an existing key, file, skill, or MCP server if one with the same name already exists on disk.\n"
+        f"   - **SSH Keys**: Check `~/.ssh/<name>` and `~/.ssh/<name>.pub`. If present, skip and mark `[PRESERVED]`.\n"
+        f"   - **API Keys**: Read `~/.gemini/config/api_keys.json`. If key already exists in `\"keys\"`, skip and mark `[PRESERVED]`.\n"
+        f"   - **Skills**: Check `~/.gemini/config/skills/<name>/`. If present, skip and mark `[PRESERVED]`.\n"
+        f"   - **MCP Servers**: Read `~/.gemini/config/mcp_config.json`. If present, skip and mark `[PRESERVED]`.\n"
+        f"   - **Packages**: Check `apk info -e <pkg>`. If installed, skip and mark `[PRESERVED]`.\n"
+        f"3. **STRICT UNIX PERMISSIONS**: Set `~/.ssh` to 0700, private keys to 0600, public keys to 0644, and config JSON files to 0600.\n"
+        f"4. **API KEYS STORE ENVELOPE PRESERVATION**: Merge keys into the `\"keys\"` object inside `~/.gemini/config/api_keys.json` without modifying outer metadata.\n"
+        f"5. **SSH CONFIG RECONCILIATION**: Ensure `~/.ssh/config` contains `IdentityFile ~/.ssh/<name>` for each restored key.\n"
+        f"6. **PACKAGE INSTALLATION**: Install missing packages with `apk add --no-cache <pkg1> <pkg2> ...`.\n"
+        f"7. **PRIVACY SHIELD & COMPLETION REPORTING**: NEVER echo private keys or API tokens in chat output. Render a clean mobile summary list using `[CREATED]`, `[PRESERVED]`, `[INSTALLED]`, and `[ERRORS]` badges.\n\n"
+    )
+
+    post_frontmatter_body = preamble + "---\n\n" + "\n\n---\n\n".join(body_sections)
+    normalized_body = post_frontmatter_body.replace("\r\n", "\n").strip()
+    checksum = hashlib.sha256(normalized_body.encode("utf-8")).hexdigest()
+
+    header = (
+        f"<!-- ANTIGRAVITY_STUDIO_EXPORT_V1 -->\n"
+        f"---\n"
+        f'generator: "Antigravity Studio"\n'
+        f'export_version: "1.0"\n'
+        f'exported_at: "{iso_ts}"\n'
+        f'source_app_version: "1.6.3"\n'
+        f"categories:\n" + "\n".join(f"  - {c}" for c in categories) + "\n"
+        f'checksum: "sha256:{checksum}"\n'
+        f"---\n\n"
+    )
+
+    full_content = header + post_frontmatter_body
+
+    download_dir = Path("/storage/emulated/0/Download")
+    try:
+        download_dir.mkdir(parents=True, exist_ok=True)
+        dest_path = download_dir / filename
+        dest_path.write_text(full_content, encoding="utf-8")
+        dest_str = str(dest_path)
+    except Exception as exc:
+        logger.warning("Could not write backup to %s: %s", download_dir, exc)
+        fallback_dir = HOME_DIR / "Download"
+        try:
+            fallback_dir.mkdir(parents=True, exist_ok=True)
+            dest_path = fallback_dir / filename
+            dest_path.write_text(full_content, encoding="utf-8")
+            dest_str = str(dest_path)
+        except Exception:
+            dest_str = f"/storage/emulated/0/Download/{filename}"
+
+    return filename, full_content, dest_str
 
 
 # ---------------------------------------------------------------------------
@@ -6439,6 +6601,33 @@ class AgyWebServer:
                     "type": "update_check_result",
                     "status": "error",
                     "message": str(exc),
+                }))
+            return
+
+        # Configuration Export (v1.6.3)
+        if mtype == "export_configurations":
+            categories = data.get("categories") or ["ssh_keys", "api_keys", "skills", "mcps", "packages"]
+            try:
+                filename, content, dest = await generate_config_export_bundle(categories)
+                await websocket.send(json.dumps({
+                    "type": "export_configurations_result",
+                    "success": True,
+                    "filename": filename,
+                    "content": content,
+                    "destination": dest,
+                }))
+                await self.broadcast({
+                    "type": "system_card",
+                    "title": "Configuration Exported",
+                    "markdown": f"Exported `{filename}` to `{dest}`.",
+                    "level": "info",
+                })
+            except Exception as exc:
+                logger.exception("Export failed: %s", exc)
+                await websocket.send(json.dumps({
+                    "type": "export_configurations_result",
+                    "success": False,
+                    "error": str(exc),
                 }))
             return
 

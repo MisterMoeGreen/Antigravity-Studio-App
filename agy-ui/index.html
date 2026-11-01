@@ -2647,6 +2647,114 @@
       transition: width 0.2s ease;
     }
 
+    /* Export & Import Configurations (v1.6.3) */
+    .export-checkbox-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin: 10px 0;
+    }
+    .touch-checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 48px;
+      padding: 10px 12px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      cursor: pointer;
+      user-select: none;
+      touch-action: manipulation;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .touch-checkbox-row:active {
+      background: var(--bg-surface);
+      border-color: var(--accent-primary);
+    }
+    .form-checkbox {
+      width: 20px;
+      height: 20px;
+      accent-color: var(--accent-primary);
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .checkbox-text {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      flex: 1;
+    }
+    .checkbox-label {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+    .checkbox-desc {
+      font-size: 11.5px;
+      color: var(--text-secondary);
+      line-height: 1.35;
+    }
+    .export-actions-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 6px;
+    }
+    .settings-security-warning {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 12px;
+      background: rgba(245, 158, 11, 0.1);
+      border: 1px solid rgba(245, 158, 11, 0.25);
+      border-radius: 10px;
+      font-size: 12px;
+      color: var(--text-secondary);
+      line-height: 1.45;
+      margin-top: 10px;
+    }
+    .settings-security-warning .warning-icon {
+      width: 16px;
+      height: 16px;
+      color: var(--accent-amber);
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+    .detected-items-list {
+      list-style: none;
+      padding: 0;
+      margin: 0 0 16px 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .detected-items-list li {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      font-size: 13px;
+      color: var(--text-primary);
+    }
+    .alert-box.error {
+      padding: 12px;
+      background: rgba(244, 63, 94, 0.12);
+      border: 1px solid rgba(244, 63, 94, 0.3);
+      border-radius: 10px;
+      color: var(--accent-rose);
+      font-size: 12.5px;
+      line-height: 1.4;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-top: 10px;
+    }
+
     /* Boot Splash Loading Screen (Wish 2) */
     .boot-splash-overlay {
       position: fixed;
@@ -3335,6 +3443,32 @@
     </div>
   </section>
 
+  <!-- Import Confirmation Bottom Sheet (v1.6.3) -->
+  <section class="bottom-sheet" id="importConfirmSheet" aria-hidden="true">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">
+      <span>Ready to Restore Configuration</span>
+      <button class="icon-btn" id="btnCloseImportConfirm" style="width:30px;height:30px;" title="Close">
+        <svg class="fa-icon" viewBox="0 0 384 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M342.6 150.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L192 210.7 86.6 105.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L146.7 256 41.4 361.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192 301.3 297.4 406.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L237.3 256 342.6 150.6z"/></svg>
+      </button>
+    </div>
+    <div class="sheet-body" style="padding: 16px;">
+      <p style="font-size:13px; color:var(--text-secondary); margin-bottom:12px; line-height:1.4;">
+        Valid Antigravity Studio bundle detected. The AI setup agent will launch in a new session to configure missing items:
+      </p>
+      <ul class="detected-items-list" id="detectedItemsList">
+        <!-- Populated dynamically -->
+      </ul>
+      <div style="font-size:12px; color:var(--text-muted); background:var(--bg-card); padding:10px 12px; border-radius:8px; margin-bottom:16px; border:1px solid var(--border-subtle); line-height:1.4;">
+        Existing keys, skills, and tools with identical names will <strong>never</strong> be overwritten.
+      </div>
+      <div style="display:flex; gap:10px;">
+        <button class="subview-action-btn secondary" id="btnCancelImportConfirm" style="flex:1;">Cancel</button>
+        <button class="subview-action-btn primary" id="btnExecuteImportConfirm" style="flex:1.5;">Start Setup Agent</button>
+      </div>
+    </div>
+  </section>
+
   <!-- Rename Modal Dialog -->
   <div class="modal-dialog" id="renameModal" style="display:none;">
     <div class="modal-card">
@@ -3501,6 +3635,18 @@
             <div class="settings-menu-info">
               <div class="settings-menu-title">Software Updates</div>
               <div class="settings-menu-desc">Check releases & in-app upgrades</div>
+            </div>
+            <svg class="settings-menu-chevron fa-icon" viewBox="0 0 320 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg>
+          </div>
+
+          <!-- Export & Import (v1.6.3) -->
+          <div class="settings-menu-item" data-target="viewExportImport">
+            <div class="settings-menu-icon">
+              <svg class="fa-icon" viewBox="0 0 576 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M384 121.9c0-6.3-2.5-12.4-7-16.9L313.1 41c-4.5-4.5-10.6-7-17-7H64C28.7 34 0 62.7 0 98v316c0 35.3 28.7 64 64 64h384c35.3 0 64-28.7 64-64V250.1c0-6.3-2.5-12.4-7-16.9l-63.9-63.9c-4.5-4.5-10.6-7-17-7.4H384v-40zM320 68l44 44h-44V68zM48 98c0-8.8 7.2-16 16-16h224v64c0 17.7 14.3 32 32 32h64v240c0 8.8-7.2 16-16 16H64c-8.8 0-16-7.2-16-16V98zm480 94.1V414c0 17.7-14.3 32-32 32s-32-14.3-32-32V224h-48c-8.8 0-16-7.2-16-16v-48h32l96 96.1z"/></svg>
+            </div>
+            <div class="settings-menu-info">
+              <div class="settings-menu-title">Export & Import</div>
+              <div class="settings-menu-desc">Backup configs or restore via AI setup agent</div>
             </div>
             <svg class="settings-menu-chevron fa-icon" viewBox="0 0 320 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg>
           </div>
@@ -3710,6 +3856,106 @@
         <div id="packagesListContainer" style="display:flex;flex-direction:column;gap:8px;"></div>
         <div id="packagesEmptyState" class="settings-empty-card" style="display:none;padding:24px 16px;text-align:center;color:var(--text-secondary);font-size:13px;line-height:1.5;">
           No additional packages installed. Tap [+ Install Package] to add compilers and runtimes.
+        </div>
+      </div>
+    </div>
+
+    <!-- View: Export & Import Configurations (v1.6.3) -->
+    <div class="settings-subview" id="viewExportImport">
+      <div class="subview-header">
+        <button class="icon-btn subview-back-btn" data-back="viewExportImport" title="Back to menu">
+          <svg class="fa-icon" viewBox="0 0 448 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M9.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.2 288 416 288c17.7 0 32-14.3 32-32s-14.3-32-32-32l-306.7 0L214.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg>
+        </button>
+        <div class="subview-title">Export & Import</div>
+        <button class="icon-btn" id="btnCloseExportImport" title="Close Settings">
+          <svg class="fa-icon" viewBox="0 0 384 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M342.6 150.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L192 210.7 86.6 105.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L146.7 256 41.4 361.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192 301.3 297.4 406.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L237.3 256 342.6 150.6z"/></svg>
+        </button>
+      </div>
+
+      <div class="subview-body" style="padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));">
+        <!-- Card 1: Export -->
+        <div class="settings-card" style="padding:14px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:12px;display:flex;flex-direction:column;gap:10px;">
+          <div style="font-size:15px;font-weight:600;color:var(--text-primary);">Export Configurations</div>
+          <div style="font-size:12px;color:var(--text-secondary);line-height:1.45;">
+            Bundle your selected settings into a self-provisioning Markdown file. Saved directly to your device's Downloads folder to easily migrate to any device.
+          </div>
+
+          <div class="export-checkbox-list">
+            <label class="touch-checkbox-row">
+              <input type="checkbox" id="chkExportSsh" class="form-checkbox" checked>
+              <div class="checkbox-text">
+                <span class="checkbox-label">SSH Keys</span>
+                <span class="checkbox-desc">Private & public keys in ~/.ssh/</span>
+              </div>
+            </label>
+
+            <label class="touch-checkbox-row">
+              <input type="checkbox" id="chkExportApi" class="form-checkbox" checked>
+              <div class="checkbox-text">
+                <span class="checkbox-label">API Keys</span>
+                <span class="checkbox-desc">Service credentials in api_keys.json</span>
+              </div>
+            </label>
+
+            <label class="touch-checkbox-row">
+              <input type="checkbox" id="chkExportSkills" class="form-checkbox" checked>
+              <div class="checkbox-text">
+                <span class="checkbox-label">Custom Skills</span>
+                <span class="checkbox-desc">Global workflow skills & scripts in ~/.gemini/config/skills/</span>
+              </div>
+            </label>
+
+            <label class="touch-checkbox-row">
+              <input type="checkbox" id="chkExportMcp" class="form-checkbox" checked>
+              <div class="checkbox-text">
+                <span class="checkbox-label">MCP Servers</span>
+                <span class="checkbox-desc">Tool configurations in mcp_config.json</span>
+              </div>
+            </label>
+
+            <label class="touch-checkbox-row">
+              <input type="checkbox" id="chkExportPackages" class="form-checkbox" checked>
+              <div class="checkbox-text">
+                <span class="checkbox-label">Container Packages</span>
+                <span class="checkbox-desc">User-installed Alpine Linux packages (world)</span>
+              </div>
+            </label>
+          </div>
+
+          <div class="export-actions-row">
+            <button class="subview-action-btn secondary" id="btnToggleSelectAll" style="flex:1;">Deselect All</button>
+            <button class="subview-action-btn primary" id="btnTriggerExport" style="flex:1.5;">
+              <svg class="fa-icon btn-icon" viewBox="0 0 512 512" style="width:14px;height:14px;margin-right:6px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M288 32c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 242.7-73.4-73.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3l128 128c12.5 12.5 32.8 12.5 45.3 0l128-128c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L288 274.7 288 32zM64 352c-35.3 0-64 28.7-64 64l0 32c0 35.3 28.7 64 64 64l384 0c35.3 0 64-28.7 64-64l0-32c0-35.3-28.7-64-64-64l-64 0c-17.7 0-32 14.3-32 32s14.3 32 32 32l64 0 0 32L64 448l0-32 64 0c17.7 0 32-14.3 32-32s-14.3-32-32-32L64 352z"/></svg>
+              Export Backup (.md)
+            </button>
+          </div>
+
+          <div class="settings-security-warning">
+            <svg class="fa-icon warning-icon" viewBox="0 0 512 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M256 32c14.2 0 27.3 7.5 34.5 19.8l216 368c7.3 12.4 7.3 27.7 .2 40.1S486.3 480 472 480L40 480c-14.3 0-27.4-7.7-34.7-20.1s-7-27.8 .2-40.1l216-368C228.7 39.5 241.8 32 256 32zm0 128c-13.3 0-24 10.7-24 24l0 112c0 13.3 10.7 24 24 24s24-10.7 24-24l0-112c0-13.3-10.7-24-24-24zm32 224a32 32 0 1 0 -64 0 32 32 0 1 0 64 0z"/></svg>
+            <span><strong>Security Notice:</strong> The exported Markdown file contains raw unencrypted private keys and API tokens. Store it securely and never share it publicly.</span>
+          </div>
+        </div>
+
+        <!-- Card 2: Import -->
+        <div class="settings-card" style="padding:14px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:12px;display:flex;flex-direction:column;gap:10px;">
+          <div style="font-size:15px;font-weight:600;color:var(--text-primary);">Import Configurations</div>
+          <div style="font-size:12px;color:var(--text-secondary);line-height:1.45;">
+            Upload an Antigravity Studio export file. The AI agent will validate the configuration and autonomously restore missing keys, skills, and tools in a new session.
+          </div>
+
+          <!-- Accept broadened for Android SAF compatibility; JS enforces .md extension -->
+          <input type="file" id="inputImportConfig" accept=".md,text/markdown,text/plain,application/octet-stream,*/*" style="display:none;">
+
+          <button class="subview-action-btn primary" id="btnSelectImportFile" style="width:100%;height:44px;">
+            <svg class="fa-icon btn-icon" viewBox="0 0 512 512" style="width:14px;height:14px;margin-right:6px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M288 109.3L288 352c0 17.7-14.3 32-32 32s-32-14.3-32-32l0-242.7-73.4 73.4c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3l128-128c12.5-12.5 32.8-12.5 45.3 0l128 128c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L288 109.3zM64 352c-35.3 0-64 28.7-64 64l0 32c0 35.3 28.7 64 64 64l384 0c35.3 0 64-28.7 64-64l0-32c0-35.3-28.7-64-64-64l-64 0c-17.7 0-32 14.3-32 32s14.3 32 32 32l64 0 0 32L64 448l0-32 64 0c17.7 0 32-14.3 32-32s-14.3-32-32-32L64 352z"/></svg>
+            Select Backup File (.md)
+          </button>
+
+          <!-- Inline Validation Error Alert -->
+          <div id="importValidationAlert" class="alert-box error" style="display:none;">
+            <div style="font-weight:600;font-size:13px;">Import Validation Failed</div>
+            <div id="importValidationMessage"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -6010,6 +6256,12 @@
             handleUpdateResult(msg);
             break;
 
+          case 'export_configurations_result':
+            if (typeof handleExportResult === 'function') {
+              handleExportResult(msg);
+            }
+            break;
+
           case 'ask_question': {
             const cid = msg.conversation_id || state.conversationId;
             adoptDraftSessionId(cid);
@@ -6717,6 +6969,8 @@
         bottomSheet.classList.remove('open');
         sessionActionSheet.classList.remove('open');
         bubbleActionSheet.classList.remove('open');
+        const confirmSheet = document.getElementById('importConfirmSheet');
+        if (confirmSheet) confirmSheet.classList.remove('open');
         actionBackdrop.classList.remove('open');
         renameModal.style.display = 'none';
         deleteModal.style.display = 'none';
@@ -7495,7 +7749,7 @@
       const btnCloseSettingsHub = document.getElementById('btnCloseSettingsHub');
 
       let currentSettingsView = 'viewSettingsMenu';
-      const settingsViews = ['viewSettingsMenu', 'viewPrompts', 'viewSSH', 'viewApiKeys', 'viewSkills', 'viewMCP', 'viewPackages', 'viewUpdates'];
+      const settingsViews = ['viewSettingsMenu', 'viewPrompts', 'viewSSH', 'viewApiKeys', 'viewSkills', 'viewMCP', 'viewPackages', 'viewUpdates', 'viewExportImport'];
 
       function openSettingsHub() {
         if (!settingsHub) return;
@@ -8843,6 +9097,330 @@
           btnInstallUpdate.innerHTML = `<svg class="fa-icon" viewBox="0 0 512 512" style="width:14px;height:14px;margin-right:6px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M288 32c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 242.7-73.4-73.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3l128 128c12.5 12.5 32.8 12.5 45.3 0l128-128c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L288 274.7 288 32zM64 352c-35.3 0-64 28.7-64 64l0 32c0 35.3 28.7 64 64 64l384 0c35.3 0 64-28.7 64-64l0-32c0-35.3-28.7-64-64-64l-64 0c-17.7 0-32 14.3-32 32s14.3 32 32 32l64 0 0 32L64 448l0-32 64 0c17.7 0 32-14.3 32-32s-14.3-32-32-32L64 352z"/></svg>Retry Download & Install`;
         }
       };
+
+      // ---------------------------------------------------------------------
+      // Settings Export & Import Subsystem (v1.6.3)
+      // ---------------------------------------------------------------------
+      const chkExportSsh = document.getElementById('chkExportSsh');
+      const chkExportApi = document.getElementById('chkExportApi');
+      const chkExportSkills = document.getElementById('chkExportSkills');
+      const chkExportMcp = document.getElementById('chkExportMcp');
+      const chkExportPackages = document.getElementById('chkExportPackages');
+      const btnToggleSelectAll = document.getElementById('btnToggleSelectAll');
+      const btnTriggerExport = document.getElementById('btnTriggerExport');
+      const btnSelectImportFile = document.getElementById('btnSelectImportFile');
+      const inputImportConfig = document.getElementById('inputImportConfig');
+      const importValidationAlert = document.getElementById('importValidationAlert');
+      const importValidationMessage = document.getElementById('importValidationMessage');
+
+      const importConfirmSheet = document.getElementById('importConfirmSheet');
+      const btnCloseImportConfirm = document.getElementById('btnCloseImportConfirm');
+      const btnCancelImportConfirm = document.getElementById('btnCancelImportConfirm');
+      const btnExecuteImportConfirm = document.getElementById('btnExecuteImportConfirm');
+      const detectedItemsList = document.getElementById('detectedItemsList');
+      const btnCloseExportImport = document.getElementById('btnCloseExportImport');
+
+      let pendingImportBundle = null;
+
+      const exportCheckboxes = [chkExportSsh, chkExportApi, chkExportSkills, chkExportMcp, chkExportPackages];
+
+      function updateSelectAllButtonState() {
+        if (!btnToggleSelectAll) return;
+        const allChecked = exportCheckboxes.every(chk => chk && chk.checked);
+        btnToggleSelectAll.textContent = allChecked ? 'Deselect All' : 'Select All';
+      }
+
+      if (btnToggleSelectAll) {
+        btnToggleSelectAll.addEventListener('click', () => {
+          const allChecked = exportCheckboxes.every(chk => chk && chk.checked);
+          exportCheckboxes.forEach(chk => {
+            if (chk) chk.checked = !allChecked;
+          });
+          updateSelectAllButtonState();
+        });
+      }
+
+      exportCheckboxes.forEach(chk => {
+        if (chk) {
+          chk.addEventListener('change', updateSelectAllButtonState);
+        }
+      });
+
+      if (btnCloseExportImport) {
+        btnCloseExportImport.addEventListener('click', closeSettingsHub);
+      }
+
+      if (btnTriggerExport) {
+        btnTriggerExport.addEventListener('click', () => {
+          const categories = [];
+          if (chkExportSsh && chkExportSsh.checked) categories.push('ssh_keys');
+          if (chkExportApi && chkExportApi.checked) categories.push('api_keys');
+          if (chkExportSkills && chkExportSkills.checked) categories.push('skills');
+          if (chkExportMcp && chkExportMcp.checked) categories.push('mcps');
+          if (chkExportPackages && chkExportPackages.checked) categories.push('packages');
+
+          if (!categories.length) {
+            showToast('Please select at least one configuration category to export.');
+            return;
+          }
+
+          btnTriggerExport.disabled = true;
+          btnTriggerExport.innerHTML = `<svg class="fa-icon fa-spin" viewBox="0 0 512 512" style="width:14px;height:14px;margin-right:6px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M48.5 224L40 224c-13.3 0-24-10.7-24-24L16 72c0-9.7 5.8-18.5 14.8-22.2s19.3-1.7 26.2 5.2L98.6 96.6c87.6-86.5 228.7-86.2 315.8 1c87.5 87.5 87.5 229.3 0 316.8s-229.3 87.5-316.8 0c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0c62.5 62.5 163.8 62.5 226.3 0s62.5-163.8 0-226.3c-62.2-62.2-162.7-62.5-225.3-1L185 183c6.9 6.9 8.9 17.2 5.2 26.2s-12.5 14.8-22.2 14.8L48.5 224z"/></svg>Exporting...`;
+
+          sendWs({
+            type: 'export_configurations',
+            categories: categories
+          });
+        });
+      }
+
+      function handleExportResult(msg) {
+        if (btnTriggerExport) {
+          btnTriggerExport.disabled = false;
+          btnTriggerExport.innerHTML = `<svg class="fa-icon btn-icon" viewBox="0 0 512 512" style="width:14px;height:14px;margin-right:6px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M288 32c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 242.7-73.4-73.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3l128 128c12.5 12.5 32.8 12.5 45.3 0l128-128c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L288 274.7 288 32zM64 352c-35.3 0-64 28.7-64 64l0 32c0 35.3 28.7 64 64 64l384 0c35.3 0 64-28.7 64-64l0-32c0-35.3-28.7-64-64-64l-64 0c-17.7 0-32 14.3-32 32s14.3 32 32 32l64 0 0 32L64 448l0-32 64 0c17.7 0 32-14.3 32-32s-14.3-32-32-32L64 352z"/></svg>Export Backup (.md)`;
+        }
+
+        if (msg.success) {
+          showToast(`Export saved to Downloads: ${msg.filename}`);
+        } else {
+          showToast(`Export failed: ${msg.error || 'Unknown error'}`);
+        }
+      }
+
+      if (btnSelectImportFile && inputImportConfig) {
+        btnSelectImportFile.addEventListener('click', () => {
+          if (importValidationAlert) importValidationAlert.style.display = 'none';
+          inputImportConfig.click();
+        });
+
+        inputImportConfig.addEventListener('change', async (e) => {
+          const files = e.target.files;
+          if (!files || !files.length) return;
+          const file = files[0];
+          try {
+            if (importValidationAlert) importValidationAlert.style.display = 'none';
+            const result = await validateExportMarkdown(file);
+            pendingImportBundle = result;
+            renderImportConfirmSheet(result.tallies);
+          } catch (err) {
+            console.warn('Import validation failed:', err);
+            if (importValidationAlert && importValidationMessage) {
+              importValidationMessage.textContent = err.message || 'Validation failed';
+              importValidationAlert.style.display = 'flex';
+            } else {
+              showToast(err.message || 'Validation failed');
+            }
+          } finally {
+            inputImportConfig.value = '';
+          }
+        });
+      }
+
+      async function validateExportMarkdown(file) {
+        // 1. Extension & Size check
+        const name = (file.name || '').toLowerCase();
+        if (!name.endsWith('.md') && !name.endsWith('.markdown')) {
+          throw new Error('Please select a valid Markdown (.md) backup file.');
+        }
+        if (file.size < 64) {
+          throw new Error('Selected backup file is empty or too small.');
+        }
+        if (file.size > 10 * 1024 * 1024) {
+          throw new Error('File exceeds the 10 MB maximum backup limit.');
+        }
+
+        // 2. Read text content
+        const text = await file.text();
+
+        // 3. Magic header check (must be line 1)
+        const lines = text.split(/\r?\n/);
+        if (lines[0].trim() !== '<!-- ANTIGRAVITY_STUDIO_EXPORT_V1 -->') {
+          throw new Error('Invalid backup file: Missing Antigravity Studio export signature on Line 1.');
+        }
+
+        // 4. Extract frontmatter and post-frontmatter body
+        const fmMatch = text.match(/^<!-- ANTIGRAVITY_STUDIO_EXPORT_V1 -->\s*\r?\n---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
+        if (!fmMatch) {
+          throw new Error('Corrupted export file: Missing YAML frontmatter block.');
+        }
+
+        const rawFrontmatter = fmMatch[1];
+        const postFrontmatterBody = fmMatch[2];
+
+        // Parse YAML fields
+        const meta = {};
+        for (const fline of rawFrontmatter.split(/\r?\n/)) {
+          const kv = fline.match(/^([a-z_]+):\s*(.+)$/i);
+          if (kv) {
+            meta[kv[1].trim()] = kv[2].trim().replace(/^["']|["']$/g, '');
+          }
+        }
+
+        if (meta.generator !== 'Antigravity Studio') {
+          throw new Error('Invalid generator: File was not created by Antigravity Studio.');
+        }
+        if (meta.export_version !== '1.0') {
+          throw new Error(`Unsupported export version (${meta.export_version || 'unknown'}).`);
+        }
+
+        // 5. Verify Checksum over entire post-frontmatter body (CRLF normalized to LF)
+        if (meta.checksum && meta.checksum.startsWith('sha256:')) {
+          const expectedHash = meta.checksum.split(':')[1].trim().toLowerCase();
+          const normalizedBody = postFrontmatterBody.replace(/\r\n/g, '\n').trim();
+          const encoder = new TextEncoder();
+          const data = encoder.encode(normalizedBody);
+          const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+          const hashArray = Array.from(new Uint8Array(hashBuffer));
+          const computedHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('').toLowerCase();
+
+          if (computedHash !== expectedHash) {
+            throw new Error('Integrity check failed: Checksum mismatch indicates file was modified or corrupted.');
+          }
+        }
+
+        // 6. Section-scoped item tallies extraction
+        const tallies = {
+          ssh_keys: (postFrontmatterBody.match(/### SSH Key:\s*`([^`]+)`/g) || []).length,
+          api_keys: 0,
+          skills: (postFrontmatterBody.match(/### Skill:\s*`([^`]+)`/g) || []).length,
+          mcps: 0,
+          packages: 0,
+        };
+
+        const apiMatch = postFrontmatterBody.match(/## Section: API Keys[\s\S]*?```json\s*([\s\S]*?)\s*```/);
+        if (apiMatch) {
+          try {
+            const keys = JSON.parse(apiMatch[1]);
+            tallies.api_keys = typeof keys === 'object' && keys !== null ? Object.keys(keys).length : 0;
+          } catch (_) {}
+        }
+
+        const mcpMatch = postFrontmatterBody.match(/## Section: MCP Servers[\s\S]*?```json\s*([\s\S]*?)\s*```/);
+        if (mcpMatch) {
+          try {
+            const mcps = JSON.parse(mcpMatch[1]);
+            tallies.mcps = typeof mcps === 'object' && mcps !== null ? Object.keys(mcps).length : 0;
+          } catch (_) {}
+        }
+
+        const pkgMatch = postFrontmatterBody.match(/## Section: Alpine Linux Packages[\s\S]*?```json\s*([\s\S]*?)\s*```/);
+        if (pkgMatch) {
+          try {
+            const pkgs = JSON.parse(pkgMatch[1]);
+            tallies.packages = Array.isArray(pkgs) ? pkgs.length : 0;
+          } catch (_) {}
+        }
+
+        return { text, meta, tallies, postFrontmatterBody };
+      }
+
+      function renderImportConfirmSheet(tallies) {
+        if (!detectedItemsList || !importConfirmSheet) return;
+        detectedItemsList.innerHTML = '';
+
+        const items = [
+          { label: 'SSH Keys', count: tallies.ssh_keys, icon: 'key' },
+          { label: 'API Keys', count: tallies.api_keys, icon: 'lock' },
+          { label: 'Custom Skills', count: tallies.skills, icon: 'bolt' },
+          { label: 'MCP Servers', count: tallies.mcps, icon: 'server' },
+          { label: 'Container Packages', count: tallies.packages, icon: 'box-archive' },
+        ];
+
+        items.forEach(it => {
+          if (it.count > 0) {
+            const li = document.createElement('li');
+            li.innerHTML = `<span><strong>${it.count}</strong> ${it.label}</span><span style="font-size:11px;color:var(--text-muted);">${faIcon(it.icon, '', 'width:12px;height:12px;')} included</span>`;
+            detectedItemsList.appendChild(li);
+          }
+        });
+
+        if (!detectedItemsList.children.length) {
+          const li = document.createElement('li');
+          li.textContent = 'No configuration items detected';
+          detectedItemsList.appendChild(li);
+        }
+
+        importConfirmSheet.classList.add('open');
+        if (actionBackdrop) actionBackdrop.classList.add('open');
+      }
+
+      function closeImportConfirmSheet() {
+        if (importConfirmSheet) importConfirmSheet.classList.remove('open');
+        if (actionBackdrop) actionBackdrop.classList.remove('open');
+        pendingImportBundle = null;
+      }
+
+      if (btnCloseImportConfirm) {
+        btnCloseImportConfirm.addEventListener('click', closeImportConfirmSheet);
+      }
+      if (btnCancelImportConfirm) {
+        btnCancelImportConfirm.addEventListener('click', closeImportConfirmSheet);
+      }
+
+      if (btnExecuteImportConfirm) {
+        btnExecuteImportConfirm.addEventListener('click', () => {
+          if (!pendingImportBundle) return;
+          const { text, tallies } = pendingImportBundle;
+          launchProvisioningSession(text, tallies);
+        });
+      }
+
+      function launchProvisioningSession(markdownPrompt, tallies) {
+        closeImportConfirmSheet();
+        closeSettingsHub();
+
+        if (state.conversationId) {
+          const curBuf = getOrCreateSessionBuffer(state.conversationId);
+          curBuf.draftPrompt = '';
+        }
+        state.conversationId = null;
+        if (window.AndroidApp && typeof window.AndroidApp.setActiveSession === 'function') {
+          window.AndroidApp.setActiveSession(null);
+        }
+        chatViewport.innerHTML = '';
+        state.activeTurns.clear();
+        renderEmptyWelcome();
+        setInitializingControlsState(false);
+        updatePinButtonState(false);
+        stopLiveProgress();
+        resetSendButtonToIdle();
+        if (sessionTitle) {
+          sessionTitle.textContent = 'Restoring Configuration';
+        }
+
+        const summaryParts = [];
+        if (tallies.ssh_keys) summaryParts.push(`${tallies.ssh_keys} SSH keys`);
+        if (tallies.api_keys) summaryParts.push(`${tallies.api_keys} API keys`);
+        if (tallies.skills) summaryParts.push(`${tallies.skills} skills`);
+        if (tallies.mcps) summaryParts.push(`${tallies.mcps} MCPs`);
+        if (tallies.packages) summaryParts.push(`${tallies.packages} packages`);
+        const summaryText = summaryParts.join(', ') || 'configurations';
+
+        const compactDisplay = `📦 **Restoring Antigravity Studio Provisioning Bundle**\n\nRestoring ${summaryText} into environment...`;
+
+        appendUserBubble(compactDisplay, []);
+
+        const buf = getOrCreateSessionBuffer(state.conversationId);
+        buf.activeUserPrompt = compactDisplay;
+        buf.activeUserAttachments = [];
+        buf.isRunning = true;
+        buf.startTime = performance.now();
+        buf.unread = false;
+        syncUnreadToStorage();
+
+        buf.currentAction = 'Restoring configurations...';
+        startLiveProgress('Restoring configurations...', buf.startTime);
+
+        sendWs({
+          type: 'user_prompt',
+          prompt: markdownPrompt,
+          attachments: [],
+          conversation_id: null,
+          model: state.model,
+          mode: state.mode,
+          effort: state.effort,
+        });
+      }
 
       // ---------------------------------------------------------------------
       // Interactive Decision Modal Subsystem (v1.2.0)
