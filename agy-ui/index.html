@@ -2639,6 +2639,32 @@
       transform: scale(0.98);
       opacity: 0.9;
     }
+    .updates-secondary-btn {
+      height: 44px;
+      padding: 0 16px;
+      border-radius: 11px;
+      font-size: 14px;
+      font-weight: 600;
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-primary);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      flex: 0 0 auto;
+      transition: opacity 0.15s, background-color 0.15s, transform 0.1s;
+      touch-action: manipulation;
+    }
+    .updates-secondary-btn:active {
+      transform: scale(0.98);
+      background: var(--bg-hover);
+    }
+    .updates-secondary-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
     .updates-progress-bar {
       width: 100%;
       height: 8px;
@@ -3939,11 +3965,23 @@
           <div style="display:flex;gap:8px;">
             <button class="updates-check-btn" id="btnCheckEngineUpdates" style="flex:1;touch-action:manipulation;">
               <svg class="fa-icon" viewBox="0 0 512 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352a144 144 0 1 0 0-288 144 144 0 1 0 0 288z"/></svg>
-              Check Engine Updates
+              <span>Check Engine Updates</span>
             </button>
-            <button class="subview-action-btn" id="btnRepairEngine" style="flex:0 0 auto;padding:10px 14px;touch-action:manipulation;" title="Reinstall or repair engine">
-              Repair
+            <button class="updates-secondary-btn" id="btnRepairEngine" style="touch-action:manipulation;" title="Reinstall or repair engine">
+              <svg class="fa-icon" viewBox="0 0 512 512" style="width:14px;height:14px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M507.73 109.1c-2.24-9.03-11.06-14.89-20.12-13.82l-73.39 8.67-42.64-42.64 8.67-73.39c1.07-9.06-4.79-17.88-13.82-20.12-36.85-9.14-76.35-.49-106.31 29.47-31.54 31.55-40.48 76.68-27.18 116.5L34.1 312.63c-45.47 45.46-45.47 119.18 0 164.65 45.46 45.46 119.18 45.46 164.65 0l198.86-198.86c39.81 13.3 84.95 4.35 116.5-27.18 29.96-29.96 38.61-69.46 29.47-106.31zM153.56 432.09c-20.48 20.48-53.68 20.48-74.16 0-20.48-20.48-20.48-53.68 0-74.16 20.48-20.48 53.68-20.48 74.16 0 20.48 20.48 20.48 53.68 0 74.16z"/></svg>
+              <span>Repair</span>
             </button>
+          </div>
+
+          <!-- Progress: Engine Install / Update / Repair -->
+          <div id="engineProgressContainer" style="display:none;padding:12px;background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:10px;">
+            <div class="prompt-footer-row" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;">
+              <span id="engineProgressStatusText" style="font-size:12px;color:var(--text-secondary);">Downloading engine...</span>
+              <span id="engineProgressText" style="font-size:12px;font-weight:600;color:var(--accent-primary);">0%</span>
+            </div>
+            <div class="updates-progress-bar">
+              <div class="updates-progress-fill" id="engineProgressBar"></div>
+            </div>
           </div>
 
           <!-- Status: Engine Idle -->
@@ -3974,15 +4012,6 @@
             <button class="updates-check-btn" id="btnInstallEngineUpdate" style="touch-action:manipulation;">
               Download & Install Engine
             </button>
-            <div id="engineProgressContainer" style="display:none;margin-top:10px;">
-              <div class="prompt-footer-row" style="margin-bottom:4px;">
-                <span id="engineProgressStatusText" style="font-size:12px;color:var(--text-secondary);">Downloading engine...</span>
-                <span id="engineProgressText" style="font-size:12px;font-weight:600;color:var(--accent-primary);">0%</span>
-              </div>
-              <div class="updates-progress-bar">
-                <div class="updates-progress-fill" id="engineProgressBar"></div>
-              </div>
-            </div>
           </div>
         </div>
       </div>
@@ -9401,11 +9430,23 @@
         });
       }
 
+      const repairDefaultHtml = `<svg class="fa-icon" viewBox="0 0 512 512" style="width:14px;height:14px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M507.73 109.1c-2.24-9.03-11.06-14.89-20.12-13.82l-73.39 8.67-42.64-42.64 8.67-73.39c1.07-9.06-4.79-17.88-13.82-20.12-36.85-9.14-76.35-.49-106.31 29.47-31.54 31.55-40.48 76.68-27.18 116.5L34.1 312.63c-45.47 45.46-45.47 119.18 0 164.65 45.46 45.46 119.18 45.46 164.65 0l198.86-198.86c39.81 13.3 84.95 4.35 116.5-27.18 29.96-29.96 38.61-69.46 29.47-106.31zM153.56 432.09c-20.48 20.48-53.68 20.48-74.16 0-20.48-20.48-20.48-53.68 0-74.16 20.48-20.48 53.68-20.48 74.16 0 20.48 20.48 20.48 53.68 0 74.16z"/></svg><span>Repair</span>`;
+
       if (btnRepairEngine) {
         btnRepairEngine.addEventListener('click', () => {
           btnRepairEngine.disabled = true;
+          btnRepairEngine.innerHTML = `<svg class="fa-icon fa-spin" viewBox="0 0 512 512" style="width:14px;height:14px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M48.5 224L40 224c-13.3 0-24-10.7-24-24L16 72c0-9.7 5.8-18.5 14.8-22.2s19.3-1.7 26.2 5.2L98.6 96.6c87.6-86.5 228.7-86.2 315.8 1c87.5 87.5 87.5 229.3 0 316.8s-229.3 87.5-316.8 0c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0c62.5 62.5 163.8 62.5 226.3 0s62.5-163.8 0-226.3c-62.2-62.2-162.7-62.5-225.3-1L185 183c6.9 6.9 8.9 17.2 5.2 26.2s-12.5 14.8-22.2 14.8L48.5 224z"/></svg><span>Repairing...</span>`;
+          if (btnCheckEngineUpdates) btnCheckEngineUpdates.disabled = true;
+          if (btnInstallEngineUpdate) btnInstallEngineUpdate.disabled = true;
+          if (engineStatusIdle) engineStatusIdle.style.display = 'none';
+          if (engineStatusUpToDate) engineStatusUpToDate.style.display = 'none';
+          if (engineStatusAvailable) engineStatusAvailable.style.display = 'none';
           if (engineProgressContainer) engineProgressContainer.style.display = 'block';
-          if (engineProgressStatusText) engineProgressStatusText.textContent = 'Starting repair...';
+          if (engineProgressStatusText) {
+            engineProgressStatusText.textContent = 'Contacting upstream and initiating repair...';
+          }
+          if (engineProgressText) engineProgressText.textContent = '0%';
+          if (engineProgressBar) engineProgressBar.style.width = '0%';
           sendWs({ type: 'install_engine' });
         });
       }
@@ -9479,8 +9520,15 @@
       }
 
       function handleEngineInstallResult(msg) {
-        if (btnRepairEngine) btnRepairEngine.disabled = false;
-        if (btnInstallEngineUpdate) btnInstallEngineUpdate.disabled = false;
+        if (btnRepairEngine) {
+          btnRepairEngine.disabled = false;
+          btnRepairEngine.innerHTML = repairDefaultHtml;
+        }
+        if (btnCheckEngineUpdates) btnCheckEngineUpdates.disabled = false;
+        if (btnInstallEngineUpdate) {
+          btnInstallEngineUpdate.disabled = false;
+          btnInstallEngineUpdate.innerHTML = `<svg class="fa-icon" viewBox="0 0 512 512" style="width:14px;height:14px;margin-right:6px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M288 32c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 242.7-73.4-73.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3l128 128c12.5 12.5 32.8 12.5 45.3 0l128-128c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L288 274.7 288 32zM64 352c-35.3 0-64 28.7-64 64l0 32c0 35.3 28.7 64 64 64l384 0c35.3 0 64-28.7 64-64l0-32c0-35.3-28.7-64-64-64l-64 0c-17.7 0-32 14.3-32 32s14.3 32 32 32l64 0 0 32L64 448l0-32 64 0c17.7 0 32-14.3 32-32s-14.3-32-32-32L64 352z"/></svg>Download & Install Engine`;
+        }
         if (btnInstallEngineOverlay) btnInstallEngineOverlay.disabled = false;
 
         if (msg.status === 'ok') {
@@ -9489,8 +9537,21 @@
           updateEngineUI(state.engine);
           showEngineOverlay(false);
           sendWs({ type: 'get_engine_status' });
+
+          if (engineProgressStatusText) {
+            engineProgressStatusText.textContent = `✓ Engine ${msg.version || ''} ready and verified!`;
+          }
+          if (engineProgressText) engineProgressText.textContent = '100%';
+          if (engineProgressBar) engineProgressBar.style.width = '100%';
+
+          setTimeout(() => {
+            if (engineProgressContainer) engineProgressContainer.style.display = 'none';
+          }, 3000);
         } else {
           showToast(`Engine install failed: ${msg.message || 'Unknown error'}`);
+          if (engineProgressStatusText) {
+            engineProgressStatusText.textContent = `Error: ${msg.message || 'Failed'}`;
+          }
           if (engineOverlayStatusText) engineOverlayStatusText.textContent = `Error: ${msg.message || 'Failed'}`;
         }
       }
@@ -9499,7 +9560,14 @@
         btnInstallEngineUpdate.addEventListener('click', () => {
           btnInstallEngineUpdate.disabled = true;
           btnInstallEngineUpdate.innerHTML = `<svg class="fa-icon fa-spin" viewBox="0 0 512 512" style="width:14px;height:14px;margin-right:6px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M48.5 224L40 224c-13.3 0-24-10.7-24-24L16 72c0-9.7 5.8-18.5 14.8-22.2s19.3-1.7 26.2 5.2L98.6 96.6c87.6-86.5 228.7-86.2 315.8 1c87.5 87.5 87.5 229.3 0 316.8s-229.3 87.5-316.8 0c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0c62.5 62.5 163.8 62.5 226.3 0s62.5-163.8 0-226.3c-62.2-62.2-162.7-62.5-225.3-1L185 183c6.9 6.9 8.9 17.2 5.2 26.2s-12.5 14.8-22.2 14.8L48.5 224z"/></svg>Installing Engine...`;
+          if (btnRepairEngine) btnRepairEngine.disabled = true;
+          if (btnCheckEngineUpdates) btnCheckEngineUpdates.disabled = true;
           if (engineProgressContainer) engineProgressContainer.style.display = 'block';
+          if (engineProgressStatusText) {
+            engineProgressStatusText.textContent = 'Initializing engine download...';
+          }
+          if (engineProgressText) engineProgressText.textContent = '0%';
+          if (engineProgressBar) engineProgressBar.style.width = '0%';
           sendWs({
             type: 'install_engine',
             download_url: currentEngineDownloadUrl,
