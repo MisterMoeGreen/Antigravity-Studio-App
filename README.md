@@ -19,7 +19,7 @@
 
 **Antigravity Studio** brings Google DeepMind's autonomous coding engine (**Antigravity**) directly to your Android device in a native, touch-first mobile IDE.
 
-Download a single lightweight APK (~45 MB), sign in with Google, and start building — no Termux, no root, no laptop required. The app ships everything you need: a full AI coding agent, built-in developer tools (bash, git, python, ssh), and the ability to install virtually any programming language or compiler on the fly.
+Download the lightweight APK, sign in with Google, and start building — no Termux, no root, no laptop required. The app ships everything you need: a full AI coding agent, built-in developer tools (bash, git, python, ssh), and the ability to install virtually any programming language or compiler on the fly.
 
 What makes it unique: Antigravity Studio is the first app to run real native compilers and JIT runtimes (Node.js, Java, Rust, GCC, Clang, Go) **directly on Android at full native speed** — something normally blocked by Android's security restrictions. It does this transparently, so you just write code and the agent handles the rest.
 
@@ -62,13 +62,12 @@ A touch-first control panel for managing your development environment:
 
 ### 🔋 Runs in the Background
 Lock your screen or switch apps — the agent keeps working:
-* Foreground service with persistent notification keeps tasks alive
-* Battery-aware: the agent can check battery level, charging state, and CPU temperature
+* Foreground service with persistent notification keeps long-running tasks alive
 * Automatic network handling when switching between Wi-Fi and cellular
 
 ### 🔄 Dual-Track Software Updates
-* **Antigravity Studio App**: In-app APK release checks, changelog inspection, and seamless one-tap updates
-* **Antigravity CLI Engine**: On-demand download, background update checks, integrity verification, and self-healing repair independent of the APK
+* **Antigravity Studio App**: Check for APK releases, inspect changelogs, and install in-place updates.
+* **Antigravity CLI Engine**: Query official Google engine releases, update independently of the app, and repair or reinstall the engine on demand from Settings.
 
 ---
 
@@ -96,7 +95,7 @@ flowchart TD
 
     subgraph Sandbox ["App Sandbox Storage (/data/data/ai.agy.app/files)"]
         UsrBin["usr/bin/* (Symlink Farm: agy, agy-sh, apk, node, gcc...)"]
-        AgyEngine["usr/opt/agy/agy (Unbundled CLI Engine - ~64MB)"]
+        AgyEngine["usr/opt/agy/agy (Unbundled CLI Engine)"]
         UsrRootfs["usr/rootfs/ (Alpine Linux Minirootfs v3.20.9)"]
         Telemetry["usr/tmp/android_telemetry.json"]
         Resolv["usr/etc/resolv.conf (Dynamic DNS)"]
@@ -137,12 +136,12 @@ Running real compilers and JIT runtimes on Android is hard — the OS blocks dyn
 * **W^X-Aware PRoot Engine** (`libproot.so`): A user-space virtualization layer that intercepts system calls via `ptrace`, translating paths and enforcing safe execution without kernel modifications.
 * **Bionic Shim** (`libagy_shim.so`): An `LD_PRELOAD` hook that rewrites shebangs (`#!/bin/sh`, `#!/usr/bin/env python3`) to point to the bundled toolchain, since Android lacks standard Linux paths.
 
-The app also embeds a lightweight Alpine Linux rootfs (~3.5 MB) that provides the `apk` package manager and its full repository — this is how `apk add nodejs` or `apk add gcc` works on a phone. All 115+ native binaries are 16 KB page-aligned and signed for Android 10–17+ compatibility.
+The app also embeds a lightweight Alpine Linux rootfs that provides the `apk` package manager and its full repository — this is how `apk add nodejs` or `apk add gcc` works on a phone. All 115+ native binaries are 16 KB page-aligned and signed for Android 10–17+ compatibility.
 
 ### Cold Boot Workflow
 1. **Runtime Extraction**: On first launch (or build update), `EnvironmentBootstrapper` extracts:
-   * `usr-data.tar.zst` (~8.5 MB): Python stdlib, git templates, SSL certificates, Web UI, `ask_question.py`, and built-in skills.
-   * `rootfs.tar.zst` (~3.5 MB): Alpine Linux `aarch64` minirootfs non-destructively unpacked into `usr/rootfs/`.
+   * `usr-data.tar.zst`: Python stdlib, git templates, SSL certificates, Web UI, `ask_question.py`, and built-in skills.
+   * `rootfs.tar.zst`: Alpine Linux `aarch64` minirootfs non-destructively unpacked into `usr/rootfs/`.
 2. **Symlink Farm Assembly**: Creates symlinks in `usr/bin/` pointing to the native binaries in `/data/app/.../lib/arm64/`, including `libagy_launcher.so` (native bridge for on-demand engine dispatch), host toolchain utilities, and multicall bridges (`agy-sh`, `apk`, `pkg`, `node`, `npm`, `npx`, `cargo`, `gcc`, `java`, `ask_question`).
 3. **Daemon Initialization**: `AgyForegroundService` acquires a `WakeLock`, selects an available port (`8081` $\to$ `8082` $\to$ `8090` $\to$ ephemeral), and starts `server.py` with `LD_PRELOAD=libagy_shim.so`.
 4. **UI Readiness**: `MainActivity` polls `/health` until the backend signals ready, then renders the responsive mobile IDE interface in WebView.
@@ -157,11 +156,11 @@ The app also embeds a lightweight Alpine Linux rootfs (~3.5 MB) that provides th
 3. If prompted, allow your browser or file manager to **Install unknown apps**.
 4. Tap **Install** and launch **Antigravity Studio**.
 
-### First Launch & Authentication
+### First Launch & Setup
 1. On initial startup, grant the **Notification Permission** (required for background execution).
-2. Allow a few seconds for first-time environment and Alpine rootfs initialization.
-3. Tap **Sign in with Google**. A browser tab will open for Google authentication.
-4. Copy the authorization code, paste it into the chat prompt, and hit send!
+2. Allow a few seconds for the environment and Alpine rootfs to initialize.
+3. **Engine Setup**: When the Antigravity Engine Setup prompt appears, tap **Download & Setup Engine**. The app downloads the official CLI binary directly from Google DeepMind and applies the on-device Android compatibility patch.
+4. **Sign In**: Tap **Sign in with Google**. A browser tab will open for authentication. Copy the authorization code, paste it into the prompt, and hit send.
 5. Select your workspace directory and start coding!
 
 ---
@@ -237,18 +236,6 @@ bash ./gradlew assembleRelease
 # 4. Built APK will be available at:
 # app/build/outputs/apk/release/app-release.apk
 ```
-
----
-
-## Specifications & Audit Logs
-
-For detailed technical specifications, architectural diagrams, security audits, and verification proofs:
-* [v1.4.0 Parallel Session Concurrency & Sidebar Ergonomics](specs/v1.4.0/OVERVIEW_AND_IMPLEMENTATION_GUIDE.md)
-* [v1.3.0 W^X PRoot Engine, Anonymous Loader & Package Manager](specs/v1.3.0/OVERVIEW_AND_IMPLEMENTATION_GUIDE.md)
-* [v1.2.0 Interactive Decision Modals & Touch Prompts](specs/v1.2.0/OVERVIEW_AND_IMPLEMENTATION_GUIDE.md)
-* [v1.1.0 Dynamic DNS, Hardware Telemetry & In-App Updaters](specs/1.1.0/OVERVIEW_AND_IMPLEMENTATION_GUIDE.md)
-* [v1.0.0 Core Virtualization, APK Geometry & Host Toolchains](specs/initial/OVERVIEW_AND_IMPLEMENTATION_GUIDE.md)
-* [v1.3.0 Implementation & Verification Log](specs/v1.3.0/IMPLEMENTATION_LOG.md)
 
 ---
 
