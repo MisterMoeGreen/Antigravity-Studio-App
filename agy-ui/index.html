@@ -2148,8 +2148,8 @@
       background: rgba(15, 23, 42, 0.94);
       border: 1px solid var(--border-subtle);
       color: #ffffff;
-      padding: 8px 16px;
-      border-radius: 999px;
+      padding: 10px 18px;
+      border-radius: 16px;
       font-size: 13px;
       font-weight: 500;
       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
@@ -2159,7 +2159,14 @@
       transition: all 0.22s cubic-bezier(0.22, 1, 0.36, 1);
       backdrop-filter: blur(10px);
       -webkit-backdrop-filter: blur(10px);
-      white-space: nowrap;
+      max-width: calc(100vw - 32px);
+      width: max-content;
+      box-sizing: border-box;
+      white-space: pre-line;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+      text-align: center;
+      line-height: 1.4;
     }
     .toast.visible {
       opacity: 1;
@@ -9181,9 +9188,9 @@
         }
 
         if (msg.success) {
-          showToast(`Export saved to Downloads: ${msg.filename}`);
+          showToast(`Export saved to Downloads:\n${msg.filename}`);
         } else {
-          showToast(`Export failed: ${msg.error || 'Unknown error'}`);
+          showToast(`Export failed:\n${msg.error || 'Unknown error'}`);
         }
       }
 
