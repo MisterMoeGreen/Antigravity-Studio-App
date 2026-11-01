@@ -265,3 +265,23 @@ sequenceDiagram
     User->>UI: Taps "Done"
     UI->>UI: Closes modal & reloads active settings lists
 ```
+
+---
+
+## 6. Gemini 4 Argon Architectural Review & Security Hardening
+
+- **Auditor**: `argon-agent (high-reasoning)`
+- **Overall Status**: **AUDITED & HARDENED (7 Architectural Mitigations Integrated)**
+
+### Critical Mitigations Matrix
+
+| Issue ID | Severity | Subsystem | Threat & Impact | Architectural Mitigation |
+| :--- | :--- | :--- | :--- | :--- |
+| **ARGON-V163-14** | **CRITICAL** | File Extraction Security | ZipSlip / Directory Traversal: A malicious bundle could embed `#### File: ../../../.bashrc` or absolute paths to overwrite host files outside the skill directory. | Enforce strict path resolution check: `dest = (skill_dir / rel_path).resolve()`. Assert `dest.is_relative_to(skill_dir)`. Disallow leading slashes, backslashes, and `..` segments. |
+| **ARGON-V163-15** | **HIGH** | SSH Key Security | Key Name Injection: An imported key named `config`, `known_hosts`, or containing path separators (`/`) could clobber critical OpenSSH configuration files. | Validate key names against `KEY_NAME_RE` (`^[a-zA-Z0-9_\-\.]+$`) and enforce `name.lower() not in RESERVED_SSH_NAMES`. Reject invalid names with an error. |
+| **ARGON-V163-16** | **HIGH** | Concurrency Control | Double-tap Race Condition: Rapidly tapping the restore button could dispatch overlapping restore calls, causing concurrent writes to `api_keys.json`, `mcp_config.json`, or the `apk` database. | Enforce an asynchronous `IMPORT_MUTATION_LOCK = asyncio.Lock()` in `server.py` and immediately disable the UI button on first tap. |
+| **ARGON-V163-17** | **HIGH** | Command Injection | Package Name Injection: A crafted package name starting with `-` or containing CLI flags (e.g. `--repository`, `; rm -rf`) could inject parameters into `apk add`. | Pass each package name through `validate_pkg_name()`. Reject names containing whitespace, slashes, or leading dashes. Pass arguments solely as discrete array elements to `create_subprocess_exec`. |
+| **ARGON-V163-18** | **MEDIUM** | Partial Failure Resiliency | Offline / Broken Package Fallback: If `apk add` fails due to lack of network, aborting the entire restore operation gives the false impression that SSH and API keys failed to restore. | Decouple filesystem restoration from network package installation. If `apk add` encounters network failure, record the error in `packages.failed`, but report overall `success: true` with a clear partial warning. |
+| **ARGON-V163-19** | **MEDIUM** | UI State Synchronization | Stale Settings Hub Cache: After restoring configurations, Settings Hub views for SSH Keys, API Keys, Skills, and MCPs remain stale until manually refreshed. | On `import_configurations_result`, automatically dispatch WebSocket refresh commands (`list_ssh_keys`, `list_skills`, `list_mcp_servers`, `list_installed_packages`) to immediately reflect newly restored items. |
+| **ARGON-V163-20** | **MEDIUM** | Denial of Service | Memory Flooding via Oversized Bundle: An oversized `.md` file could exhaust Termux heap memory during regex parsing. | Enforce a hard 10 MB ceiling in `server.py` (`len(content) <= 10 * 1024 * 1024`) prior to running regex parsing or SHA-256 computation. |
+
