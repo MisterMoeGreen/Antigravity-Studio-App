@@ -34,7 +34,8 @@ Manually entering these credentials and reconfiguring tools via touch screens cr
 
 ```text
 specs/v1.6.3/
-├── 01-settings-export-import-agent-provisioning.md # Settings UI, dual-phase validation, markdown schema, and agent directives
+├── 01-settings-export-import-agent-provisioning.md # Settings UI, dual-phase validation, markdown schema
+├── 02-local-configuration-restoration-engine.md   # Zero-leak local restore pipeline, apk progress streaming, dynamic warning visibility
 └── OVERVIEW_AND_IMPLEMENTATION_GUIDE.md           # Master overview, architecture, and acceptance criteria
 ```
 
@@ -46,16 +47,18 @@ specs/v1.6.3/
 - [x] **AC-1.6.3.10 (Touch Checkbox Selection)**: The Export view presents 5 checkboxes (`SSH Keys`, `API Keys`, `Custom Skills`, `MCP Servers`, `Packages`) and a "Select All / Deselect All" toggle with a minimum 44px touch target.
 - [x] **AC-1.6.3.11 (Direct Storage Export & Notification)**: Tapping "Export Backup (.md)" generates `AntigravityStudio-Backup-YYYYMMDD_HHMMSS.agy.md`, writes it directly to `/storage/emulated/0/Download/`, and notifies the user with an in-app toast.
 - [x] **AC-1.6.3.12 (Export Security Warning)**: The Export view displays a prominent security warning regarding unencrypted credentials in the exported Markdown.
+- [ ] **AC-1.6.3.12b (Dynamic Export Warning Visibility)**: The security warning dynamically collapses/hides when neither SSH Keys nor API Keys are selected, and reappears when either is checked.
 - [x] **AC-1.6.3.13 (File Type & Extension Check)**: Importing a non-Markdown file (e.g. `.json`, `.png`, `.bin`) is rejected with an inline error alert.
 - [x] **AC-1.6.3.14 (Magic Header & Signature Validation)**: Uploading an arbitrary `.md` file that lacks `<!-- ANTIGRAVITY_STUDIO_EXPORT_V1 -->` on Line 1 or has an invalid generator frontmatter fails validation with a clear error banner.
 - [x] **AC-1.6.3.15 (Integrity & SHA-256 Check)**: The SHA-256 checksum is computed over the entire post-frontmatter payload body. Any tampering or truncation is detected and aborts import.
 - [x] **AC-1.6.3.16 (Confirmation Sheet Preview)**: A valid file displays `#importConfirmSheet` with accurate item counts for SSH keys, API keys, skills, MCP servers, and packages, parsed from section blocks.
-- [x] **AC-1.6.3.17 (New Session Initialization & Privacy Shield)**: Tapping "Start Setup Agent" closes Settings Hub, resets the active conversation ID, dispatches `{ type: "user_prompt" }`, and renders a compact card badge (`📦 Restoring Environment Bundle`) in the chat bubble.
-- [x] **AC-1.6.3.18 (Zero-Overwrite Invariant)**: The agent strictly respects existing configurations and does not overwrite existing SSH keys, API keys, skills, or MCP configurations, labeling them `[PRESERVED]`.
-- [x] **AC-1.6.3.19 (UNIX Permission Enforcement)**: Restored private keys receive mode `0600`, public keys `0644`, and config files `0600`.
-- [x] **AC-1.6.3.20 (Recursive Skill Bundling)**: Custom skills export all constituent files (`scripts/`, `references/`), ensuring full functional integrity after restoration.
-- [x] **AC-1.6.3.21 (API Keys Store Schema Envelope)**: The agent directives mandate updating the `"keys"` object inside `~/.gemini/config/api_keys.json` with the standard versioned schema envelope.
-- [x] **AC-1.6.3.22 (SSH Config & Directory Bootstrap)**: The agent directives mandate creating missing parent directories (`mkdir -p`) and reconciling `~/.ssh/config` `IdentityFile` entries for all restored keys.
+- [ ] **AC-1.6.3.17 (Deterministic Local Restoration Engine)**: Tapping "Restore Configurations Locally" executes entirely within `server.py` without dispatching prompts or credentials to external LLM providers, avoiding privacy leaks and the fresh-install authentication catch-22.
+- [ ] **AC-1.6.3.18 (Zero-Overwrite Invariant)**: The local engine verifies existing files and does not overwrite existing SSH keys, API keys, skills, or MCP configurations, labeling them `[PRESERVED]`.
+- [ ] **AC-1.6.3.19 (UNIX Permission Enforcement)**: Restored private keys receive mode `0600`, public keys `0644`, directory `~/.ssh` receives `0700`, and config files receive `0600`.
+- [ ] **AC-1.6.3.20 (Recursive Skill Bundling & Extraction)**: Custom skills export and restore all constituent files (`scripts/`, `references/`), ensuring full functional integrity after restoration.
+- [ ] **AC-1.6.3.21 (API Keys Store Schema Envelope)**: The local engine merges restored keys into the `"keys"` object inside `~/.gemini/config/api_keys.json` with the standard versioned schema envelope and updates the API keys manifest.
+- [ ] **AC-1.6.3.22 (SSH Config & Directory Bootstrap)**: The local engine creates missing parent directories (`mkdir -p`) and reconciles `~/.ssh/config` `IdentityFile` entries for all restored keys.
+- [ ] **AC-1.6.3.23 (Live Streaming Progress for Packages)**: Missing packages trigger differential `apk add --no-cache` inside `APK_MUTATION_LOCK`, streaming real-time status to the UI during downloads and displaying a structured completion summary card.
 
 ---
 
