@@ -17,7 +17,7 @@ MAIN_ACTIVITY = ROOT_DIR / "app" / "src" / "main" / "java" / "ai" / "agy" / "app
 
 
 def check_python_ast_integrity():
-    print("[1/3] Verifying Python AST class scoping integrity...")
+    print("[1/4] Verifying Python AST class scoping integrity...")
     if not SERVER_PY.exists():
         print(f"ERROR: {SERVER_PY} does not exist!")
         sys.exit(1)
@@ -71,7 +71,7 @@ def check_python_ast_integrity():
 
 
 def check_webview_api_boundaries():
-    print("[2/3] Verifying Android WebView hybrid API barriers...")
+    print("[2/4] Verifying Android WebView hybrid API barriers...")
     if not INDEX_HTML.exists():
         print(f"ERROR: {INDEX_HTML} does not exist!")
         sys.exit(1)
@@ -97,7 +97,7 @@ def check_webview_api_boundaries():
 
 
 def check_native_bridge_contract():
-    print("[3/3] Verifying Native Android Kotlin bridge contracts...")
+    print("[3/4] Verifying Native Android Kotlin bridge contracts...")
     if not MAIN_ACTIVITY.exists():
         print(f"ERROR: {MAIN_ACTIVITY} does not exist!")
         sys.exit(1)
@@ -119,9 +119,38 @@ def check_native_bridge_contract():
     print("  ✓ Native Kotlin bridge interface contracts verified.")
 
 
+def check_javascript_syntax():
+    print("[4/4] Verifying JavaScript syntax in index.html...")
+    if not INDEX_HTML.exists():
+        print(f"ERROR: {INDEX_HTML} does not exist!")
+        sys.exit(1)
+
+    with open(INDEX_HTML, "r", encoding="utf-8") as f:
+        html = f.read()
+
+    try:
+        import esprima
+        script_matches = list(re.finditer(r'<script(?:\s+[^>]*)?>(.*?)</script>', html, re.DOTALL))
+        for m in script_matches:
+            start_pos = m.start(1)
+            line_offset = html[:start_pos].count('\n') + 1
+            script_text = m.group(1)
+            if not script_text.strip():
+                continue
+            try:
+                esprima.parseScript(script_text, {'tolerant': False})
+            except Exception as e:
+                print(f"ERROR: JavaScript syntax error in index.html (near line {line_offset}):\n{e}")
+                sys.exit(1)
+        print(f"  ✓ JavaScript syntax verified across {len(script_matches)} script blocks (esprima).")
+    except ImportError:
+        print("  ⚠ esprima not installed; skipping deep JS AST syntax check.")
+
+
 if __name__ == "__main__":
     print("=== Running Antigravity Studio Pre-Build Verification Gate ===")
     check_python_ast_integrity()
     check_webview_api_boundaries()
     check_native_bridge_contract()
+    check_javascript_syntax()
     print("=== All Architectural Invariants Verified Successfully! ===\n")
