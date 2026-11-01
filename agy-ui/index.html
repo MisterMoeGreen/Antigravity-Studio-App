@@ -3450,28 +3450,46 @@
     </div>
   </section>
 
-  <!-- Import Confirmation Bottom Sheet (v1.6.3) -->
+  <!-- Import Confirmation Bottom Sheet (v1.6.3 Spec 02) -->
   <section class="bottom-sheet" id="importConfirmSheet" aria-hidden="true">
     <div class="sheet-handle"></div>
     <div class="sheet-title">
-      <span>Ready to Restore Configuration</span>
+      <span id="importSheetTitle">Ready to Restore Configuration</span>
       <button class="icon-btn" id="btnCloseImportConfirm" style="width:30px;height:30px;" title="Close">
         <svg class="fa-icon" viewBox="0 0 384 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M342.6 150.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L192 210.7 86.6 105.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L146.7 256 41.4 361.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192 301.3 297.4 406.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L237.3 256 342.6 150.6z"/></svg>
       </button>
     </div>
     <div class="sheet-body" style="padding: 16px;">
-      <p style="font-size:13px; color:var(--text-secondary); margin-bottom:12px; line-height:1.4;">
-        Valid Antigravity Studio bundle detected. The AI setup agent will launch in a new session to configure missing items:
+      <p style="font-size:13px; color:var(--text-secondary); margin-bottom:12px; line-height:1.4;" id="importSheetSubtitle">
+        Valid Antigravity Studio bundle detected. The system will safely restore missing items locally without sending secrets over the network:
       </p>
+
       <ul class="detected-items-list" id="detectedItemsList">
         <!-- Populated dynamically -->
       </ul>
-      <div style="font-size:12px; color:var(--text-muted); background:var(--bg-card); padding:10px 12px; border-radius:8px; margin-bottom:16px; border:1px solid var(--border-subtle); line-height:1.4;">
+
+      <div id="importZeroOverwriteNote" style="font-size:12px; color:var(--text-muted); background:var(--bg-card); padding:10px 12px; border-radius:8px; margin-bottom:16px; border:1px solid var(--border-subtle); line-height:1.4;">
         Existing keys, skills, and tools with identical names will <strong>never</strong> be overwritten.
       </div>
-      <div style="display:flex; gap:10px;">
+
+      <!-- Live Progress Display -->
+      <div id="importProgressBox" style="display:none; flex-direction:column; align-items:center; justify-content:center; padding:18px 12px; background:var(--bg-card); border-radius:10px; margin-bottom:16px; border:1px solid var(--border-subtle); gap:10px;">
+        <svg class="fa-icon fa-spin" viewBox="0 0 512 512" style="width:28px;height:28px;color:var(--accent-primary);" aria-hidden="true" focusable="false"><path fill="currentColor" d="M48.5 224L40 224c-13.3 0-24-10.7-24-24L16 72c0-9.7 5.8-18.5 14.8-22.2s19.3-1.7 26.2 5.2L98.6 96.6c87.6-86.5 228.7-86.2 315.8 1c87.5 87.5 87.5 229.3 0 316.8s-229.3 87.5-316.8 0c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0c62.5 62.5 163.8 62.5 226.3 0s62.5-163.8 0-226.3c-62.2-62.2-162.7-62.5-225.3-1L185 183c6.9 6.9 8.9 17.2 5.2 26.2s-12.5 14.8-22.2 14.8L48.5 224z"/></svg>
+        <div id="importProgressMessage" style="font-size:13px; font-weight:500; color:var(--text-primary); text-align:center;">Restoring configurations...</div>
+      </div>
+
+      <!-- Summary Report Box (Post-Execution) -->
+      <div id="importResultSummaryBox" style="display:none; flex-direction:column; gap:8px; margin-bottom:16px;">
+        <!-- Filled with badges and breakdown -->
+      </div>
+
+      <!-- Actions -->
+      <div id="importActionButtonsRow" style="display:flex; gap:10px;">
         <button class="subview-action-btn secondary" id="btnCancelImportConfirm" style="flex:1;">Cancel</button>
-        <button class="subview-action-btn primary" id="btnExecuteImportConfirm" style="flex:1.5;">Start Setup Agent</button>
+        <button class="subview-action-btn primary" id="btnExecuteImportConfirm" style="flex:1.5;">Restore Configurations</button>
+      </div>
+      <div id="importDoneButtonRow" style="display:none;">
+        <button class="subview-action-btn primary" id="btnDoneImportConfirm" style="width:100%;height:44px;">Done</button>
       </div>
     </div>
   </section>
@@ -6266,6 +6284,18 @@
           case 'export_configurations_result':
             if (typeof handleExportResult === 'function') {
               handleExportResult(msg);
+            }
+            break;
+
+          case 'import_configurations_progress':
+            if (typeof handleImportProgress === 'function') {
+              handleImportProgress(msg);
+            }
+            break;
+
+          case 'import_configurations_result':
+            if (typeof handleImportResult === 'function') {
+              handleImportResult(msg);
             }
             break;
 
@@ -9128,6 +9158,16 @@
       const btnCloseExportImport = document.getElementById('btnCloseExportImport');
       const exportSecurityWarning = document.getElementById('exportSecurityWarning');
 
+      const importSheetTitle = document.getElementById('importSheetTitle');
+      const importSheetSubtitle = document.getElementById('importSheetSubtitle');
+      const importZeroOverwriteNote = document.getElementById('importZeroOverwriteNote');
+      const importProgressBox = document.getElementById('importProgressBox');
+      const importProgressMessage = document.getElementById('importProgressMessage');
+      const importResultSummaryBox = document.getElementById('importResultSummaryBox');
+      const importActionButtonsRow = document.getElementById('importActionButtonsRow');
+      const importDoneButtonRow = document.getElementById('importDoneButtonRow');
+      const btnDoneImportConfirm = document.getElementById('btnDoneImportConfirm');
+
       let pendingImportBundle = null;
 
       const exportCheckboxes = [chkExportSsh, chkExportApi, chkExportSkills, chkExportMcp, chkExportPackages];
@@ -9335,8 +9375,29 @@
         return { text, meta, tallies, postFrontmatterBody };
       }
 
+      function resetImportSheetUI() {
+        if (importSheetTitle) importSheetTitle.textContent = 'Ready to Restore Configuration';
+        if (importSheetSubtitle) importSheetSubtitle.textContent = 'Valid Antigravity Studio bundle detected. The system will safely restore missing items locally without sending secrets over the network:';
+        if (detectedItemsList) detectedItemsList.style.display = 'flex';
+        if (importZeroOverwriteNote) importZeroOverwriteNote.style.display = 'block';
+        if (importProgressBox) importProgressBox.style.display = 'none';
+        if (importResultSummaryBox) {
+          importResultSummaryBox.style.display = 'none';
+          importResultSummaryBox.innerHTML = '';
+        }
+        if (importActionButtonsRow) importActionButtonsRow.style.display = 'flex';
+        if (importDoneButtonRow) importDoneButtonRow.style.display = 'none';
+        if (btnExecuteImportConfirm) {
+          btnExecuteImportConfirm.disabled = false;
+          btnExecuteImportConfirm.textContent = 'Restore Configurations';
+        }
+        if (btnCancelImportConfirm) btnCancelImportConfirm.disabled = false;
+        if (btnCloseImportConfirm) btnCloseImportConfirm.disabled = false;
+      }
+
       function renderImportConfirmSheet(tallies) {
         if (!detectedItemsList || !importConfirmSheet) return;
+        resetImportSheetUI();
         detectedItemsList.innerHTML = '';
 
         const items = [
@@ -9381,65 +9442,114 @@
       if (btnExecuteImportConfirm) {
         btnExecuteImportConfirm.addEventListener('click', () => {
           if (!pendingImportBundle) return;
-          const { text, tallies } = pendingImportBundle;
-          launchProvisioningSession(text, tallies);
+          btnExecuteImportConfirm.disabled = true;
+          if (btnCancelImportConfirm) btnCancelImportConfirm.disabled = true;
+          if (btnCloseImportConfirm) btnCloseImportConfirm.disabled = true;
+          if (importActionButtonsRow) importActionButtonsRow.style.display = 'none';
+          if (importProgressBox) importProgressBox.style.display = 'flex';
+          if (importProgressMessage) importProgressMessage.textContent = 'Verifying and restoring configurations...';
+
+          sendWs({
+            type: 'import_configurations',
+            content: pendingImportBundle.text
+          });
         });
       }
 
-      function launchProvisioningSession(markdownPrompt, tallies) {
-        closeImportConfirmSheet();
-        closeSettingsHub();
-
-        if (state.conversationId) {
-          const curBuf = getOrCreateSessionBuffer(state.conversationId);
-          curBuf.draftPrompt = '';
+      function handleImportProgress(msg) {
+        if (importProgressMessage && msg.message) {
+          importProgressMessage.textContent = msg.message;
         }
-        state.conversationId = null;
-        if (window.AndroidApp && typeof window.AndroidApp.setActiveSession === 'function') {
-          window.AndroidApp.setActiveSession(null);
+      }
+
+      function handleImportResult(msg) {
+        if (importProgressBox) importProgressBox.style.display = 'none';
+        if (btnCloseImportConfirm) btnCloseImportConfirm.disabled = false;
+
+        if (!msg.success) {
+          if (importSheetTitle) importSheetTitle.textContent = 'Restoration Failed';
+          if (importResultSummaryBox) {
+            importResultSummaryBox.style.display = 'flex';
+            importResultSummaryBox.innerHTML = `
+              <div class="alert-box error" style="margin-bottom:8px;">
+                <div style="font-weight:600;">Failed to Restore Configurations</div>
+                <div>${escapeHtml(msg.error || 'An unexpected error occurred during import.')}</div>
+              </div>
+            `;
+          }
+          if (importActionButtonsRow) importActionButtonsRow.style.display = 'flex';
+          if (btnExecuteImportConfirm) {
+            btnExecuteImportConfirm.disabled = false;
+            btnExecuteImportConfirm.textContent = 'Retry Restoration';
+          }
+          if (btnCancelImportConfirm) btnCancelImportConfirm.disabled = false;
+          showToast(`Import failed: ${msg.error || 'Unknown error'}`);
+          return;
         }
-        chatViewport.innerHTML = '';
-        state.activeTurns.clear();
-        renderEmptyWelcome();
-        setInitializingControlsState(false);
-        updatePinButtonState(false);
-        stopLiveProgress();
-        resetSendButtonToIdle();
-        if (sessionTitle) {
-          sessionTitle.textContent = 'Restoring Configuration';
+
+        // Success flow
+        if (importSheetTitle) importSheetTitle.textContent = 'Restoration Complete';
+        if (importSheetSubtitle) importSheetSubtitle.textContent = 'Configurations were safely applied locally to your environment:';
+        if (detectedItemsList) detectedItemsList.style.display = 'none';
+        if (importZeroOverwriteNote) importZeroOverwriteNote.style.display = 'none';
+
+        const summary = msg.summary || {};
+        const categories = [
+          { label: 'SSH Keys', icon: 'key', data: summary.ssh_keys, verb: 'restored' },
+          { label: 'API Keys', icon: 'lock', data: summary.api_keys, verb: 'merged' },
+          { label: 'Custom Skills', icon: 'bolt', data: summary.skills, verb: 'restored' },
+          { label: 'MCP Servers', icon: 'server', data: summary.mcps, verb: 'added' },
+          { label: 'Packages', icon: 'box-archive', data: summary.packages, verb: 'installed' },
+        ];
+
+        let summaryHtml = '<ul class="detected-items-list" style="margin-bottom:12px;">';
+        categories.forEach(cat => {
+          const d = cat.data || {};
+          const restoredCount = Array.isArray(d.restored) ? d.restored.length : (Array.isArray(d.installed) ? d.installed.length : 0);
+          const preservedCount = Array.isArray(d.preserved) ? d.preserved.length : 0;
+          const failedCount = Array.isArray(d.failed) ? d.failed.length : 0;
+
+          if (restoredCount > 0 || preservedCount > 0 || failedCount > 0) {
+            summaryHtml += `
+              <li>
+                <span>${faIcon(cat.icon, '', 'width:13px;height:13px;margin-right:6px;')}<strong>${cat.label}</strong></span>
+                <span style="display:flex;gap:4px;font-size:11px;">
+                  ${restoredCount > 0 ? `<span style="background:rgba(16,185,129,0.15);color:#10b981;padding:2px 6px;border-radius:4px;font-weight:600;">+${restoredCount} ${cat.verb}</span>` : ''}
+                  ${preservedCount > 0 ? `<span style="background:rgba(148,163,184,0.15);color:var(--text-muted);padding:2px 6px;border-radius:4px;">${preservedCount} preserved</span>` : ''}
+                  ${failedCount > 0 ? `<span style="background:rgba(244,63,94,0.15);color:#f43f5e;padding:2px 6px;border-radius:4px;font-weight:600;">${failedCount} failed</span>` : ''}
+                </span>
+              </li>
+            `;
+          }
+        });
+        summaryHtml += '</ul>';
+
+        if (summary.packages && summary.packages.failed && summary.packages.failed.length > 0) {
+          summaryHtml += `
+            <div class="alert-box warning" style="padding:10px;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.3);border-radius:8px;font-size:12px;color:var(--accent-amber);line-height:1.4;margin-bottom:12px;">
+              <strong>Package Installation Notice:</strong> ${escapeHtml(summary.packages.error || 'Some packages could not be installed. Check your network connection.')}
+            </div>
+          `;
         }
 
-        const summaryParts = [];
-        if (tallies.ssh_keys) summaryParts.push(`${tallies.ssh_keys} SSH keys`);
-        if (tallies.api_keys) summaryParts.push(`${tallies.api_keys} API keys`);
-        if (tallies.skills) summaryParts.push(`${tallies.skills} skills`);
-        if (tallies.mcps) summaryParts.push(`${tallies.mcps} MCPs`);
-        if (tallies.packages) summaryParts.push(`${tallies.packages} packages`);
-        const summaryText = summaryParts.join(', ') || 'configurations';
+        if (importResultSummaryBox) {
+          importResultSummaryBox.style.display = 'flex';
+          importResultSummaryBox.innerHTML = summaryHtml;
+        }
 
-        const compactDisplay = `📦 **Restoring Antigravity Studio Provisioning Bundle**\n\nRestoring ${summaryText} into environment...`;
+        if (importActionButtonsRow) importActionButtonsRow.style.display = 'none';
+        if (importDoneButtonRow) importDoneButtonRow.style.display = 'block';
 
-        appendUserBubble(compactDisplay, []);
+        showToast('Configurations successfully restored!');
+      }
 
-        const buf = getOrCreateSessionBuffer(state.conversationId);
-        buf.activeUserPrompt = compactDisplay;
-        buf.activeUserAttachments = [];
-        buf.isRunning = true;
-        buf.startTime = performance.now();
-        buf.unread = false;
-        syncUnreadToStorage();
-
-        buf.currentAction = 'Restoring configurations...';
-        startLiveProgress('Restoring configurations...', buf.startTime);
-
-        sendWs({
-          type: 'user_prompt',
-          prompt: markdownPrompt,
-          attachments: [],
-          conversation_id: null,
-          model: state.model,
-          mode: state.mode,
-          effort: state.effort,
+      if (btnDoneImportConfirm) {
+        btnDoneImportConfirm.addEventListener('click', () => {
+          closeImportConfirmSheet();
+          sendWs({ type: 'list_ssh_keys' });
+          sendWs({ type: 'list_skills' });
+          sendWs({ type: 'list_mcp_servers' });
+          sendWs({ type: 'list_installed_packages' });
         });
       }
 

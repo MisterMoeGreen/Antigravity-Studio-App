@@ -1668,6 +1668,254 @@ async def generate_config_export_bundle(categories: list[str]) -> tuple[str, str
 
 
 # ---------------------------------------------------------------------------
+# Configuration Import Engine (v1.6.3 Spec 02)
+# ---------------------------------------------------------------------------
+
+IMPORT_MUTATION_LOCK = asyncio.Lock()
+
+
+async def restore_configurations_bundle(
+    content: str,
+    progress_callback: Optional[Any] = None,
+) -> dict[str, Any]:
+    # 1. Size Boundary (ARGON-V163-20)
+    if len(content) > 10 * 1024 * 1024:
+        raise ValueError("File exceeds maximum allowable backup size (10 MB).")
+
+    # 2. Magic Signature & Frontmatter
+    if not content.strip().startswith("<!-- ANTIGRAVITY_STUDIO_EXPORT_V1 -->"):
+        raise ValueError("Invalid backup file: Missing Antigravity Studio export signature on Line 1.")
+
+    fm_match = re.match(
+        r"^<!-- ANTIGRAVITY_STUDIO_EXPORT_V1 -->\s*\r?\n---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$",
+        content,
+    )
+    if not fm_match:
+        raise ValueError("Corrupted export bundle: Missing YAML frontmatter block.")
+
+    raw_frontmatter = fm_match.group(1)
+    post_frontmatter_body = fm_match.group(2)
+
+    meta: dict[str, str] = {}
+    for fline in raw_frontmatter.splitlines():
+        kv = re.match(r"^([a-z_]+):\s*(.+)$", fline.strip(), re.IGNORECASE)
+        if kv:
+            meta[kv.group(1).strip()] = kv.group(2).strip().strip("\"'")
+
+    if meta.get("generator") != "Antigravity Studio":
+        raise ValueError("Invalid generator: File was not created by Antigravity Studio.")
+
+    # 3. SHA-256 Checksum Verification
+    checksum = meta.get("checksum", "")
+    if not checksum or not checksum.startswith("sha256:"):
+        raise ValueError("Missing or invalid checksum in backup frontmatter.")
+
+    expected_hash = checksum.split(":", 1)[1].strip().lower()
+    normalized_body = post_frontmatter_body.replace("\r\n", "\n").strip()
+    computed_hash = hashlib.sha256(normalized_body.encode("utf-8")).hexdigest().lower()
+    if computed_hash != expected_hash:
+        raise ValueError("Integrity check failed: Checksum mismatch indicates file was modified or corrupted.")
+
+    summary: dict[str, Any] = {
+        "ssh_keys": {"restored": [], "preserved": []},
+        "api_keys": {"restored": [], "preserved": []},
+        "skills": {"restored": [], "preserved": []},
+        "mcps": {"restored": [], "preserved": []},
+        "packages": {"installed": [], "preserved": [], "failed": [], "error": ""},
+    }
+
+    # 4. Phase 1: SSH Keys
+    if "## Section: SSH Keys" in post_frontmatter_body:
+        if progress_callback:
+            await progress_callback("Restoring SSH keys & credentials...")
+        SSH_DIR.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(str(SSH_DIR), 0o700)
+        key_blocks = re.findall(
+            r"### SSH Key:\s*`([^`]+)`([\s\S]*?)(?=### SSH Key:|## Section:|\Z)",
+            post_frontmatter_body,
+        )
+        for kname, kbody in key_blocks:
+            kname = kname.strip()
+            # ARGON-V163-15: Key Name Validation & Reserved Names
+            if not KEY_NAME_RE.match(kname) or kname.lower() in RESERVED_SSH_NAMES:
+                logger.warning("Skipping invalid or reserved SSH key name: %s", kname)
+                continue
+            pub_path = SSH_DIR / f"{kname}.pub"
+            priv_path = SSH_DIR / kname
+            if pub_path.exists() or priv_path.exists():
+                summary["ssh_keys"]["preserved"].append(kname)
+                continue
+
+            pub_match = re.search(r"#### Public Key[^\n]*\n```[a-z]*\s*\n([\s\S]*?)\s*\n```", kbody)
+            priv_match = re.search(r"#### Private Key[^\n]*\n```[a-z]*\s*\n([\s\S]*?)\s*\n```", kbody)
+            pub_text = pub_match.group(1).strip() if pub_match else ""
+            priv_text = priv_match.group(1).strip() if priv_match else ""
+
+            if priv_text:
+                atomic_write_secure(str(priv_path), priv_text + "\n", mode=0o600)
+                if pub_text:
+                    atomic_write_secure(str(pub_path), pub_text + "\n", mode=0o644)
+                summary["ssh_keys"]["restored"].append(kname)
+
+        sync_ssh_config()
+
+    # 5. Phase 2: API Keys
+    if "## Section: API Keys" in post_frontmatter_body:
+        if progress_callback:
+            await progress_callback("Merging API keys...")
+        api_match = re.search(r"## Section: API Keys[\s\S]*?```json\s*([\s\S]*?)\s*```", post_frontmatter_body)
+        if api_match:
+            try:
+                imported_keys = json.loads(api_match.group(1))
+                if isinstance(imported_keys, dict):
+                    store = load_api_keys_store()
+                    keys = store.setdefault("keys", {})
+                    has_new = False
+                    for kname, kdata in imported_keys.items():
+                        kname = kname.strip()
+                        if not re.match(r"^[A-Za-z0-9_-]+$", kname):
+                            continue
+                        if kname in keys:
+                            summary["api_keys"]["preserved"].append(kname)
+                        else:
+                            val = kdata.get("value", "") if isinstance(kdata, dict) else str(kdata)
+                            desc = kdata.get("description", "") if isinstance(kdata, dict) else ""
+                            if val:
+                                keys[kname] = {
+                                    "value": val,
+                                    "description": desc.strip(),
+                                    "created_at": int(time.time()),
+                                }
+                                summary["api_keys"]["restored"].append(kname)
+                                has_new = True
+                    if has_new:
+                        store["updated_at"] = int(time.time())
+                        atomic_write_secure(str(API_KEYS_FILE), json.dumps(store, indent=2) + "\n", mode=0o600)
+                        sync_api_keys_manifest()
+            except Exception as exc:
+                logger.warning("Error parsing API keys section during restore: %s", exc)
+
+    # 6. Phase 3: Custom Skills (Recursive Multi-File)
+    if "## Section: Custom Skills" in post_frontmatter_body:
+        if progress_callback:
+            await progress_callback("Restoring custom skills...")
+        GLOBAL_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+        skill_blocks = re.findall(
+            r"### Skill:\s*`([^`]+)`([\s\S]*?)(?=### Skill:|## Section:|\Z)",
+            post_frontmatter_body,
+        )
+        for sname, sbody in skill_blocks:
+            sname = sname.strip()
+            if not re.match(r"^[a-zA-Z0-9_\-]+$", sname):
+                continue
+            target_skill_dir = GLOBAL_SKILLS_DIR / sname
+            if target_skill_dir.exists():
+                summary["skills"]["preserved"].append(sname)
+                continue
+
+            file_blocks = re.findall(
+                r"#### File:\s*`([^`]+)`\s*\n```[a-z]*\s*\n([\s\S]*?)\s*\n```(?=\n\n#### File:|\n\n### Skill:|\n\n---\n\n## Section:|\n\n---\n\n\Z|\Z)",
+                sbody,
+            )
+            if file_blocks:
+                target_skill_dir.mkdir(parents=True, exist_ok=True)
+                for rel_path, fcontent in file_blocks:
+                    # ARGON-V163-14: ZipSlip / Path Traversal Guard
+                    clean_rel = rel_path.strip().replace("\\", "/")
+                    if (
+                        clean_rel.startswith("/")
+                        or clean_rel.startswith("../")
+                        or "/../" in clean_rel
+                        or clean_rel == ".."
+                    ):
+                        logger.warning("Rejected unsafe relative path in skill %s: %s", sname, rel_path)
+                        continue
+                    dest_file = (target_skill_dir / clean_rel).resolve()
+                    if not dest_file.is_relative_to(target_skill_dir.resolve()):
+                        logger.warning("Path traversal attempt detected in skill %s: %s", sname, rel_path)
+                        continue
+                    dest_file.parent.mkdir(parents=True, exist_ok=True)
+                    dest_file.write_text(fcontent, encoding="utf-8")
+                summary["skills"]["restored"].append(sname)
+
+    # 7. Phase 4: MCP Servers
+    if "## Section: MCP Servers" in post_frontmatter_body:
+        if progress_callback:
+            await progress_callback("Configuring MCP servers...")
+        mcp_match = re.search(r"## Section: MCP Servers[\s\S]*?```json\s*([\s\S]*?)\s*```", post_frontmatter_body)
+        if mcp_match:
+            try:
+                imported_mcps = json.loads(mcp_match.group(1))
+                if isinstance(imported_mcps, dict):
+                    current_data = {"mcpServers": {}}
+                    if MCP_CONFIG_FILE.exists():
+                        try:
+                            current_data = json.loads(MCP_CONFIG_FILE.read_text(encoding="utf-8"))
+                        except Exception:
+                            pass
+                    servers = current_data.setdefault("mcpServers", {})
+                    has_new_mcp = False
+                    for mname, mcfg in imported_mcps.items():
+                        mname = mname.strip()
+                        if mname in servers:
+                            summary["mcps"]["preserved"].append(mname)
+                        else:
+                            servers[mname] = mcfg
+                            summary["mcps"]["restored"].append(mname)
+                            has_new_mcp = True
+                    if has_new_mcp:
+                        atomic_write_secure(str(MCP_CONFIG_FILE), json.dumps(current_data, indent=2) + "\n", mode=0o600)
+            except Exception as exc:
+                logger.warning("Error parsing MCP servers section during restore: %s", exc)
+
+    # 8. Phase 5: Container Packages & Differential apk add
+    if "## Section: Alpine Linux Packages" in post_frontmatter_body:
+        if progress_callback:
+            await progress_callback("Checking container packages...")
+        pkg_match = re.search(r"## Section: Alpine Linux Packages[\s\S]*?```json\s*([\s\S]*?)\s*```", post_frontmatter_body)
+        if pkg_match:
+            try:
+                imported_pkgs = json.loads(pkg_match.group(1))
+                if isinstance(imported_pkgs, list):
+                    installed_data = get_installed_packages()
+                    installed_names = {p["name"] for p in installed_data.get("packages", [])}
+                    missing: list[str] = []
+                    for pkg in imported_pkgs:
+                        pkg_str = str(pkg).strip()
+                        try:
+                            validate_pkg_name(pkg_str)
+                        except Exception:
+                            continue
+                        if pkg_str in installed_names:
+                            summary["packages"]["preserved"].append(pkg_str)
+                        else:
+                            missing.append(pkg_str)
+
+                    if missing:
+                        sample_str = ", ".join(missing[:3]) + ("..." if len(missing) > 3 else "")
+                        if progress_callback:
+                            await progress_callback(f"Installing {len(missing)} package(s) via apk add: {sample_str}")
+                        async with APK_MUTATION_LOCK:
+                            try:
+                                code, stdout, stderr = await run_apk_command("add", "--no-cache", *missing)
+                                if code == 0:
+                                    summary["packages"]["installed"].extend(missing)
+                                else:
+                                    err_msg = stderr.strip() or stdout.strip() or f"Exit code {code}"
+                                    logger.warning("apk add returned non-zero during restore: %s", err_msg)
+                                    summary["packages"]["failed"].extend(missing)
+                                    summary["packages"]["error"] = err_msg
+                            except Exception as apk_err:
+                                logger.warning("apk add exception during restore: %s", apk_err)
+                                summary["packages"]["failed"].extend(missing)
+                                summary["packages"]["error"] = str(apk_err)
+            except Exception as exc:
+                logger.warning("Error parsing packages section during restore: %s", exc)
+
+    return summary
+
+
+# ---------------------------------------------------------------------------
 # Storage Engine: Read-Only SQLite & JSONL Transcript Inspector
 # ---------------------------------------------------------------------------
 
@@ -6629,6 +6877,66 @@ class AgyWebServer:
                     "success": False,
                     "error": str(exc),
                 }))
+            return
+
+        # Configuration Local Import (v1.6.3 Spec 02)
+        if mtype == "import_configurations":
+            content = data.get("content", "")
+            if not isinstance(content, str) or not content:
+                await websocket.send(json.dumps({
+                    "type": "import_configurations_result",
+                    "success": False,
+                    "error": "No configuration content provided.",
+                }))
+                return
+
+            if IMPORT_MUTATION_LOCK.locked():
+                await websocket.send(json.dumps({
+                    "type": "import_configurations_result",
+                    "success": False,
+                    "error": "Another restoration is currently in progress. Please wait.",
+                }))
+                return
+
+            async with IMPORT_MUTATION_LOCK:
+                async def progress_cb(message: str) -> None:
+                    try:
+                        await websocket.send(json.dumps({
+                            "type": "import_configurations_progress",
+                            "message": message,
+                        }))
+                    except Exception:
+                        pass
+
+                try:
+                    summary = await restore_configurations_bundle(content, progress_callback=progress_cb)
+                    await websocket.send(json.dumps({
+                        "type": "import_configurations_result",
+                        "success": True,
+                        "summary": summary,
+                    }))
+                    pkgs_failed = len(summary["packages"]["failed"])
+                    await self.broadcast({
+                        "type": "system_card",
+                        "title": "Configurations Restored Locally",
+                        "markdown": (
+                            f"Restored configuration bundle:\n"
+                            f"- **SSH Keys**: {len(summary['ssh_keys']['restored'])} restored, {len(summary['ssh_keys']['preserved'])} preserved\n"
+                            f"- **API Keys**: {len(summary['api_keys']['restored'])} merged, {len(summary['api_keys']['preserved'])} preserved\n"
+                            f"- **Skills**: {len(summary['skills']['restored'])} restored, {len(summary['skills']['preserved'])} preserved\n"
+                            f"- **MCPs**: {len(summary['mcps']['restored'])} added, {len(summary['mcps']['preserved'])} preserved\n"
+                            f"- **Packages**: {len(summary['packages']['installed'])} installed, {len(summary['packages']['preserved'])} preserved"
+                            + (f" ({pkgs_failed} failed)" if pkgs_failed else "")
+                        ),
+                        "level": "info" if not pkgs_failed else "warning",
+                    })
+                except Exception as exc:
+                    logger.exception("Configuration restoration failed: %s", exc)
+                    await websocket.send(json.dumps({
+                        "type": "import_configurations_result",
+                        "success": False,
+                        "error": str(exc),
+                    }))
             return
 
         if mtype == "user_prompt":
