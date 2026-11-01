@@ -16,7 +16,7 @@ Following the implementation of the full-page Google authentication overlay in `
 1. **PTY Descriptor Leak Defense (`ARGON-V162-01`)**: Guarantees atomic cleanup of `master` and `slave` descriptors across all spawn failure paths via immediate assignment and `try...finally`.
 2. **Credential Redaction in Logs (`ARGON-V162-02`)**: Sanitizes diagnostic PTY output strings to prevent Google OAuth authorization codes and tokens from leaking into logs.
 3. **Subprocess Termination Escalation (`ARGON-V162-03`)**: Implements SIGTERM-to-SIGKILL escalation to ensure orphaned CLI processes never persist in memory.
-4. **Synchronized Build Metadata**: Increments `VERSION_CODE=44` and `VERSION_NAME=1.6.2` across Gradle, Python server, and frontend UI.
+4. **Synchronized Build Metadata**: Increments `VERSION_CODE=46` and `VERSION_NAME=1.6.2` across Gradle, Python server, and frontend UI.
 
 ---
 
@@ -48,8 +48,10 @@ specs/v1.6.2/
 
 - [x] **AC-1.6.2.1**: PTY `master` descriptor is tracked immediately upon allocation.
 - [x] **AC-1.6.2.2**: `slave` descriptor is guaranteed closed in a `finally:` block.
-- [x] **AC-1.6.2.3**: `logger.error` redacts all OAuth authorization codes in error messages.
-- [x] **AC-1.6.2.4**: Process cleanup escalates to SIGKILL if the process fails to terminate.
-- [x] **AC-1.6.2.5**: App version bumped to `v1.6.2` (build 45).
+- [x] **AC-1.6.2.3**: `logger.error`, `logger.warning`, and error exceptions redact all OAuth authorization codes, access tokens (`ya29...`), and refresh tokens (`1//...`).
+- [x] **AC-1.6.2.4**: Subprocess cleanup escalates from `SIGTERM` to `SIGKILL` asynchronously and awaits `wait()` to cleanly reap child processes.
+- [x] **AC-1.6.2.5**: App version bumped to `v1.6.2` (build 46).
 - [x] **AC-1.6.2.6**: `AndroidApp.openUrl(url)` JavaScript bridge opens OAuth consent in Chrome Custom Tabs reliably.
 - [x] **AC-1.6.2.7**: `AgyProcessOrchestrator` class scope integrity verified with test assertions.
+- [x] **AC-1.6.2.8**: Bounded WebSocket message queue (`MAX_WS_QUEUE = 50`) prevents memory growth during disconnected states.
+- [x] **AC-1.6.2.9**: Touch close button on auth overlay and Android back gesture dismiss `#loginOverlay` when the session is already authenticated.

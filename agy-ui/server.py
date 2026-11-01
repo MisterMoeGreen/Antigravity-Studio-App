@@ -2652,7 +2652,13 @@ def redact_sensitive_auth_output(text: str) -> str:
     """Redacts OAuth authorization codes and tokens from PTY diagnostic output (ARGON-V162-02)."""
     if not text:
         return ""
+    # Redact Google OAuth auth codes (format: 4/0A...)
     redacted = re.sub(r"4/[a-zA-Z0-9_\-]{15,}", "4/[REDACTED_AUTH_CODE]", text)
+    # Redact Google OAuth access tokens (format: ya29...)
+    redacted = re.sub(r"ya29\.[a-zA-Z0-9_\-]+", "ya29.[REDACTED_ACCESS_TOKEN]", redacted)
+    # Redact Google OAuth refresh tokens (format: 1//...)
+    redacted = re.sub(r"1//[a-zA-Z0-9_\-]+", "1//[REDACTED_REFRESH_TOKEN]", redacted)
+    # Redact URL query parameters
     redacted = re.sub(r"([?&](?:code|token|key|secret)=)[^&\s]+", r"\1[REDACTED]", redacted)
     return redacted
 
@@ -3548,17 +3554,35 @@ class AgyProcessOrchestrator:
             except Exception:
                 pass
             self.auth_master = None
-        if self.auth_proc:
+        proc_to_kill = self.auth_proc
+        self.auth_proc = None
+        if proc_to_kill:
+            async def _reap_proc(p):
+                try:
+                    if p.returncode is None:
+                        p.terminate()
+                        try:
+                            await asyncio.wait_for(p.wait(), timeout=0.5)
+                        except (asyncio.TimeoutError, Exception):
+                            if p.returncode is None:
+                                p.kill()
+                                try:
+                                    await asyncio.wait_for(p.wait(), timeout=0.5)
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
+
             try:
-                if self.auth_proc.returncode is None:
-                    self.auth_proc.terminate()
-                    try:
-                        self.auth_proc.kill()
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-            self.auth_proc = None
+                loop = asyncio.get_running_loop()
+                loop.create_task(_reap_proc(proc_to_kill))
+            except RuntimeError:
+                try:
+                    if proc_to_kill.returncode is None:
+                        proc_to_kill.terminate()
+                        proc_to_kill.kill()
+                except Exception:
+                    pass
         if self.auth_waiter_task and not self.auth_waiter_task.done():
             self.auth_waiter_task.cancel()
         self.auth_waiter_task = None
@@ -3692,7 +3716,7 @@ class AgyProcessOrchestrator:
                                 logger.info("Detected success keyword in CLI output: %s", chunk[:100])
                                 break
                             if any(w in lowered for w in ["invalid_grant", "invalid authorization code", "error:", "bad request"]):
-                                logger.warning("Detected error keyword in CLI output: %s", output_tail[-200:])
+                                logger.warning("Detected error keyword in CLI output: %s", redact_sensitive_auth_output(output_tail[-200:]))
                                 break
                     except Exception:
                         pass
@@ -3865,7 +3889,7 @@ class AgyProcessOrchestrator:
 
                 if proc.returncode is not None:
                     raise RuntimeError(
-                        f"Antigravity CLI process terminated prematurely (exit code {proc.returncode}). Output: {output.strip() or 'None'}"
+                        f"Antigravity CLI process terminated prematurely (exit code {proc.returncode}). Output: {redact_sensitive_auth_output(output.strip()) or 'None'}"
                     )
 
                 auth_url = None
@@ -3880,7 +3904,7 @@ class AgyProcessOrchestrator:
                     )
                     if m:
                         auth_url = m.group(1)
-                        if "&state=" in auth_url or "authorization code" in output.lower():
+                        if re.search(r"&state=[a-zA-Z0-9_\-]{8,}", auth_url) or "\n" in output[m.end():] or "authorization code" in output.lower():
                             break
 
                     await asyncio.sleep(0.15)
@@ -3895,7 +3919,7 @@ class AgyProcessOrchestrator:
                             )
                             if m:
                                 auth_url = m.group(1)
-                                if "&state=" in auth_url or "authorization code" in output.lower():
+                                if re.search(r"&state=[a-zA-Z0-9_\-]{8,}", auth_url) or "\n" in output[m.end():] or "authorization code" in output.lower():
                                     break
                         except Exception:
                             break

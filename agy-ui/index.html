@@ -2727,6 +2727,7 @@
     }
 
     .auth-card {
+      position: relative;
       width: 100%;
       max-width: 420px;
       background: var(--bg-surface, #141824);
@@ -2738,6 +2739,29 @@
       flex-direction: column;
       gap: 18px;
       box-sizing: border-box;
+    }
+
+    .btn-auth-close {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+      border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
+      color: var(--text-muted, #94a3b8);
+      font-size: 15px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      z-index: 2;
+    }
+    .btn-auth-close:hover {
+      background: var(--bg-surface-active, rgba(255, 255, 255, 0.16));
+      color: var(--text-main, #f8fafc);
     }
 
     .auth-logo-badge {
@@ -3110,6 +3134,7 @@
   <!-- Dedicated Google Authentication Full-Page Overlay (v1.6.1) -->
   <div class="auth-page-overlay" id="loginOverlay" style="display: none;">
     <div class="auth-card">
+      <button type="button" class="btn-auth-close" id="btnAuthClose" title="Close" style="display: none;">✕</button>
       <div class="auth-logo-badge">
         <img src="/icon-192.png" alt="Antigravity Studio" />
       </div>
@@ -4035,6 +4060,7 @@
         ws: null,
         isRunning: false,
         isAuthenticating: false,
+        isAuthenticated: false,
         conversationId: null,
         model: localStorage.getItem('agy_user_model') || 'gemini-3.8-flash',
         mode: 'default',
@@ -4164,6 +4190,7 @@
 
       const authOverlay = {
         el: document.getElementById('loginOverlay'),
+        btnClose: document.getElementById('btnAuthClose'),
         btnGoogle: document.getElementById('btnLoginGoogle'),
         labelGoogle: document.getElementById('labelLoginGoogle'),
         inputCode: document.getElementById('authCodeInput'),
@@ -4182,6 +4209,9 @@
           hideBootSplash();
           if (this.el) {
             this.el.style.display = 'flex';
+          }
+          if (this.btnClose) {
+            this.btnClose.style.display = state.isAuthenticated ? 'flex' : 'none';
           }
           this.resetState();
           if (reason === 'expired') {
@@ -4267,6 +4297,12 @@
 
         init() {
           if (!this.el) return;
+
+          if (this.btnClose) {
+            this.btnClose.addEventListener('click', () => {
+              this.hide();
+            });
+          }
 
           if (this.btnGoogle) {
             this.btnGoogle.addEventListener('click', () => {
@@ -4887,10 +4923,14 @@
       }
 
       const wsMessageQueue = [];
+      const MAX_WS_QUEUE = 50;
       function sendWs(payload) {
         if (state.ws && state.ws.readyState === WebSocket.OPEN) {
           state.ws.send(JSON.stringify(payload));
         } else {
+          if (wsMessageQueue.length >= MAX_WS_QUEUE) {
+            wsMessageQueue.shift();
+          }
           wsMessageQueue.push(payload);
         }
       }
@@ -5302,8 +5342,10 @@
               state.isAuthenticating = true;
             }
             if (msg.is_authenticated === false) {
+              state.isAuthenticated = false;
               authOverlay.show('required');
             } else if (msg.is_authenticated === true) {
+              state.isAuthenticated = true;
               authOverlay.hide();
             }
             state.wsInitialized = true;
@@ -5722,6 +5764,7 @@
             break;
 
           case 'auth_required':
+            state.isAuthenticated = false;
             state.isAuthenticating = true;
             stopLiveProgress();
             authOverlay.show(msg.reason || 'required');
@@ -5732,6 +5775,7 @@
             break;
 
           case 'auth_success':
+            state.isAuthenticated = true;
             state.isAuthenticating = false;
             authOverlay.showAlert('Sign-In Confirmed! Setting up runtime...', 'success');
             setInitializingControlsState(false);
@@ -9027,6 +9071,12 @@
         const qModal = document.getElementById('modalAskQuestion');
         if (qModal && qModal.style.display !== 'none' && qModal.style.display !== '') {
           submitQuestionResponse({ skipped: true });
+          return true;
+        }
+
+        // 0b. Dismiss auth overlay if user was already authenticated and manually opened /login
+        if (authOverlay && authOverlay.el && authOverlay.el.style.display !== 'none' && state.isAuthenticated) {
+          authOverlay.hide();
           return true;
         }
 

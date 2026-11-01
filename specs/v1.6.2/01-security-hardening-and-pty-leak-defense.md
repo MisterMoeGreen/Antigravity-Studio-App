@@ -62,28 +62,48 @@ def redact_sensitive_auth_output(text: str) -> str:
     """Redacts OAuth authorization codes and tokens from PTY diagnostic output."""
     if not text:
         return ""
-    # Redact Google OAuth code formats: 4/0A...
-    redacted = re.sub(r"4/[a-zA-Z0-9_\-]{20,}", "4/[REDACTED_AUTH_CODE]", text)
-    # Redact URL parameters
-    redacted = re.sub(r"(code|token|key)=([^&\s]+)", r"\1=[REDACTED]", redacted)
+    # Redact Google OAuth auth codes: 4/0A...
+    redacted = re.sub(r"4/[a-zA-Z0-9_\-]{15,}", "4/[REDACTED_AUTH_CODE]", text)
+    # Redact Google OAuth access tokens: ya29...
+    redacted = re.sub(r"ya29\.[a-zA-Z0-9_\-]+", "ya29.[REDACTED_ACCESS_TOKEN]", redacted)
+    # Redact Google OAuth refresh tokens: 1//...
+    redacted = re.sub(r"1//[a-zA-Z0-9_\-]+", "1//[REDACTED_REFRESH_TOKEN]", redacted)
+    # Redact URL query parameters
+    redacted = re.sub(r"([?&](?:code|token|key|secret)=)[^&\s]+", r"\1[REDACTED]", redacted)
     return redacted
 ```
 
-### 2.3 Process Escalation on Cleanup
+### 2.3 Asynchronous Process Escalation & Zombie Reaping
 ```python
-if self.auth_proc:
+proc_to_kill = self.auth_proc
+self.auth_proc = None
+if proc_to_kill:
+    async def _reap_proc(p):
+        try:
+            if p.returncode is None:
+                p.terminate()
+                try:
+                    await asyncio.wait_for(p.wait(), timeout=0.5)
+                except (asyncio.TimeoutError, Exception):
+                    if p.returncode is None:
+                        p.kill()
+                        try:
+                            await asyncio.wait_for(p.wait(), timeout=0.5)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
     try:
-        if self.auth_proc.returncode is None:
-            self.auth_proc.terminate()
-            # Escalate to SIGKILL if not exited within 500ms
-            try:
-                await asyncio.wait_for(self.auth_proc.wait(), timeout=0.5)
-            except asyncio.TimeoutError:
-                if self.auth_proc.returncode is None:
-                    self.auth_proc.kill()
-    except Exception:
-        pass
-    self.auth_proc = None
+        loop = asyncio.get_running_loop()
+        loop.create_task(_reap_proc(proc_to_kill))
+    except RuntimeError:
+        try:
+            if proc_to_kill.returncode is None:
+                proc_to_kill.terminate()
+                proc_to_kill.kill()
+        except Exception:
+            pass
 ```
 
 ---
@@ -92,8 +112,10 @@ if self.auth_proc:
 
 - [x] **AC-1.6.2.1**: `pty.openpty()` immediately sets `self.auth_master = master` so any subsequent exception triggers descriptor closure via `_cleanup_auth()`.
 - [x] **AC-1.6.2.2**: `slave` is closed in a `finally:` block, preventing file descriptor leaks if subprocess execution fails.
-- [x] **AC-1.6.2.3**: `logger.error` output on auth verification failure redacts OAuth code strings (`4/...`).
-- [x] **AC-1.6.2.4**: Subprocess cleanup escalates from `SIGTERM` to `SIGKILL` if the child process does not exit within 500ms.
-- [x] **AC-1.6.2.5**: Release metadata, `version.properties`, and runtime headers are synchronized to `v1.6.2` (build `45`).
+- [x] **AC-1.6.2.3**: `logger.error`, `logger.warning`, and error exceptions redact all OAuth authorization codes, access tokens (`ya29...`), and refresh tokens (`1//...`).
+- [x] **AC-1.6.2.4**: Subprocess cleanup escalates from `SIGTERM` to `SIGKILL` asynchronously and awaits `wait()` to cleanly reap child processes.
+- [x] **AC-1.6.2.5**: Release metadata, `version.properties`, and runtime headers are synchronized to `v1.6.2` (build `46`).
 - [x] **AC-1.6.2.6**: `AndroidApp.openUrl(url)` JavaScript bridge and HTML5 anchor fallback ensure OAuth URLs open in Chrome Custom Tabs from Android WebView.
 - [x] **AC-1.6.2.7**: Class scope integrity verified so `trigger_in_app_login` and `submit_auth_code` remain methods of `AgyProcessOrchestrator`.
+- [x] **AC-1.6.2.8**: Bounded WebSocket message queue (`MAX_WS_QUEUE = 50`) prevents memory growth during disconnected states.
+- [x] **AC-1.6.2.9**: Touch close button on auth overlay and Android back gesture dismiss `#loginOverlay` when the session is already authenticated.
