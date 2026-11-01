@@ -220,9 +220,17 @@ class MainActivity : AppCompatActivity() {
                     this@MainActivity.filePathCallback?.onReceiveValue(null)
                     this@MainActivity.filePathCallback = filePathCallback
                     return try {
-                        val intent = fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
+                        val intent = (fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT)).apply {
                             addCategory(Intent.CATEGORY_OPENABLE)
-                            type = "*/*"
+                        }
+                        // Android DocumentsUI greys out files if invalid MIME types (e.g. extension filters like ".md")
+                        // are passed in intent.type or EXTRA_MIME_TYPES. If acceptTypes is empty, contains wildcard,
+                        // or contains file extensions (starts with dot or lacks slash), ensure intent allows all files.
+                        val acceptTypes = fileChooserParams?.acceptTypes
+                        val hasUnsupportedMime = acceptTypes?.any { it.startsWith(".") || !it.contains("/") } == true
+                        if (hasUnsupportedMime || acceptTypes.isNullOrEmpty() || acceptTypes.contains("*/*")) {
+                            intent.type = "*/*"
+                            intent.removeExtra(Intent.EXTRA_MIME_TYPES)
                         }
                         if (fileChooserParams?.mode == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) {
                             intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
