@@ -98,8 +98,9 @@ In Antigravity Studio v1.7.0+, the CLI engine is **unbundled** from the APK, sla
   This runs at 100% native ARM64 speed, completely satisfies Android SELinux `W^X` policies (since the dynamic linker is in `nativeLibraryDir`), and preserves the upstream byte-for-byte SHA256 integrity.
 
 ### 3.2 Upstream Source & Lineage
-* **Upstream Releases**: [`https://github.com/wallentx/antigravity-cli-termux/releases/latest`](https://github.com/wallentx/antigravity-cli-termux/releases/latest)
-* The upstream pipeline tracks Google's official Linux ARM64 binary and provides the VA39 memory patch (adapting Google's TCMalloc 48-bit Virtual Address instructions to Android's 39-bit kernel address space).
+* **Official Google Manifest**: `https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_arm64.json`
+* **Google Cloud Storage CDN**: Official Linux ARM64 binary (`cli_linux_arm64.tar.gz`) ingested directly from Google Cloud Storage with streaming SHA-512 verification.
+* **On-Device VA39 Patching**: The app applies the TCMalloc 39-bit Virtual Address patch and seccomp syscall translation autonomously in Python on-device before staging.
 * The engine can be downloaded, updated, or repaired independently of the app via **Settings [⚙] → Software Updates → Antigravity CLI Engine**.
 
 ### 3.3 Verification & Build Task

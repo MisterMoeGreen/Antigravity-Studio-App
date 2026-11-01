@@ -3357,16 +3357,25 @@
       </div>
       
       <div class="auth-header">
-        <h2 class="auth-title">Antigravity Engine Setup</h2>
-        <p class="auth-subtitle">
-          Downloads the official Antigravity CLI binary (agy, ~64MB) by Google DeepMind, with Android compatibility patches by wallentx.
+        <h2 class="auth-title" id="engineOverlayTitle">Antigravity Engine Setup</h2>
+        <p class="auth-subtitle" id="engineOverlaySubtitle">
+          Downloads the official Antigravity CLI binary (agy, ~58MB) directly from Google DeepMind, with automated on-device Android compatibility patching.
         </p>
       </div>
 
       <div class="auth-action-block">
         <button type="button" class="btn-auth-google" id="btnInstallEngineOverlay" style="background:var(--accent-primary);color:#fff;justify-content:center;gap:10px;touch-action:manipulation;">
           <svg class="fa-icon" viewBox="0 0 512 512" style="width:18px;height:18px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M288 32c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 242.7-73.4-73.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3l128 128c12.5 12.5 32.8 12.5 45.3 0l128-128c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L288 274.7 288 32zM64 352c-35.3 0-64 28.7-64 64l0 32c0 35.3 28.7 64 64 64l384 0c35.3 0 64-28.7 64-64l0-32c0-35.3-28.7-64-64-64l-64 0c-17.7 0-32 14.3-32 32s14.3 32 32 32l64 0 0 32L64 448l0-32 64 0c17.7 0 32-14.3 32-32s-14.3-32-32-32L64 352z"/></svg>
-          <span id="labelInstallEngineOverlay">Download & Setup Engine (~64MB)</span>
+          <span id="labelInstallEngineOverlay">Download & Setup Engine (~58MB)</span>
+        </button>
+      </div>
+
+      <div id="engineOverlayOffline" style="display:none;width:100%;margin-top:14px;text-align:center;">
+        <div style="font-size:12px;color:var(--accent-danger);margin-bottom:8px;">
+          Offline: An active internet connection is required to download the engine.
+        </div>
+        <button type="button" class="btn-auth-google" id="btnRetryEngineOverlay" style="background:var(--bg-tertiary);color:var(--text-primary);justify-content:center;touch-action:manipulation;">
+          Retry Connection
         </button>
       </div>
 
@@ -3958,7 +3967,7 @@
             <div>
               <div class="updates-app-title">Antigravity CLI Engine</div>
               <div class="updates-app-version" id="engineInstalledVersionText">Installed: v1.4.12</div>
-              <div class="card-meta-text" style="margin-top:2px;">Upstream: wallentx/antigravity-cli-termux (VA39)</div>
+              <div class="card-meta-text" style="margin-top:2px;">Upstream: Google DeepMind Official CDN</div>
             </div>
           </div>
 
@@ -3986,13 +3995,13 @@
 
           <!-- Status: Engine Idle -->
           <div class="updates-state-card" id="engineStatusIdle">
-            Tap Check Engine Updates to query upstream releases by wallentx.
+            Tap Check Engine Updates to query official releases from Google DeepMind.
           </div>
 
           <!-- Status: Engine Checking -->
           <div class="updates-state-card" id="engineStatusChecking" style="display:none;">
             <svg class="fa-icon fa-spin" viewBox="0 0 512 512" style="width:24px;height:24px;color:var(--accent-primary);" aria-hidden="true" focusable="false"><path fill="currentColor" d="M48.5 224L40 224c-13.3 0-24-10.7-24-24L16 72c0-9.7 5.8-18.5 14.8-22.2s19.3-1.7 26.2 5.2L98.6 96.6c87.6-86.5 228.7-86.2 315.8 1c87.5 87.5 87.5 229.3 0 316.8s-229.3 87.5-316.8 0c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0c62.5 62.5 163.8 62.5 226.3 0s62.5-163.8 0-226.3c-62.2-62.2-162.7-62.5-225.3-1L185 183c6.9 6.9 8.9 17.2 5.2 26.2s-12.5 14.8-22.2 14.8L48.5 224z"/></svg>
-            <div>Checking upstream wallentx releases...</div>
+            <div>Checking official Google DeepMind releases...</div>
           </div>
 
           <!-- Status: Engine Up-to-Date -->
@@ -5876,7 +5885,7 @@
             if (msg.engine) {
               state.engine = msg.engine;
               if (typeof updateEngineUI === 'function') updateEngineUI(msg.engine);
-              if (!msg.engine.installed) {
+              if (!msg.engine.installed || msg.engine.requires_update) {
                 showEngineOverlay(true);
               } else {
                 showEngineOverlay(false);
@@ -9393,6 +9402,23 @@
 
       let currentEngineDownloadUrl = null;
       let currentEngineLatestTag = null;
+      let currentEngineSha512 = null;
+
+      const engineOverlayTitle = document.getElementById('engineOverlayTitle');
+      const engineOverlaySubtitle = document.getElementById('engineOverlaySubtitle');
+      const engineOverlayOffline = document.getElementById('engineOverlayOffline');
+      const btnRetryEngineOverlay = document.getElementById('btnRetryEngineOverlay');
+
+      if (btnRetryEngineOverlay) {
+        btnRetryEngineOverlay.addEventListener('click', () => {
+          if (engineOverlayOffline) engineOverlayOffline.style.display = 'none';
+          if (btnInstallEngineOverlay) {
+            btnInstallEngineOverlay.style.display = 'flex';
+            btnInstallEngineOverlay.disabled = false;
+            btnInstallEngineOverlay.click();
+          }
+        });
+      }
 
       function showEngineOverlay(show) {
         if (!engineOverlay) return;
@@ -9402,6 +9428,7 @@
       function updateEngineUI(eng) {
         if (!eng) return;
         const isInst = Boolean(eng.installed);
+        const reqUpdate = Boolean(eng.requires_update);
         const verStr = eng.version ? `v${eng.version}` : 'Not Installed';
         if (engineInstalledVersionText) {
           engineInstalledVersionText.textContent = `Installed: ${verStr}`;
@@ -9410,7 +9437,21 @@
         if (elAgy && eng.version) {
           elAgy.textContent = `v${eng.version}`;
         }
-        if (!isInst) {
+        if (!isInst || reqUpdate) {
+          if (engineOverlayTitle) {
+            engineOverlayTitle.textContent = reqUpdate && isInst ? 'Antigravity Engine Update Required' : 'Antigravity Engine Setup';
+          }
+          if (engineOverlaySubtitle) {
+            if (reqUpdate && isInst) {
+              const reason = eng.incompat_reason ? ` (${eng.incompat_reason})` : '';
+              engineOverlaySubtitle.textContent = `Antigravity Studio requires Antigravity CLI v${eng.min_version || '1.4.12'}+${reason}. Tap below to download and update your engine.`;
+            } else {
+              engineOverlaySubtitle.textContent = 'Downloads the official Antigravity CLI binary (agy, ~58MB) directly from Google DeepMind, with automated on-device Android compatibility patching.';
+            }
+          }
+          if (labelInstallEngineOverlay) {
+            labelInstallEngineOverlay.textContent = reqUpdate && isInst ? 'Download & Update Engine (~58MB)' : 'Download & Setup Engine (~58MB)';
+          }
           showEngineOverlay(true);
         } else {
           showEngineOverlay(false);
@@ -9471,6 +9512,7 @@
         if (hasUpdate) {
           currentEngineDownloadUrl = msg.download_url;
           currentEngineLatestTag = latestVer;
+          currentEngineSha512 = msg.sha512;
           if (engineStatusAvailable) engineStatusAvailable.style.display = 'flex';
           if (engineRemoteTag) {
             engineRemoteTag.textContent = msg.installed ? `New Engine Available: ${latestVer}` : `Engine Not Installed (Available: ${latestVer})`;
@@ -9553,6 +9595,7 @@
             engineProgressStatusText.textContent = `Error: ${msg.message || 'Failed'}`;
           }
           if (engineOverlayStatusText) engineOverlayStatusText.textContent = `Error: ${msg.message || 'Failed'}`;
+          if (engineOverlayOffline) engineOverlayOffline.style.display = 'block';
         }
       }
 
@@ -9572,16 +9615,23 @@
             type: 'install_engine',
             download_url: currentEngineDownloadUrl,
             tag_name: currentEngineLatestTag,
+            sha512: currentEngineSha512,
           });
         });
       }
 
       if (btnInstallEngineOverlay) {
         btnInstallEngineOverlay.addEventListener('click', () => {
+          if (engineOverlayOffline) engineOverlayOffline.style.display = 'none';
           btnInstallEngineOverlay.disabled = true;
           btnInstallEngineOverlay.innerHTML = `<svg class="fa-icon fa-spin" viewBox="0 0 512 512" style="width:14px;height:14px;margin-right:6px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M48.5 224L40 224c-13.3 0-24-10.7-24-24L16 72c0-9.7 5.8-18.5 14.8-22.2s19.3-1.7 26.2 5.2L98.6 96.6c87.6-86.5 228.7-86.2 315.8 1c87.5 87.5 87.5 229.3 0 316.8s-229.3 87.5-316.8 0c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0c62.5 62.5 163.8 62.5 226.3 0s62.5-163.8 0-226.3c-62.2-62.2-162.7-62.5-225.3-1L185 183c6.9 6.9 8.9 17.2 5.2 26.2s-12.5 14.8-22.2 14.8L48.5 224z"/></svg>Downloading Engine...`;
           if (engineOverlayProgress) engineOverlayProgress.style.display = 'block';
-          sendWs({ type: 'install_engine' });
+          sendWs({
+            type: 'install_engine',
+            download_url: currentEngineDownloadUrl,
+            tag_name: currentEngineLatestTag,
+            sha512: currentEngineSha512,
+          });
         });
       }
 

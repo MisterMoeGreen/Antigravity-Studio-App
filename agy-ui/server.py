@@ -1261,7 +1261,8 @@ async def check_github_updates() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Decoupled Antigravity CLI Engine Management (v1.7.0 On-Demand Zero-Mutation)
+# Direct Google Antigravity CLI Engine Management & On-Device VA39 Patching
+# (v1.7.1 Autonomous Ingestion, Cryptographic Verification & Forced Epochs)
 # ---------------------------------------------------------------------------
 
 ENGINE_OPT_DIR = USR_DIR / "opt" / "agy"
@@ -1270,25 +1271,102 @@ ENGINE_VERSION_FILE = ENGINE_OPT_DIR / "version.json"
 ENGINE_STAGING_DIR = ENGINE_OPT_DIR / ".staging"
 GLIBC_LD_PATH = USR_DIR / "glibc" / "lib" / "ld-linux-aarch64.so.1"
 GLIBC_LIB_DIR = USR_DIR / "glibc" / "lib"
-ENGINE_UPSTREAM_REPO = "wallentx/antigravity-cli-termux"
+
+GOOGLE_AGY_MANIFEST_URL = "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_arm64.json"
+GOOGLE_GCS_URL_PREFIX = "https://storage.googleapis.com/antigravity-public/antigravity-cli/"
+
+AGY_MIN_VERSION = os.environ.get("AGY_MIN_VERSION", "1.4.12")
+CURRENT_ENGINE_COMPAT_EPOCH = int(os.environ.get("ENGINE_COMPAT_EPOCH", "1"))
+FORCE_ENGINE_UPDATE = os.environ.get("FORCE_ENGINE_UPDATE", "false").lower() == "true"
+
 _engine_install_lock = asyncio.Lock()
+
+
+def _parse_semver(ver_str: Optional[str]) -> tuple[int, ...]:
+    if not ver_str:
+        return (0, 0, 0)
+    cleaned = ver_str.strip().lstrip("v").split("-")[0].split("+")[0]
+    parts: list[int] = []
+    for piece in cleaned.split("."):
+        try:
+            parts.append(int(piece))
+        except ValueError:
+            break
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts)
+
+
+def apply_android_compatibility_patches(data: bytearray) -> tuple[bool, str, dict[str, int]]:
+    """
+    Applies VA39 memory layout and seccomp syscall compatibility patches
+    in-place directly to the uncompressed ELF byte stream.
+    """
+    mv = memoryview(data).cast("I")
+    hi = len(mv)
+    ubfx_count = lsl_count = mask_count = mmap_count = word_count = fac_count = 0
+    word_rewrites = {
+        0xD2C20009: 0xD2C00409, 0xD2C2000A: 0xD2C0040A, 0xF2C20008: 0xF2DFF408,
+        0xF2C20009: 0xF2DFF409, 0xD2C10009: 0xD2C00209, 0xD2C1000A: 0xD2C0020A,
+        0xF2C38008: 0xF2DFF708, 0xF2C38009: 0xF2DFF709, 0x92560A6C: 0x925D0A6C,
+        0x92560A6A: 0x925D0A6A, 0xD2C3000D: 0xD2C0060D, 0xD2C3000C: 0xD2C0060C,
+        0xD2C08008: 0xD2C00108,
+    }
+    for i in range(hi):
+        w = mv[i]
+        if (w & 0x7F800000) == 0x53000000:
+            immr = (w >> 16) & 0x3F
+            imms = (w >> 10) & 0x3F
+            if immr == 42 and imms == 44:
+                mv[i] = (w & ~((0x3F << 16) | (0x3F << 10))) | (35 << 16) | (37 << 10)
+                ubfx_count += 1
+            elif immr == 22 and imms == 21:
+                mv[i] = (w & ~((0x3F << 16) | (0x3F << 10))) | (29 << 16) | (28 << 10)
+                lsl_count += 1
+        elif w == 0x92D3800A and i + 1 < hi and mv[i + 1] == 0xF2E0000A:
+            mv[i] = 0x9280000A
+            mv[i + 1] = 0xD35DFD4A
+            mask_count += 1
+        elif w == 0xF2E00029:
+            mv[i] = 0xD3596129
+            mmap_count += 1
+        elif w in word_rewrites:
+            mv[i] = word_rewrites[w]
+            word_count += 1
+        elif w == 0xAA1F03E5 and i + 3 < hi:
+            if mv[i + 1] == 0xAA1F03E6 and mv[i + 2] == 0xD28036E0 and (mv[i + 3] & 0xFC000000) == 0x94000000:
+                mv[i + 2] = 0xD2800600
+                fac_count += 1
+
+    stats = {
+        "ubfx": ubfx_count,
+        "lsl": lsl_count,
+        "mask": mask_count,
+        "mmap": mmap_count,
+        "words": word_count,
+        "fac": fac_count,
+    }
+    patched = (ubfx_count > 0 or lsl_count > 0 or mmap_count > 0 or word_count > 0 or fac_count > 0)
+    if not patched:
+        return False, "No VA39 or syscall patch patterns matched in binary", stats
+    return True, "", stats
 
 
 def get_engine_status() -> dict[str, Any]:
     installed = ENGINE_BIN.is_file() and os.access(ENGINE_BIN, os.X_OK)
     version = None
-    upstream_tag = None
+    installed_epoch = 0
     installed_at = 0
-    migrated = False
+    source = "unknown"
 
     if installed:
         if ENGINE_VERSION_FILE.is_file():
             try:
                 data = json.loads(ENGINE_VERSION_FILE.read_text(encoding="utf-8"))
                 version = data.get("version")
-                upstream_tag = data.get("upstream_tag")
+                installed_epoch = data.get("compat_epoch", 0)
                 installed_at = data.get("installed_at", 0)
-                migrated = data.get("migrated", False)
+                source = data.get("source", "unknown")
             except Exception:
                 pass
         if not version and GLIBC_LD_PATH.is_file():
@@ -1306,8 +1384,9 @@ def get_engine_status() -> dict[str, Any]:
                         ENGINE_VERSION_FILE.write_text(
                             json.dumps({
                                 "version": version,
-                                "upstream_tag": f"v{version}",
+                                "compat_epoch": CURRENT_ENGINE_COMPAT_EPOCH,
                                 "installed_at": int(time.time()),
+                                "source": "binary_execution",
                             })
                         )
                     except Exception:
@@ -1315,96 +1394,104 @@ def get_engine_status() -> dict[str, Any]:
             except Exception:
                 pass
 
+    # Compatibility & Forced Update Evaluation
+    requires_update = False
+    incompat_reason = ""
+
+    if not installed:
+        requires_update = True
+        incompat_reason = "missing"
+    elif version and _parse_semver(version) < _parse_semver(AGY_MIN_VERSION):
+        requires_update = True
+        incompat_reason = f"Version v{version} is below minimum required v{AGY_MIN_VERSION}"
+    elif installed_epoch < CURRENT_ENGINE_COMPAT_EPOCH:
+        requires_update = True
+        incompat_reason = f"Engine build epoch {installed_epoch} is below required epoch {CURRENT_ENGINE_COMPAT_EPOCH}"
+    elif FORCE_ENGINE_UPDATE:
+        requires_update = True
+        incompat_reason = "Forced engine update flagged by app release"
+
     return {
         "installed": installed,
         "version": version,
-        "upstream_tag": upstream_tag or (f"v{version}" if version else None),
+        "requires_update": requires_update,
+        "min_version": AGY_MIN_VERSION,
+        "compat_epoch": CURRENT_ENGINE_COMPAT_EPOCH,
+        "incompat_reason": incompat_reason,
         "installed_at": installed_at,
-        "migrated": migrated,
-        "status": "ready" if installed else "missing",
+        "source": source,
+        "status": "ready" if (installed and not requires_update) else ("update_required" if installed else "missing"),
     }
 
 
 async def check_engine_updates() -> dict[str, Any]:
     status = get_engine_status()
     cur_ver = status.get("version")
-    url = f"https://api.github.com/repos/{ENGINE_UPSTREAM_REPO}/releases/latest"
 
-    cmd = ["curl", "-sSL", "-H", f"User-Agent: AntigravityStudio/{APP_VERSION}", url]
+    cmd = ["curl", "-sSL", "-H", f"User-Agent: AntigravityStudio/{APP_VERSION}", GOOGLE_AGY_MANIFEST_URL]
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
     stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8.0)
     if proc.returncode != 0 or not stdout:
-        return {"status": "error", "message": "Failed to connect to engine upstream releases"}
+        return {"status": "error", "message": "Failed to connect to official Google engine release service"}
 
     try:
         data = json.loads(stdout.decode("utf-8"))
     except Exception as exc:
-        return {"status": "error", "message": f"Malformed JSON from engine releases: {exc}"}
+        return {"status": "error", "message": f"Malformed JSON from engine manifest: {exc}"}
 
-    tag_name = data.get("tag_name", "").lstrip("v")
-    body = data.get("body", "")
-    download_url = None
-    tar_size = 0
+    remote_version = data.get("version", "").lstrip("v")
+    download_url = data.get("url")
+    expected_sha512 = data.get("sha512", "")
 
-    for asset in data.get("assets", []):
-        aname = asset.get("name", "")
-        if aname == "antigravity-termux-standalone.tar.gz":
-            download_url = asset.get("browser_download_url")
-            tar_size = asset.get("size", 0)
-            break
+    if not download_url:
+        return {"status": "error", "message": "Google release manifest did not contain a download URL"}
 
     has_update = False
-    if not status["installed"]:
+    if not status["installed"] or status.get("requires_update"):
         has_update = True
-    elif cur_ver and tag_name and tag_name != cur_ver.lstrip("v"):
-        try:
-            r_parts = [int(p) for p in tag_name.split("-")[0].split(".")]
-            l_parts = [int(p) for p in cur_ver.lstrip("v").split("-")[0].split(".")]
-            max_len = max(len(r_parts), len(l_parts))
-            r_parts += [0] * (max_len - len(r_parts))
-            l_parts += [0] * (max_len - len(l_parts))
-            if r_parts > l_parts:
-                has_update = True
-        except Exception:
-            if tag_name != cur_ver.lstrip("v"):
-                has_update = True
+    elif cur_ver and remote_version and _parse_semver(remote_version) > _parse_semver(cur_ver):
+        has_update = True
 
     return {
         "status": "ok",
         "installed": status["installed"],
+        "requires_update": status.get("requires_update", False),
+        "incompat_reason": status.get("incompat_reason", ""),
         "has_update": has_update,
         "current_version": cur_ver or "Not Installed",
-        "latest_version": tag_name,
+        "latest_version": remote_version,
         "download_url": download_url,
-        "tar_size": tar_size,
-        "changelog": body,
+        "sha512": expected_sha512,
+        "min_version": AGY_MIN_VERSION,
+        "upstream": "Google DeepMind Official CDN",
     }
 
 
 async def install_or_update_engine(
     download_url: Optional[str] = None,
     tag_name: Optional[str] = None,
+    expected_sha512: Optional[str] = None,
     broadcast_callback: Optional[Any] = None,
 ) -> dict[str, Any]:
     if _engine_install_lock.locked():
         return {"status": "busy", "message": "Engine download/installation is already in progress"}
 
     async with _engine_install_lock:
-        if download_url:
-            allowed_prefix = f"https://github.com/{ENGINE_UPSTREAM_REPO}/releases/download/"
-            if not download_url.startswith(allowed_prefix):
-                return {
-                    "status": "error",
-                    "message": f"Untrusted engine download URL: must start with {allowed_prefix}",
-                }
-        else:
+        if not download_url:
             chk = await check_engine_updates()
             if chk.get("status") != "ok" or not chk.get("download_url"):
-                return {"status": "error", "message": chk.get("message", "Could not locate engine release asset")}
+                return {"status": "error", "message": chk.get("message", "Could not query Google engine manifest")}
             download_url = chk["download_url"]
             tag_name = chk.get("latest_version")
+            expected_sha512 = chk.get("sha512")
+
+        if not download_url.startswith(GOOGLE_GCS_URL_PREFIX):
+            return {
+                "status": "error",
+                "message": f"Untrusted engine download URL: must start with {GOOGLE_GCS_URL_PREFIX}",
+            }
 
         async def _notify(phase: str, pct: int, message: str = "", **kwargs: Any) -> None:
             if broadcast_callback:
@@ -1421,11 +1508,11 @@ async def install_or_update_engine(
                 except Exception as ex:
                     logger.warning("Engine progress notification error: %s", ex)
 
-        await _notify("starting", 0, "Initializing download...")
+        await _notify("starting", 0, "Initializing download from Google CDN...")
 
         loop = asyncio.get_running_loop()
 
-        def _do_download_and_extract() -> tuple[bool, str, str]:
+        def _do_download_and_patch() -> tuple[bool, str, str]:
             try:
                 # 1. Unlock directory permissions (0755) for modification
                 try:
@@ -1439,9 +1526,10 @@ async def install_or_update_engine(
                     shutil.rmtree(ENGINE_STAGING_DIR, ignore_errors=True)
                 ENGINE_STAGING_DIR.mkdir(parents=True, exist_ok=True)
 
-                tar_path = ENGINE_STAGING_DIR / "standalone.tar.gz"
+                tar_path = ENGINE_STAGING_DIR / "cli_linux_arm64.tar.gz"
 
-                # Stream download with progress tracking
+                # Stream download with progress tracking and SHA-512 calculation
+                hasher = hashlib.sha512()
                 req = urllib.request.Request(
                     download_url, headers={"User-Agent": f"AntigravityStudio/{APP_VERSION}"}
                 )
@@ -1454,55 +1542,82 @@ async def install_or_update_engine(
                         chunk = resp.read(chunk_size)
                         if not chunk:
                             break
+                        hasher.update(chunk)
                         out.write(chunk)
                         downloaded += len(chunk)
                         if total_bytes > 0:
-                            pct = min(85, int((downloaded / total_bytes) * 85))
-                            if pct != last_pct and (pct - last_pct >= 2 or pct == 85):
+                            pct = min(60, int((downloaded / total_bytes) * 60))
+                            if pct != last_pct and (pct - last_pct >= 2 or pct == 60):
                                 last_pct = pct
                                 asyncio.run_coroutine_threadsafe(
                                     _notify(
                                         "downloading",
                                         pct,
-                                        f"Downloading engine ({downloaded // (1024*1024)}MB / {total_bytes // (1024*1024)}MB)...",
+                                        f"Downloading official Google binary ({downloaded // (1024*1024)}MB / {total_bytes // (1024*1024)}MB)...",
                                         downloaded_bytes=downloaded,
                                         total_bytes=total_bytes,
                                     ),
                                     loop,
                                 )
 
-                # Extract agy.va39 from tarball safely (PEP 706)
+                # Verify SHA-512 checksum if provided
+                computed_hash = hasher.hexdigest().lower()
+                if expected_sha512 and computed_hash != expected_sha512.lower():
+                    return False, f"SHA-512 verification failed: expected {expected_sha512[:16]}..., got {computed_hash[:16]}...", ""
+
+                # Extract "antigravity" binary safely (PEP 706)
                 asyncio.run_coroutine_threadsafe(
-                    _notify("extracting", 88, "Extracting engine executable..."),
+                    _notify("extracting", 65, "Extracting official archive..."),
                     loop,
                 )
                 with tarfile.open(tar_path, "r:gz") as tf:
+                    target_member = None
+                    for m in tf.getmembers():
+                        if m.name in ("antigravity", "agy", "./antigravity", "./agy"):
+                            target_member = m
+                            break
+                    if not target_member:
+                        return False, "Archive did not contain antigravity executable", ""
                     if hasattr(tarfile, "data_filter"):
-                        tf.extract("agy.va39", path=str(ENGINE_STAGING_DIR), filter="data")
+                        tf.extract(target_member, path=str(ENGINE_STAGING_DIR), filter="data")
                     else:
-                        tf.extract("agy.va39", path=str(ENGINE_STAGING_DIR))
+                        tf.extract(target_member, path=str(ENGINE_STAGING_DIR))
 
-                staged_raw = ENGINE_STAGING_DIR / "agy.va39"
-                staged_bin = ENGINE_STAGING_DIR / "agy"
-                if not staged_raw.is_file() or staged_raw.is_symlink():
-                    return False, "Archive did not contain valid agy.va39 executable", ""
-                staged_raw.rename(staged_bin)
-                os.chmod(staged_bin, 0o755)
+                raw_bin = ENGINE_STAGING_DIR / target_member.name.lstrip("./")
+                if not raw_bin.is_file() or raw_bin.is_symlink():
+                    return False, "Archive extracted member is invalid", ""
 
-                # Validation execution via glibc dynamic linker
+                # Apply Android VA39 + syscall patches
                 asyncio.run_coroutine_threadsafe(
-                    _notify("verifying", 94, "Verifying engine ELF integrity..."),
+                    _notify("patching", 75, "Applying on-device VA39 Android compatibility patches..."),
+                    loop,
+                )
+                with open(raw_bin, "rb") as f:
+                    bin_bytes = bytearray(f.read())
+
+                ok_patch, patch_err, patch_stats = apply_android_compatibility_patches(bin_bytes)
+                if not ok_patch:
+                    return False, f"Patching failed: {patch_err}", ""
+
+                staged_patched = ENGINE_STAGING_DIR / "agy.patched"
+                with open(staged_patched, "wb") as f:
+                    f.write(bin_bytes)
+                os.chmod(staged_patched, 0o755)
+
+                # ARGON-09: Dry-Run Verification Gate
+                asyncio.run_coroutine_threadsafe(
+                    _notify("verifying", 90, "Verifying patched binary integrity via dry-run..."),
                     loop,
                 )
                 res = subprocess.run(
-                    [str(GLIBC_LD_PATH), "--library-path", str(GLIBC_LIB_DIR), str(staged_bin), "--version"],
+                    [str(GLIBC_LD_PATH), "--library-path", str(GLIBC_LIB_DIR), str(staged_patched), "--version"],
                     capture_output=True,
                     text=True,
                     timeout=10.0,
                 )
                 if res.returncode != 0:
                     err = res.stderr.strip() or f"Process exited with code {res.returncode}"
-                    return False, f"Integrity check failed: {err}", ""
+                    return False, f"Dry-run verification failed: {err}", ""
 
                 discovered_ver = res.stdout.strip()
 
@@ -1512,14 +1627,16 @@ async def install_or_update_engine(
                         ENGINE_BIN.unlink(missing_ok=True)
                     except Exception:
                         pass
-                staged_bin.rename(ENGINE_BIN)
+                staged_patched.rename(ENGINE_BIN)
                 os.chmod(ENGINE_BIN, 0o755)
 
                 # Write metadata
                 meta = {
                     "version": discovered_ver,
-                    "upstream_tag": tag_name or f"v{discovered_ver}",
+                    "compat_epoch": CURRENT_ENGINE_COMPAT_EPOCH,
                     "installed_at": int(time.time()),
+                    "source": "google_direct_va39",
+                    "patch_stats": patch_stats,
                 }
                 ENGINE_VERSION_FILE.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
 
@@ -1539,9 +1656,9 @@ async def install_or_update_engine(
                     except Exception:
                         pass
 
-        ok, err_msg, final_ver = await asyncio.to_thread(_do_download_and_extract)
+        ok, err_msg, final_ver = await asyncio.to_thread(_do_download_and_patch)
         if ok:
-            await _notify("ready", 100, f"Antigravity CLI engine {final_ver} ready!", version=final_ver)
+            await _notify("ready", 100, f"Antigravity CLI engine v{final_ver} ready!", version=final_ver)
             return {"status": "ok", "version": final_ver}
         else:
             await _notify("error", 0, f"Installation failed: {err_msg}", error=err_msg)
@@ -3936,13 +4053,15 @@ class AgyProcessOrchestrator:
 
             try:
                 engine_st = get_engine_status()
-                if not engine_st["installed"]:
+                if not engine_st["installed"] or engine_st.get("requires_update"):
+                    incompat_msg = engine_st.get("incompat_reason") or "Engine update required."
+                    title = "Antigravity CLI Engine Required" if not engine_st["installed"] else "Antigravity CLI Engine Update Required"
                     await self.broadcast(
                         {
                             "type": "system_card",
                             "conversation_id": cid,
-                            "title": "Antigravity CLI Engine Required",
-                            "markdown": "The Antigravity CLI engine is not installed yet. Open **Settings [⚙] → Software Updates** to download and install the engine (~64MB).",
+                            "title": title,
+                            "markdown": f"The Antigravity CLI engine cannot start: {incompat_msg}. Open **Settings [⚙] → Software Updates** to download and setup the engine (~58MB).",
                             "level": "error",
                         }
                     )
@@ -3951,7 +4070,7 @@ class AgyProcessOrchestrator:
                             "type": "turn_complete",
                             "conversation_id": cid,
                             "turn_id": turn_id,
-                            "status": "ENGINE_MISSING",
+                            "status": "ENGINE_UPDATE_REQUIRED" if engine_st["installed"] else "ENGINE_MISSING",
                         }
                     )
                     return
@@ -7412,10 +7531,12 @@ class AgyWebServer:
         if mtype == "install_engine":
             dl_url = data.get("download_url")
             tag_name = data.get("tag_name")
+            sha512 = data.get("sha512")
             try:
                 res = await install_or_update_engine(
                     download_url=dl_url,
                     tag_name=tag_name,
+                    expected_sha512=sha512,
                     broadcast_callback=self.broadcast,
                 )
                 await websocket.send(json.dumps({"type": "engine_install_result", **res}))

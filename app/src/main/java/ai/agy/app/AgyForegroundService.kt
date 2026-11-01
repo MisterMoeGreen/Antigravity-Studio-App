@@ -185,6 +185,9 @@ class AgyForegroundService : Service() {
         env["AGY_APP_VERSION"] = BuildConfig.VERSION_NAME
         env["AGY_APP_VERSION_CODE"] = BuildConfig.APP_VERSION_CODE.toString()
         env["AGY_RUNTIME_VERSION"] = BuildConfig.AGY_RUNTIME_VERSION
+        env["AGY_MIN_VERSION"] = BuildConfig.AGY_MIN_VERSION
+        env["ENGINE_COMPAT_EPOCH"] = BuildConfig.ENGINE_COMPAT_EPOCH.toString()
+        env["FORCE_ENGINE_UPDATE"] = BuildConfig.FORCE_ENGINE_UPDATE.toString()
         env["PYTHONHOME"] = usr
         env["PYTHONPATH"] = "$usr/lib/python3.14:$usr/lib/python3.14/site-packages:$usr/lib/python3.12:$usr/lib/python3.12/site-packages"
 

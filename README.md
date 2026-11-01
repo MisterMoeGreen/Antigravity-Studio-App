@@ -255,7 +255,7 @@ For detailed technical specifications, architectural diagrams, security audits, 
 ## Upstream Lineage & Attribution
 
 * **Google Antigravity CLI**: Antigravity Studio interfaces with the official Linux ARM64 binary of Google's Antigravity CLI (`agy`), compiled from Google's monorepo (`google3`). All model communication, agent reasoning, and authentication route authentically through official Google channels.
-* **Kernel VA39 Compatibility Layer ([wallentx/antigravity-cli-termux](https://github.com/wallentx/antigravity-cli-termux))**: Gratefully recognized as the upstream distribution pipeline providing the 39-bit Virtual Address (VA39) memory patch over Google's TCMalloc runtime, making standard Linux ARM64 binaries compatible with Android kernels. Antigravity Studio downloads the standalone Linux ARM64 engine on-demand directly from this pipeline.
+* **Kernel VA39 Compatibility Research ([wallentx/antigravity-cli-termux](https://github.com/wallentx/antigravity-cli-termux))**: Gratefully recognized for discovering and pioneering the 39-bit Virtual Address (VA39) memory patch over Google's TCMalloc runtime, making standard Linux ARM64 binaries compatible with Android kernels. Antigravity Studio ingests the official Linux ARM64 engine directly from Google DeepMind's Cloud CDN and applies this VA39 patch autonomously on-device.
 
 ---
 

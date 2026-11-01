@@ -69,7 +69,7 @@
 ### 12. wallentx / `antigravity-cli-termux`
 * **Repository**: [https://github.com/wallentx/antigravity-cli-termux](https://github.com/wallentx/antigravity-cli-termux)
 * **Author**: wallentx & community contributors
-* **Usage**: Core upstream project providing the VA39 kernel compatibility layer (rewriting TCMalloc 48-bit Virtual Address instructions and bitmasks to fit 39-bit Android memory layouts). Antigravity Studio downloads the standalone Linux ARM64 engine on-demand directly from this upstream release pipeline.
+* **Usage**: Discovered and published the VA39 kernel compatibility layer (rewriting TCMalloc 48-bit Virtual Address instructions and bitmasks to fit 39-bit Android memory layouts). Antigravity Studio ingests the official Linux ARM64 engine directly from Google DeepMind's Cloud CDN and applies this VA39 patch autonomously on-device.
 
 ### 13. PRoot Virtualization Engine (`libproot.so`, `libproot_loader.so`)
 * **Copyright**: &copy; Cédric Vincent and the PRoot Development Community
@@ -80,6 +80,6 @@
 
 ## Community Acknowledgments
 
-* **wallentx / `antigravity-cli-termux`**: Gratefully acknowledged for pioneering the initial community exploration and maintaining the automated upstream release pipeline for Android ARM64 compatibility.
+* **wallentx / `antigravity-cli-termux`**: Gratefully acknowledged for pioneering the initial community exploration and discovering the TCMalloc VA39 memory patch adaptation for Android ARM64 compatibility.
 * **Termux Community**: For packaging and maintaining Android-compatible AArch64 ports of developer toolchains.
 * **Font Awesome**: Gratefully acknowledged for providing open-source, high-quality vector iconography.

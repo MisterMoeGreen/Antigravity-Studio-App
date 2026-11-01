@@ -25,6 +25,15 @@ val resolvedVersionName: String = (project.findProperty("versionName") as? Strin
 val resolvedAgyVersion: String = (project.findProperty("agyVersion") as? String)
     ?: versionProps.getProperty("AGY_VERSION", "1.4.2")
 
+val resolvedAgyMinVersion: String = (project.findProperty("agyMinVersion") as? String)
+    ?: versionProps.getProperty("AGY_MIN_VERSION", "1.4.12")
+
+val resolvedEngineEpoch: Int = (project.findProperty("engineCompatEpoch") as? String)?.toIntOrNull()
+    ?: versionProps.getProperty("ENGINE_COMPAT_EPOCH", "1").toInt()
+
+val resolvedForceEngineUpdate: Boolean = (project.findProperty("forceEngineUpdate") as? String)?.toBoolean()
+    ?: versionProps.getProperty("FORCE_ENGINE_UPDATE", "false").toBoolean()
+
 version = resolvedVersionName
 extra.set("versionName", resolvedVersionName)
 
@@ -42,6 +51,9 @@ android {
         // Inject BuildConfig constants for runtime access in Kotlin
         buildConfigField("String", "AGY_RUNTIME_VERSION", "\"$resolvedAgyVersion\"")
         buildConfigField("int", "APP_VERSION_CODE", "$resolvedVersionCode")
+        buildConfigField("String", "AGY_MIN_VERSION", "\"$resolvedAgyMinVersion\"")
+        buildConfigField("int", "ENGINE_COMPAT_EPOCH", "$resolvedEngineEpoch")
+        buildConfigField("boolean", "FORCE_ENGINE_UPDATE", "$resolvedForceEngineUpdate")
 
         ndk {
             abiFilters += listOf("arm64-v8a")
