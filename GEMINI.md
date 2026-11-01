@@ -193,3 +193,26 @@ cp -f app/build/outputs/apk/release/app-release.apk /storage/emulated/0/Download
 | **Build process killed abruptly / Termux crashes** | Android Phantom Process Killer killed high-concurrency Gradle worker pool. | Pass `--max-workers=2` or `--no-daemon` to `bash ./gradlew`. |
 | **`libagy.so` fails with symbol errors on launch** | `LD_LIBRARY_PATH` passed Bionic `/usr/lib` to Glibc `libagy.so`. | Unset `LD_LIBRARY_PATH` or exclude Bionic paths; rely on `libagy.so`'s embedded `DT_RPATH`. |
 | **`Permission denied` when creating sockets or symlinks** | Attempted to create UNIX domain sockets or symlinks on FUSE storage. | Use Termux ext4 internal storage (`$TMPDIR` or `/data/data/com.termux/files/usr/tmp`). |
+
+---
+
+## 6. Mandatory Hybrid Runtime & Architectural Invariants
+
+Every developer and AI agent contributing to Antigravity Studio MUST strictly adhere to these 4 non-negotiable architectural rules. These rules are enforced automatically before every compilation via `scripts/verify_architectural_invariants.py`:
+
+1. **The Native-First Hybrid WebView Rule (ARGON-07)**:
+   - Android `WebView` is an embedded container with restricted browser APIs.
+   - **NEVER** use `window.open()` or `navigator.clipboard.readText()` directly without a native `@JavascriptInterface` bridge.
+   - All OS-level actions (clipboard read/write, URL launching, notifications, file picking) must route through native Kotlin methods in `MainActivity.kt` running on Android's `MainLooper`.
+
+2. **Zero-Assumption Binary Fixtures (ARGON-09)**:
+   - **NEVER** write a regex or parser against an external CLI binary (`agy`, `git`, `curl`) based on memory or assumptions.
+   - Before writing integration code, execute the binary in an isolated scratch script, dump `repr(output)` to a fixture file, and verify the exact byte stream.
+
+3. **Automated AST Class Scope Integrity (ARGON-08)**:
+   - When modifying `agy-ui/server.py` (7,700+ lines), all methods of `AgyProcessOrchestrator` must remain strictly indented inside the class body.
+   - The pre-build gate `scripts/verify_architectural_invariants.py` automatically parses the AST and aborts the build if any orchestrator method is missing or fragmented.
+
+4. **Mobile Touch Target & Stacking Standards**:
+   - Minimum touch target: 44px × 44px (or 48dp).
+   - Any interactive button positioned inside input wrappers or overlays must declare explicit `z-index: 10+`, `touch-action: manipulation`, and dual `click` + `touchend` event binding to eliminate the 300ms mobile tap delay and prevent input field focus layers from swallowing touch events.

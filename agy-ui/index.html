@@ -4064,6 +4064,23 @@
         return '<svg class="' + cls + '"' + st + ' viewBox="' + item[0] + '" aria-hidden="true" focusable="false"><path fill="currentColor" d="' + item[1] + '"/></svg>';
       }
 
+      function openExternalUrl(url) {
+        if (!url) return;
+        const safeUrl = String(url).trim();
+        if (window.AndroidApp && typeof window.AndroidApp.openUrl === 'function') {
+          window.AndroidApp.openUrl(safeUrl);
+        } else {
+          const a = document.createElement('a');
+          a.href = safeUrl;
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        }
+      }
+      window.openExternalUrl = openExternalUrl;
+
       // ---------------------------------------------------------------------
       // Application State
       // ---------------------------------------------------------------------
@@ -4320,11 +4337,7 @@
               this.btnGoogle.disabled = true;
               if (this.labelGoogle) this.labelGoogle.textContent = 'Opening Sign-In...';
               if (this.linkDirect && this.linkDirect.href && this.linkDirect.href.startsWith('https://accounts.google.com')) {
-                if (window.AndroidApp && typeof window.AndroidApp.openUrl === 'function') {
-                  window.AndroidApp.openUrl(this.linkDirect.href);
-                } else {
-                  window.open(this.linkDirect.href, '_blank');
-                }
+                openExternalUrl(this.linkDirect.href);
               }
               sendWs({ type: 'request_auth_url' });
               setTimeout(() => {
@@ -6038,19 +6051,7 @@
           }
 
           case 'open_external_url':
-            if (msg.url) {
-              if (window.AndroidApp && typeof window.AndroidApp.openUrl === 'function') {
-                window.AndroidApp.openUrl(msg.url);
-              } else {
-                const a = document.createElement('a');
-                a.href = msg.url;
-                a.target = '_blank';
-                a.rel = 'noopener noreferrer';
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-              }
-            }
+            openExternalUrl(msg.url);
             break;
         }
       }
@@ -6274,7 +6275,7 @@
           const docs = attachments.filter(a => !(a.type || '').startsWith('image/'));
           let imagesHtml = '';
           if (images.length > 0) {
-            imagesHtml = `<div class="bubble-attachments-grid">${images.map(img => `<img src="${img.data || img.url}" class="bubble-image" alt="${escapeHtml(img.name)}" onclick="window.open(this.src,'_blank')" />`).join('')}</div>`;
+            imagesHtml = `<div class="bubble-attachments-grid">${images.map(img => `<img src="${img.data || img.url}" class="bubble-image" alt="${escapeHtml(img.name)}" onclick="openExternalUrl(this.src)" />`).join('')}</div>`;
           }
           let docsHtml = '';
           if (docs.length > 0) {
@@ -8801,7 +8802,7 @@
           if (window.AndroidApp && typeof window.AndroidApp.installUpdate === 'function') {
             window.AndroidApp.installUpdate(currentUpdateDownloadUrl);
           } else {
-            window.open(currentUpdateDownloadUrl, '_blank');
+            openExternalUrl(currentUpdateDownloadUrl);
           }
         });
       }

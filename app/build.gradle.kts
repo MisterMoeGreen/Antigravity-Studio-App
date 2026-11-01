@@ -128,6 +128,13 @@ dependencies {
     implementation("org.apache.commons:commons-compress:1.27.1")
 }
 
+tasks.register<Exec>("verifyArchitecturalInvariants") {
+    inputs.file(rootProject.file("agy-ui/server.py"))
+    inputs.file(rootProject.file("agy-ui/index.html"))
+    inputs.file(project.file("src/main/java/ai/agy/app/MainActivity.kt"))
+    commandLine("python3", "${rootProject.rootDir}/scripts/verify_architectural_invariants.py")
+}
+
 tasks.register<Exec>("verifyLibAgy") {
     commandLine("bash", "${rootProject.rootDir}/scripts/verify_or_patch_libagy.sh")
 }
@@ -139,5 +146,5 @@ tasks.register<Exec>("syncWebAssets") {
 }
 
 tasks.named("preBuild") {
-    dependsOn("verifyLibAgy", "syncWebAssets")
+    dependsOn("verifyArchitecturalInvariants", "verifyLibAgy", "syncWebAssets")
 }
