@@ -32,6 +32,8 @@ from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Optional
 
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
 import websockets
 from websockets.asyncio.server import ServerConnection, serve
 from websockets.datastructures import Headers
@@ -1508,10 +1510,180 @@ async def upgrade_all_packages() -> tuple[bool, str]:
 
 
 # ---------------------------------------------------------------------------
+# Configuration Export & Import Cryptographic Engine (v1.6.3 Spec 03)
+# ---------------------------------------------------------------------------
+
+EXPORT_SIGNATURE_V1 = "<!-- ANTIGRAVITY_STUDIO_EXPORT_V1 -->"
+EXPORT_SIGNATURE_V2 = "<!-- ANTIGRAVITY_STUDIO_EXPORT_V2_ENCRYPTED -->"
+CRYPTO_AAD = b"AntigravityStudio:v2:encrypted_bundle"
+MAX_SCRYPT_N = 65536
+MAX_SCRYPT_R = 16
+MAX_SCRYPT_P = 4
+MAX_CIPHERTEXT_SIZE = 15 * 1024 * 1024  # 15 MB
+
+
+def encrypt_v2_bundle(
+    plaintext_body: str,
+    password: str,
+    categories: list[str],
+    app_version: str = "1.6.3",
+) -> tuple[str, str]:
+    if not password or len(password.strip()) < 8:
+        raise ValueError("Encryption password must be at least 8 characters.")
+
+    iso_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    salt = secrets.token_bytes(16)
+    nonce = secrets.token_bytes(12)
+
+    derived_key = hashlib.scrypt(
+        password.strip().encode("utf-8"),
+        salt=salt,
+        n=16384,
+        r=8,
+        p=1,
+        maxmem=32 * 1024 * 1024,
+        dklen=32,
+    )
+
+    aesgcm = AESGCM(derived_key)
+    ciphertext_with_tag = aesgcm.encrypt(nonce, plaintext_body.encode("utf-8"), CRYPTO_AAD)
+    ciphertext = ciphertext_with_tag[:-16]
+    tag = ciphertext_with_tag[-16:]
+
+    b64_ciphertext = base64.b64encode(ciphertext).decode("ascii")
+    outer_checksum = hashlib.sha256(b64_ciphertext.encode("ascii")).hexdigest()
+
+    wrapped_b64 = "\n".join(b64_ciphertext[i:i + 76] for i in range(0, len(b64_ciphertext), 76))
+    categories_yaml = "\n".join(f"  - {c}" for c in categories)
+
+    envelope = (
+        f"{EXPORT_SIGNATURE_V2}\n"
+        f"---\n"
+        f'generator: "Antigravity Studio"\n'
+        f'export_version: "2.0"\n'
+        f'exported_at: "{iso_ts}"\n'
+        f'source_app_version: "{app_version}"\n'
+        f"categories:\n{categories_yaml}\n"
+        f'cipher: "AES-256-GCM"\n'
+        f'kdf: "scrypt"\n'
+        f'kdf_salt: "{salt.hex()}"\n'
+        f'kdf_n: 16384\n'
+        f'kdf_r: 8\n'
+        f'kdf_p: 1\n'
+        f'nonce: "{nonce.hex()}"\n'
+        f'tag: "{tag.hex()}"\n'
+        f'checksum: "sha256:{outer_checksum}"\n'
+        f"---\n\n"
+        f"# Antigravity Studio Encrypted Configuration Bundle\n\n"
+        f"> **NOTICE**: This configuration bundle is encrypted with **AES-256-GCM** and **scrypt** key derivation.\n"
+        f"> It can only be decrypted and restored with the valid password inside Antigravity Studio.\n\n"
+        f"```crypto\n{wrapped_b64}\n```\n"
+    )
+    return envelope, outer_checksum
+
+
+def decrypt_v2_bundle(content: str, password: str) -> str:
+    if not password:
+        raise ValueError("Password is required to decrypt this backup.")
+
+    if len(content) > 20 * 1024 * 1024:
+        raise ValueError("File exceeds maximum allowable encrypted backup size (20 MB).")
+
+    if not content.strip().startswith(EXPORT_SIGNATURE_V2):
+        raise ValueError("Invalid encrypted backup: Missing V2 signature on Line 1.")
+
+    fm_match = re.match(
+        r"^<!-- ANTIGRAVITY_STUDIO_EXPORT_V2_ENCRYPTED -->\s*\r?\n---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$",
+        content,
+    )
+    if not fm_match:
+        raise ValueError("Corrupted encrypted export bundle: Missing YAML frontmatter block.")
+
+    raw_frontmatter = fm_match.group(1)
+    body_text = fm_match.group(2)
+
+    meta: dict[str, str] = {}
+    for fline in raw_frontmatter.splitlines():
+        kv = re.match(r"^([a-z_]+):\s*(.+)$", fline.strip(), re.IGNORECASE)
+        if kv:
+            meta[kv.group(1).strip()] = kv.group(2).strip().strip("\"'")
+
+    if meta.get("generator") != "Antigravity Studio":
+        raise ValueError("Invalid generator: File was not created by Antigravity Studio.")
+    if meta.get("export_version") != "2.0":
+        raise ValueError(f"Unsupported export version: {meta.get('export_version')}")
+
+    try:
+        kdf_n = int(meta.get("kdf_n", 16384))
+        kdf_r = int(meta.get("kdf_r", 8))
+        kdf_p = int(meta.get("kdf_p", 1))
+    except (ValueError, TypeError):
+        raise ValueError("Invalid KDF parameters in export header.")
+
+    if kdf_n > MAX_SCRYPT_N or kdf_r > MAX_SCRYPT_R or kdf_p > MAX_SCRYPT_P:
+        raise ValueError(f"Unsafe KDF parameters in export header (N={kdf_n}, r={kdf_r}, p={kdf_p}).")
+
+    if not meta.get("kdf_salt") or not meta.get("nonce") or not meta.get("tag"):
+        raise ValueError("Corrupted export header: Missing salt, nonce, or authentication tag.")
+
+    try:
+        salt = bytes.fromhex(meta["kdf_salt"])
+        nonce = bytes.fromhex(meta["nonce"])
+        tag = bytes.fromhex(meta["tag"])
+    except ValueError:
+        raise ValueError("Corrupted export header: Non-hexadecimal cryptographic parameters.")
+
+    if len(salt) != 16 or len(nonce) != 12 or len(tag) != 16:
+        raise ValueError("Invalid cryptographic parameter lengths in export header.")
+
+    crypto_match = re.search(r"```crypto\s*([\s\S]*?)\s*```", body_text)
+    if not crypto_match:
+        raise ValueError("Corrupted encrypted bundle: Missing ```crypto``` block.")
+
+    raw_b64 = re.sub(r"\s+", "", crypto_match.group(1))
+    if len(raw_b64) > MAX_CIPHERTEXT_SIZE:
+        raise ValueError("Ciphertext exceeds maximum allowable size.")
+
+    expected_outer_checksum = meta.get("checksum", "")
+    if expected_outer_checksum and expected_outer_checksum.startswith("sha256:"):
+        expected_hash = expected_outer_checksum.split(":", 1)[1].strip().lower()
+        computed_hash = hashlib.sha256(raw_b64.encode("ascii")).hexdigest().lower()
+        if computed_hash != expected_hash:
+            raise ValueError("Integrity check failed: Checksum mismatch indicates file was modified or corrupted.")
+
+    try:
+        ciphertext = base64.b64decode(raw_b64, validate=True)
+    except Exception:
+        raise ValueError("Corrupted Base64 payload in encrypted backup.")
+
+    try:
+        derived_key = hashlib.scrypt(
+            password.strip().encode("utf-8"),
+            salt=salt,
+            n=kdf_n,
+            r=kdf_r,
+            p=kdf_p,
+            maxmem=32 * 1024 * 1024,
+            dklen=32,
+        )
+    except Exception as kdf_err:
+        logger.warning("Scrypt key derivation failed: %s", kdf_err)
+        raise ValueError("Key derivation failed.")
+
+    aesgcm = AESGCM(derived_key)
+    try:
+        plaintext_bytes = aesgcm.decrypt(nonce, ciphertext + tag, CRYPTO_AAD)
+    except Exception:
+        raise ValueError("Incorrect password or corrupted backup file.")
+
+    return plaintext_bytes.decode("utf-8", errors="replace")
+
+
+# ---------------------------------------------------------------------------
 # Configuration Export Bundle Generator (v1.6.3)
 # ---------------------------------------------------------------------------
 
-async def generate_config_export_bundle(categories: list[str]) -> tuple[str, str, str]:
+async def generate_config_export_bundle(categories: list[str], password: str) -> tuple[str, str, str]:
     now_ts = time.strftime("%Y%m%d_%H%M%S")
     iso_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     filename = f"AntigravityStudio-Backup-{now_ts}.agy.md"
@@ -1648,11 +1820,14 @@ async def generate_config_export_bundle(categories: list[str]) -> tuple[str, str
 
     full_content = header + post_frontmatter_body
 
+    # Encrypt canonical bundle using AES-256-GCM + scrypt (Spec 03)
+    encrypted_envelope, _ = encrypt_v2_bundle(full_content, password, categories, app_version="1.6.3")
+
     download_dir = Path("/storage/emulated/0/Download")
     try:
         download_dir.mkdir(parents=True, exist_ok=True)
         dest_path = download_dir / filename
-        dest_path.write_text(full_content, encoding="utf-8")
+        dest_path.write_text(encrypted_envelope, encoding="utf-8")
         dest_str = str(dest_path)
     except Exception as exc:
         logger.warning("Could not write backup to %s: %s", download_dir, exc)
@@ -1660,12 +1835,12 @@ async def generate_config_export_bundle(categories: list[str]) -> tuple[str, str
         try:
             fallback_dir.mkdir(parents=True, exist_ok=True)
             dest_path = fallback_dir / filename
-            dest_path.write_text(full_content, encoding="utf-8")
+            dest_path.write_text(encrypted_envelope, encoding="utf-8")
             dest_str = str(dest_path)
         except Exception:
             dest_str = f"/storage/emulated/0/Download/{filename}"
 
-    return filename, full_content, dest_str
+    return filename, encrypted_envelope, dest_str
 
 
 # ---------------------------------------------------------------------------
@@ -1677,15 +1852,32 @@ IMPORT_MUTATION_LOCK = asyncio.Lock()
 
 async def restore_configurations_bundle(
     content: str,
+    password: Optional[str] = None,
     progress_callback: Optional[Any] = None,
 ) -> dict[str, Any]:
     # 1. Size Boundary (ARGON-V163-20)
-    if len(content) > 10 * 1024 * 1024:
-        raise ValueError("File exceeds maximum allowable backup size (10 MB).")
+    if len(content) > 20 * 1024 * 1024:
+        raise ValueError("File exceeds maximum allowable backup size (20 MB).")
 
-    # 2. Magic Signature & Frontmatter
-    if not content.strip().startswith("<!-- ANTIGRAVITY_STUDIO_EXPORT_V1 -->"):
-        raise ValueError("Invalid backup file: Missing Antigravity Studio export signature on Line 1.")
+    # 2. Signature Detection & V2 Decryption (Spec 03)
+    trimmed_content = content.strip()
+    if trimmed_content.startswith(EXPORT_SIGNATURE_V2):
+        if not password:
+            raise ValueError("Password is required to decrypt this encrypted backup.")
+        if progress_callback:
+            await progress_callback("Deriving key & decrypting backup...")
+        decrypted_markdown = decrypt_v2_bundle(content, password)
+        content = decrypted_markdown
+        trimmed_content = content.strip()
+    elif trimmed_content.startswith(EXPORT_SIGNATURE_V1):
+        # Legacy V1 unencrypted format supported for backward compatibility
+        pass
+    else:
+        raise ValueError("Invalid backup file: Unrecognized Antigravity Studio export signature on Line 1.")
+
+    # 3. Inner Canonical Signature & Frontmatter
+    if not trimmed_content.startswith(EXPORT_SIGNATURE_V1):
+        raise ValueError("Corrupted decrypted payload: Missing inner export signature.")
 
     fm_match = re.match(
         r"^<!-- ANTIGRAVITY_STUDIO_EXPORT_V1 -->\s*\r?\n---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$",
@@ -6865,11 +7057,12 @@ class AgyWebServer:
                 }))
             return
 
-        # Configuration Export (v1.6.3)
+        # Configuration Export (v1.6.3 Spec 03)
         if mtype == "export_configurations":
             categories = data.get("categories") or ["ssh_keys", "api_keys", "skills", "mcps", "packages"]
+            password = str(data.get("password") or "")
             try:
-                filename, content, dest = await generate_config_export_bundle(categories)
+                filename, content, dest = await generate_config_export_bundle(categories, password)
                 await websocket.send(json.dumps({
                     "type": "export_configurations_result",
                     "success": True,
@@ -6880,7 +7073,7 @@ class AgyWebServer:
                 await self.broadcast({
                     "type": "system_card",
                     "title": "Configuration Exported",
-                    "markdown": f"Exported `{filename}` to `{dest}`.",
+                    "markdown": f"Exported encrypted `{filename}` to `{dest}`.",
                     "level": "info",
                 })
             except Exception as exc:
@@ -6892,9 +7085,10 @@ class AgyWebServer:
                 }))
             return
 
-        # Configuration Local Import (v1.6.3 Spec 02)
+        # Configuration Local Import (v1.6.3 Spec 02 & 03)
         if mtype == "import_configurations":
             content = data.get("content", "")
+            password = data.get("password")
             if not isinstance(content, str) or not content:
                 await websocket.send(json.dumps({
                     "type": "import_configurations_result",
@@ -6922,7 +7116,11 @@ class AgyWebServer:
                         pass
 
                 try:
-                    summary = await restore_configurations_bundle(content, progress_callback=progress_cb)
+                    summary = await restore_configurations_bundle(
+                        content,
+                        password=password,
+                        progress_callback=progress_cb,
+                    )
                     await websocket.send(json.dumps({
                         "type": "import_configurations_result",
                         "success": True,

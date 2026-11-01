@@ -3494,6 +3494,45 @@
     </div>
   </section>
 
+  <!-- Import Password Prompt Bottom Sheet (v1.6.3 Spec 03) -->
+  <section class="bottom-sheet" id="importPasswordSheet" aria-hidden="true">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">
+      <span id="importPasswordTitle">Encrypted Backup</span>
+      <button class="icon-btn" id="btnCloseImportPassword" style="width:30px;height:30px;" title="Close">
+        <svg class="fa-icon" viewBox="0 0 384 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M342.6 150.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L192 210.7 86.6 105.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L146.7 256 41.4 361.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192 301.3 297.4 406.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L237.3 256 342.6 150.6z"/></svg>
+      </button>
+    </div>
+    <div class="sheet-body" style="padding: 16px;">
+      <p style="font-size:13px; color:var(--text-secondary); margin-bottom:12px; line-height:1.4;" id="importPasswordSubtitle">
+        This backup is encrypted with AES-256-GCM. Enter the password you used during export to decrypt and restore it:
+      </p>
+
+      <div id="importMetaBox" style="font-size:11.5px; color:var(--text-muted); background:var(--bg-card); padding:8px 12px; border-radius:8px; margin-bottom:14px; border:1px solid var(--border-subtle); display:flex; flex-direction:column; gap:4px;">
+        <span id="importMetaDate">Exported: Unknown</span>
+        <span id="importMetaCategories">Categories: All</span>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:6px; margin-bottom:14px;">
+        <label style="font-size:12px; font-weight:600; color:var(--text-secondary);" for="inputImportPassword">Password</label>
+        <div style="position:relative; display:flex; align-items:center;">
+          <input type="password" id="inputImportPassword" class="form-input" placeholder="Enter encryption password..." autocomplete="current-password" autocorrect="off" autocapitalize="off" spellcheck="false" style="width:100%; height:44px; padding-right:44px; font-size:14px; border-radius:8px; border:1px solid var(--border-subtle); background:var(--bg-card); color:var(--text-primary); padding-left:12px;">
+          <button type="button" class="icon-btn" id="btnToggleImportPassword" style="position:absolute; right:0; top:0; width:44px; height:44px; display:flex; align-items:center; justify-content:center; color:var(--text-secondary); z-index:10; touch-action:manipulation;" title="Show/hide password">
+            <svg class="fa-icon eye-icon" viewBox="0 0 576 512" style="width:16px;height:16px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1 3.3-7.9 3.3-16.7 0-24.6-14.8-35.7-46.1-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM144 256a144 144 0 1 1 288 0 144 144 0 1 1 -288 0zm144-64c0 35.3-28.7 64-64 64c-7.1 0-13.9-1.2-20.3-3.3c-5.5-1.8-11.9 1.6-11.7 7.4c.3 6.9 1.3 13.8 3.2 20.6c7.6 27.2 32.5 47.3 62.8 47.3c35.3 0 64-28.7 64-64s-28.7-64-64-64c-6.8 0-13.4 1.1-19.6 3.1c-5.8 1.9-9.2 8.3-7.4 13.8c1.8 5.5 8.2 8.9 13.8 7.1c4.2-1.3 8.6-2 13.2-2c22.1 0 40 17.9 40 40z"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Inline Error Message -->
+      <div id="importPasswordError" class="alert-box error" style="display:none; margin-bottom:14px; padding:10px 12px; font-size:12.5px; border-radius:8px;"></div>
+
+      <div style="display:flex; gap:10px;">
+        <button class="subview-action-btn secondary" id="btnCancelImportPassword" style="flex:1; height:44px;">Cancel</button>
+        <button class="subview-action-btn primary" id="btnSubmitImportPassword" style="flex:1.5; height:44px;">Decrypt & Restore</button>
+      </div>
+    </div>
+  </section>
+
   <!-- Rename Modal Dialog -->
   <div class="modal-dialog" id="renameModal" style="display:none;">
     <div class="modal-card">
@@ -3947,17 +3986,50 @@
             </label>
           </div>
 
+          <!-- Mandatory Password Fields (v1.6.3 Spec 03) -->
+          <div style="display:flex; flex-direction:column; gap:10px; margin-top:4px; padding:12px; background:var(--bg-card); border-radius:10px; border:1px solid var(--border-subtle);">
+            <div style="font-size:13px; font-weight:600; color:var(--text-primary);">Mandatory Encryption Password</div>
+            <div style="font-size:12px; color:var(--text-secondary); line-height:1.4;">
+              Set a password to encrypt your credentials with AES-256-GCM. You will need this password when restoring on another device.
+            </div>
+
+            <div style="display:flex; flex-direction:column; gap:4px;">
+              <label style="font-size:11.5px; font-weight:600; color:var(--text-secondary);" for="inputExportPassword">Password (min 8 characters)</label>
+              <div style="position:relative; display:flex; align-items:center;">
+                <input type="password" id="inputExportPassword" class="form-input" placeholder="Enter backup password..." autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" style="width:100%; height:40px; padding-right:44px; font-size:13.5px; border-radius:8px; border:1px solid var(--border-subtle); background:var(--bg-surface); color:var(--text-primary); padding-left:10px;">
+                <button type="button" class="icon-btn" id="btnToggleExportPassword" style="position:absolute; right:0; top:0; width:40px; height:40px; display:flex; align-items:center; justify-content:center; color:var(--text-secondary); z-index:10; touch-action:manipulation;" title="Show/hide password">
+                  <svg class="fa-icon eye-icon" viewBox="0 0 576 512" style="width:15px;height:15px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1 3.3-7.9 3.3-16.7 0-24.6-14.8-35.7-46.1-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM144 256a144 144 0 1 1 288 0 144 144 0 1 1 -288 0zm144-64c0 35.3-28.7 64-64 64c-7.1 0-13.9-1.2-20.3-3.3c-5.5-1.8-11.9 1.6-11.7 7.4c.3 6.9 1.3 13.8 3.2 20.6c7.6 27.2 32.5 47.3 62.8 47.3c35.3 0 64-28.7 64-64s-28.7-64-64-64c-6.8 0-13.4 1.1-19.6 3.1c-5.8 1.9-9.2 8.3-7.4 13.8c1.8 5.5 8.2 8.9 13.8 7.1c4.2-1.3 8.6-2 13.2-2c22.1 0 40 17.9 40 40z"/></svg>
+                </button>
+              </div>
+            </div>
+
+            <div style="display:flex; flex-direction:column; gap:4px;">
+              <label style="font-size:11.5px; font-weight:600; color:var(--text-secondary);" for="inputExportConfirmPassword">Confirm Password</label>
+              <div style="position:relative; display:flex; align-items:center;">
+                <input type="password" id="inputExportConfirmPassword" class="form-input" placeholder="Repeat backup password..." autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" style="width:100%; height:40px; padding-right:44px; font-size:13.5px; border-radius:8px; border:1px solid var(--border-subtle); background:var(--bg-surface); color:var(--text-primary); padding-left:10px;">
+                <button type="button" class="icon-btn" id="btnToggleExportConfirmPassword" style="position:absolute; right:0; top:0; width:40px; height:40px; display:flex; align-items:center; justify-content:center; color:var(--text-secondary); z-index:10; touch-action:manipulation;" title="Show/hide password">
+                  <svg class="fa-icon eye-icon" viewBox="0 0 576 512" style="width:15px;height:15px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1 3.3-7.9 3.3-16.7 0-24.6-14.8-35.7-46.1-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM144 256a144 144 0 1 1 288 0 144 144 0 1 1 -288 0zm144-64c0 35.3-28.7 64-64 64c-7.1 0-13.9-1.2-20.3-3.3c-5.5-1.8-11.9 1.6-11.7 7.4c.3 6.9 1.3 13.8 3.2 20.6c7.6 27.2 32.5 47.3 62.8 47.3c35.3 0 64-28.7 64-64s-28.7-64-64-64c-6.8 0-13.4 1.1-19.6 3.1c-5.8 1.9-9.2 8.3-7.4 13.8c1.8 5.5 8.2 8.9 13.8 7.1c4.2-1.3 8.6-2 13.2-2c22.1 0 40 17.9 40 40z"/></svg>
+                </button>
+              </div>
+            </div>
+
+            <!-- Real-time Password Status Indicator -->
+            <div id="exportPasswordStatus" style="font-size:11.5px; color:var(--text-muted); display:flex; align-items:center; gap:6px;">
+              <span>• Password must be at least 8 characters and match</span>
+            </div>
+          </div>
+
           <div class="export-actions-row">
             <button class="subview-action-btn secondary" id="btnToggleSelectAll" style="flex:1;">Deselect All</button>
-            <button class="subview-action-btn primary" id="btnTriggerExport" style="flex:1.5;">
+            <button class="subview-action-btn primary" id="btnTriggerExport" style="flex:1.5;" disabled>
               <svg class="fa-icon btn-icon" viewBox="0 0 512 512" style="width:14px;height:14px;margin-right:6px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M288 32c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 242.7-73.4-73.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3l128 128c12.5 12.5 32.8 12.5 45.3 0l128-128c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L288 274.7 288 32zM64 352c-35.3 0-64 28.7-64 64l0 32c0 35.3 28.7 64 64 64l384 0c35.3 0 64-28.7 64-64l0-32c0-35.3-28.7-64-64-64l-64 0c-17.7 0-32 14.3-32 32s14.3 32 32 32l64 0 0 32L64 448l0-32 64 0c17.7 0 32-14.3 32-32s-14.3-32-32-32L64 352z"/></svg>
-              Export Backup (.md)
+              Export Encrypted Backup (.agy.md)
             </button>
           </div>
 
-          <div class="settings-security-warning" id="exportSecurityWarning">
-            <svg class="fa-icon warning-icon" viewBox="0 0 512 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M256 32c14.2 0 27.3 7.5 34.5 19.8l216 368c7.3 12.4 7.3 27.7 .2 40.1S486.3 480 472 480L40 480c-14.3 0-27.4-7.7-34.7-20.1s-7-27.8 .2-40.1l216-368C228.7 39.5 241.8 32 256 32zm0 128c-13.3 0-24 10.7-24 24l0 112c0 13.3 10.7 24 24 24s24-10.7 24-24l0-112c0-13.3-10.7-24-24-24zm32 224a32 32 0 1 0 -64 0 32 32 0 1 0 64 0z"/></svg>
-            <span><strong>Security Notice:</strong> The exported Markdown file contains raw unencrypted private keys and API tokens. Store it securely and never share it publicly.</span>
+          <div class="settings-security-warning" id="exportSecurityWarning" style="background:rgba(59,130,246,0.1); border-color:rgba(59,130,246,0.25); color:var(--text-secondary);">
+            <svg class="fa-icon warning-icon" viewBox="0 0 512 512" style="color:var(--accent-primary);" aria-hidden="true" focusable="false"><path fill="currentColor" d="M256 0c4.6 0 9.2 1 13.4 2.9L457.7 82.8c22 9.3 38.4 31 38.3 57.2c-.5 99.2-41.3 280.7-213.6 363.2c-16.7 8-36.1 8-52.8 0C57.3 420.7 16.5 239.2 16 140c-.1-26.2 16.3-47.9 38.3-57.2L242.7 2.9C246.8 1 251.4 0 256 0zM256 64.7L64 144.3c.4 83.9 33.7 238.4 192 310.2c158.3-71.8 191.6-226.3 192-310.2L256 64.7z"/></svg>
+            <span><strong>End-to-End Encrypted:</strong> Export is securely encrypted with AES-256-GCM and scrypt. Ensure you remember your password—it cannot be recovered if lost.</span>
           </div>
         </div>
 
@@ -7008,6 +7080,8 @@
         bubbleActionSheet.classList.remove('open');
         const confirmSheet = document.getElementById('importConfirmSheet');
         if (confirmSheet) confirmSheet.classList.remove('open');
+        const passwordSheet = document.getElementById('importPasswordSheet');
+        if (passwordSheet) passwordSheet.classList.remove('open');
         actionBackdrop.classList.remove('open');
         renameModal.style.display = 'none';
         deleteModal.style.display = 'none';
@@ -9150,6 +9224,12 @@
       const importValidationAlert = document.getElementById('importValidationAlert');
       const importValidationMessage = document.getElementById('importValidationMessage');
 
+      const inputExportPassword = document.getElementById('inputExportPassword');
+      const inputExportConfirmPassword = document.getElementById('inputExportConfirmPassword');
+      const btnToggleExportPassword = document.getElementById('btnToggleExportPassword');
+      const btnToggleExportConfirmPassword = document.getElementById('btnToggleExportConfirmPassword');
+      const exportPasswordStatus = document.getElementById('exportPasswordStatus');
+
       const importConfirmSheet = document.getElementById('importConfirmSheet');
       const btnCloseImportConfirm = document.getElementById('btnCloseImportConfirm');
       const btnCancelImportConfirm = document.getElementById('btnCancelImportConfirm');
@@ -9157,6 +9237,16 @@
       const detectedItemsList = document.getElementById('detectedItemsList');
       const btnCloseExportImport = document.getElementById('btnCloseExportImport');
       const exportSecurityWarning = document.getElementById('exportSecurityWarning');
+
+      const importPasswordSheet = document.getElementById('importPasswordSheet');
+      const btnCloseImportPassword = document.getElementById('btnCloseImportPassword');
+      const btnCancelImportPassword = document.getElementById('btnCancelImportPassword');
+      const btnSubmitImportPassword = document.getElementById('btnSubmitImportPassword');
+      const inputImportPassword = document.getElementById('inputImportPassword');
+      const btnToggleImportPassword = document.getElementById('btnToggleImportPassword');
+      const importPasswordError = document.getElementById('importPasswordError');
+      const importMetaDate = document.getElementById('importMetaDate');
+      const importMetaCategories = document.getElementById('importMetaCategories');
 
       const importSheetTitle = document.getElementById('importSheetTitle');
       const importSheetSubtitle = document.getElementById('importSheetSubtitle');
@@ -9172,24 +9262,80 @@
 
       const exportCheckboxes = [chkExportSsh, chkExportApi, chkExportSkills, chkExportMcp, chkExportPackages];
 
-      function updateExportSecurityWarningVisibility() {
-        if (!exportSecurityWarning) return;
-        const hasSecrets = Boolean(
-          (chkExportSsh && chkExportSsh.checked) ||
-          (chkExportApi && chkExportApi.checked)
-        );
-        exportSecurityWarning.style.display = hasSecrets ? 'flex' : 'none';
+      function togglePasswordInput(inputEl, btnEl) {
+        if (!inputEl) return;
+        const isPass = inputEl.type === 'password';
+        inputEl.type = isPass ? 'text' : 'password';
+        if (btnEl) {
+          btnEl.style.color = isPass ? 'var(--accent-primary)' : 'var(--text-secondary)';
+        }
       }
+
+      if (btnToggleExportPassword) {
+        btnToggleExportPassword.addEventListener('click', (e) => {
+          e.preventDefault();
+          togglePasswordInput(inputExportPassword, btnToggleExportPassword);
+        });
+      }
+      if (btnToggleExportConfirmPassword) {
+        btnToggleExportConfirmPassword.addEventListener('click', (e) => {
+          e.preventDefault();
+          togglePasswordInput(inputExportConfirmPassword, btnToggleExportConfirmPassword);
+        });
+      }
+      if (btnToggleImportPassword) {
+        btnToggleImportPassword.addEventListener('click', (e) => {
+          e.preventDefault();
+          togglePasswordInput(inputImportPassword, btnToggleImportPassword);
+        });
+      }
+
+      function validateExportPasswords() {
+        if (!inputExportPassword || !inputExportConfirmPassword || !btnTriggerExport) return;
+        const p1 = inputExportPassword.value;
+        const p2 = inputExportConfirmPassword.value;
+        const hasCategory = exportCheckboxes.some(chk => chk && chk.checked);
+
+        if (!p1 && !p2) {
+          if (exportPasswordStatus) {
+            exportPasswordStatus.innerHTML = '<span style="color:var(--text-muted);">• Password must be at least 8 characters and match</span>';
+          }
+          btnTriggerExport.disabled = true;
+          return;
+        }
+
+        if (p1.length < 8) {
+          if (exportPasswordStatus) {
+            exportPasswordStatus.innerHTML = '<span style="color:#f43f5e;">• Password is too short (minimum 8 characters)</span>';
+          }
+          btnTriggerExport.disabled = true;
+          return;
+        }
+
+        if (p1 !== p2) {
+          if (exportPasswordStatus) {
+            exportPasswordStatus.innerHTML = '<span style="color:#f43f5e;">• Passwords do not match</span>';
+          }
+          btnTriggerExport.disabled = true;
+          return;
+        }
+
+        if (exportPasswordStatus) {
+          exportPasswordStatus.innerHTML = '<span style="color:#10b981;font-weight:600;">✓ Passwords match (AES-256-GCM ready)</span>';
+        }
+        btnTriggerExport.disabled = !hasCategory;
+      }
+
+      if (inputExportPassword) inputExportPassword.addEventListener('input', validateExportPasswords);
+      if (inputExportConfirmPassword) inputExportConfirmPassword.addEventListener('input', validateExportPasswords);
 
       function updateSelectAllButtonState() {
         if (btnToggleSelectAll) {
           const allChecked = exportCheckboxes.every(chk => chk && chk.checked);
           btnToggleSelectAll.textContent = allChecked ? 'Deselect All' : 'Select All';
         }
-        updateExportSecurityWarningVisibility();
+        validateExportPasswords();
       }
-
-      updateExportSecurityWarningVisibility();
 
       if (btnToggleSelectAll) {
         btnToggleSelectAll.addEventListener('click', () => {
@@ -9225,24 +9371,36 @@
             return;
           }
 
+          const password = (inputExportPassword ? inputExportPassword.value : '').trim();
+          const confirm = (inputExportConfirmPassword ? inputExportConfirmPassword.value : '').trim();
+          if (!password || password.length < 8) {
+            showToast('Password must be at least 8 characters long.');
+            return;
+          }
+          if (password !== confirm) {
+            showToast('Export passwords do not match.');
+            return;
+          }
+
           btnTriggerExport.disabled = true;
-          btnTriggerExport.innerHTML = `<svg class="fa-icon fa-spin" viewBox="0 0 512 512" style="width:14px;height:14px;margin-right:6px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M48.5 224L40 224c-13.3 0-24-10.7-24-24L16 72c0-9.7 5.8-18.5 14.8-22.2s19.3-1.7 26.2 5.2L98.6 96.6c87.6-86.5 228.7-86.2 315.8 1c87.5 87.5 87.5 229.3 0 316.8s-229.3 87.5-316.8 0c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0c62.5 62.5 163.8 62.5 226.3 0s62.5-163.8 0-226.3c-62.2-62.2-162.7-62.5-225.3-1L185 183c6.9 6.9 8.9 17.2 5.2 26.2s-12.5 14.8-22.2 14.8L48.5 224z"/></svg>Exporting...`;
+          btnTriggerExport.innerHTML = `<svg class="fa-icon fa-spin" viewBox="0 0 512 512" style="width:14px;height:14px;margin-right:6px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M48.5 224L40 224c-13.3 0-24-10.7-24-24L16 72c0-9.7 5.8-18.5 14.8-22.2s19.3-1.7 26.2 5.2L98.6 96.6c87.6-86.5 228.7-86.2 315.8 1c87.5 87.5 87.5 229.3 0 316.8s-229.3 87.5-316.8 0c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0c62.5 62.5 163.8 62.5 226.3 0s62.5-163.8 0-226.3c-62.2-62.2-162.7-62.5-225.3-1L185 183c6.9 6.9 8.9 17.2 5.2 26.2s-12.5 14.8-22.2 14.8L48.5 224z"/></svg>Encrypting & Exporting...`;
 
           sendWs({
             type: 'export_configurations',
-            categories: categories
+            categories: categories,
+            password: password
           });
         });
       }
 
       function handleExportResult(msg) {
         if (btnTriggerExport) {
-          btnTriggerExport.disabled = false;
-          btnTriggerExport.innerHTML = `<svg class="fa-icon btn-icon" viewBox="0 0 512 512" style="width:14px;height:14px;margin-right:6px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M288 32c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 242.7-73.4-73.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3l128 128c12.5 12.5 32.8 12.5 45.3 0l128-128c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L288 274.7 288 32zM64 352c-35.3 0-64 28.7-64 64l0 32c0 35.3 28.7 64 64 64l384 0c35.3 0 64-28.7 64-64l0-32c0-35.3-28.7-64-64-64l-64 0c-17.7 0-32 14.3-32 32s14.3 32 32 32l64 0 0 32L64 448l0-32 64 0c17.7 0 32-14.3 32-32s-14.3-32-32-32L64 352z"/></svg>Export Backup (.md)`;
+          validateExportPasswords();
+          btnTriggerExport.innerHTML = `<svg class="fa-icon btn-icon" viewBox="0 0 512 512" style="width:14px;height:14px;margin-right:6px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M288 32c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 242.7-73.4-73.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3l128 128c12.5 12.5 32.8 12.5 45.3 0l128-128c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L288 274.7 288 32zM64 352c-35.3 0-64 28.7-64 64l0 32c0 35.3 28.7 64 64 64l384 0c35.3 0 64-28.7 64-64l0-32c0-35.3-28.7-64-64-64l-64 0c-17.7 0-32 14.3-32 32s14.3 32 32 32l64 0 0 32L64 448l0-32 64 0c17.7 0 32-14.3 32-32s-14.3-32-32-32L64 352z"/></svg>Export Encrypted Backup (.agy.md)`;
         }
 
         if (msg.success) {
-          showToast(`Export saved to Downloads:\n${msg.filename}`);
+          showToast(`Encrypted export saved to Downloads:\n${msg.filename}`);
         } else {
           showToast(`Export failed:\n${msg.error || 'Unknown error'}`);
         }
@@ -9262,7 +9420,12 @@
             if (importValidationAlert) importValidationAlert.style.display = 'none';
             const result = await validateExportMarkdown(file);
             pendingImportBundle = result;
-            renderImportConfirmSheet(result.tallies);
+
+            if (result.isEncrypted) {
+              openImportPasswordSheet(result.meta);
+            } else {
+              renderImportConfirmSheet(result.tallies, true /* isLegacy */);
+            }
           } catch (err) {
             console.warn('Import validation failed:', err);
             if (importValidationAlert && importValidationMessage) {
@@ -9286,93 +9449,182 @@
         if (file.size < 64) {
           throw new Error('Selected backup file is empty or too small.');
         }
-        if (file.size > 10 * 1024 * 1024) {
-          throw new Error('File exceeds the 10 MB maximum backup limit.');
+        if (file.size > 20 * 1024 * 1024) {
+          throw new Error('File exceeds the 20 MB maximum backup limit.');
         }
 
         // 2. Read text content
         const text = await file.text();
-
-        // 3. Magic header check (must be line 1)
         const lines = text.split(/\r?\n/);
-        if (lines[0].trim() !== '<!-- ANTIGRAVITY_STUDIO_EXPORT_V1 -->') {
+        const line1 = (lines[0] || '').trim();
+
+        if (line1 === '<!-- ANTIGRAVITY_STUDIO_EXPORT_V2_ENCRYPTED -->') {
+          // V2 Encrypted Envelope
+          const fmMatch = text.match(/^<!-- ANTIGRAVITY_STUDIO_EXPORT_V2_ENCRYPTED -->\s*\r?\n---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
+          if (!fmMatch) throw new Error('Corrupted encrypted backup: Missing YAML frontmatter block.');
+
+          const meta = {};
+          for (const fline of fmMatch[1].split(/\r?\n/)) {
+            const kv = fline.match(/^([a-z_]+):\s*(.+)$/i);
+            if (kv) meta[kv[1].trim()] = kv[2].trim().replace(/^["']|["']$/g, '');
+          }
+
+          if (meta.generator !== 'Antigravity Studio') {
+            throw new Error('Invalid generator: File was not created by Antigravity Studio.');
+          }
+
+          const cryptoMatch = fmMatch[2].match(/```crypto\s*([\s\S]*?)\s*```/);
+          if (!cryptoMatch) {
+            throw new Error('Corrupted encrypted backup: Missing ```crypto``` block.');
+          }
+
+          // Outer checksum verification
+          if (meta.checksum && meta.checksum.startsWith('sha256:')) {
+            const expectedOuter = meta.checksum.split(':')[1].trim().toLowerCase();
+            const rawB64 = cryptoMatch[1].replace(/\s+/g, '');
+            const encoder = new TextEncoder();
+            const data = encoder.encode(rawB64);
+            const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            const computedOuter = hashArray.map(b => b.toString(16).padStart(2, '0')).join('').toLowerCase();
+            if (computedOuter !== expectedOuter) {
+              throw new Error('Integrity check failed: Encrypted ciphertext was modified or corrupted.');
+            }
+          }
+
+          return { isEncrypted: true, text, meta };
+        } else if (line1 === '<!-- ANTIGRAVITY_STUDIO_EXPORT_V1 -->') {
+          // Legacy V1 Unencrypted
+          const fmMatch = text.match(/^<!-- ANTIGRAVITY_STUDIO_EXPORT_V1 -->\s*\r?\n---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
+          if (!fmMatch) throw new Error('Corrupted export file: Missing YAML frontmatter block.');
+
+          const rawFrontmatter = fmMatch[1];
+          const postFrontmatterBody = fmMatch[2];
+
+          const meta = {};
+          for (const fline of rawFrontmatter.split(/\r?\n/)) {
+            const kv = fline.match(/^([a-z_]+):\s*(.+)$/i);
+            if (kv) meta[kv[1].trim()] = kv[2].trim().replace(/^["']|["']$/g, '');
+          }
+
+          if (meta.generator !== 'Antigravity Studio') {
+            throw new Error('Invalid generator: File was not created by Antigravity Studio.');
+          }
+
+          if (meta.checksum && meta.checksum.startsWith('sha256:')) {
+            const expectedHash = meta.checksum.split(':')[1].trim().toLowerCase();
+            const normalizedBody = postFrontmatterBody.replace(/\r\n/g, '\n').trim();
+            const encoder = new TextEncoder();
+            const data = encoder.encode(normalizedBody);
+            const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            const computedHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('').toLowerCase();
+            if (computedHash !== expectedHash) {
+              throw new Error('Integrity check failed: Checksum mismatch indicates file was modified or corrupted.');
+            }
+          }
+
+          const tallies = {
+            ssh_keys: (postFrontmatterBody.match(/### SSH Key:\s*`([^`]+)`/g) || []).length,
+            api_keys: 0,
+            skills: (postFrontmatterBody.match(/### Skill:\s*`([^`]+)`/g) || []).length,
+            mcps: 0,
+            packages: 0,
+          };
+
+          const apiMatch = postFrontmatterBody.match(/## Section: API Keys[\s\S]*?```json\s*([\s\S]*?)\s*```/);
+          if (apiMatch) {
+            try {
+              const keys = JSON.parse(apiMatch[1]);
+              tallies.api_keys = typeof keys === 'object' && keys !== null ? Object.keys(keys).length : 0;
+            } catch (_) {}
+          }
+
+          const mcpMatch = postFrontmatterBody.match(/## Section: MCP Servers[\s\S]*?```json\s*([\s\S]*?)\s*```/);
+          if (mcpMatch) {
+            try {
+              const mcps = JSON.parse(mcpMatch[1]);
+              tallies.mcps = typeof mcps === 'object' && mcps !== null ? Object.keys(mcps).length : 0;
+            } catch (_) {}
+          }
+
+          const pkgMatch = postFrontmatterBody.match(/## Section: Alpine Linux Packages[\s\S]*?```json\s*([\s\S]*?)\s*```/);
+          if (pkgMatch) {
+            try {
+              const pkgs = JSON.parse(pkgMatch[1]);
+              tallies.packages = Array.isArray(pkgs) ? pkgs.length : 0;
+            } catch (_) {}
+          }
+
+          return { isEncrypted: false, text, meta, tallies, postFrontmatterBody };
+        } else {
           throw new Error('Invalid backup file: Missing Antigravity Studio export signature on Line 1.');
         }
+      }
 
-        // 4. Extract frontmatter and post-frontmatter body
-        const fmMatch = text.match(/^<!-- ANTIGRAVITY_STUDIO_EXPORT_V1 -->\s*\r?\n---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
-        if (!fmMatch) {
-          throw new Error('Corrupted export file: Missing YAML frontmatter block.');
+      function openImportPasswordSheet(meta) {
+        if (!importPasswordSheet) return;
+        if (inputImportPassword) {
+          inputImportPassword.value = '';
+          inputImportPassword.style.borderColor = 'var(--border-subtle)';
+        }
+        if (importPasswordError) importPasswordError.style.display = 'none';
+        if (btnSubmitImportPassword) {
+          btnSubmitImportPassword.disabled = false;
+          btnSubmitImportPassword.textContent = 'Decrypt & Restore';
+        }
+        if (btnCancelImportPassword) btnCancelImportPassword.disabled = false;
+        if (btnCloseImportPassword) btnCloseImportPassword.disabled = false;
+
+        const dateStr = meta.exported_at ? new Date(meta.exported_at).toLocaleString() : 'Unknown';
+        if (importMetaDate) importMetaDate.textContent = `Exported: ${dateStr}`;
+        if (importMetaCategories) {
+          importMetaCategories.textContent = `Version: ${meta.source_app_version || '1.6.3'} (AES-256-GCM)`;
         }
 
-        const rawFrontmatter = fmMatch[1];
-        const postFrontmatterBody = fmMatch[2];
+        importPasswordSheet.classList.add('open');
+        if (actionBackdrop) actionBackdrop.classList.add('open');
+        setTimeout(() => {
+          if (inputImportPassword) inputImportPassword.focus();
+        }, 150);
+      }
 
-        // Parse YAML fields
-        const meta = {};
-        for (const fline of rawFrontmatter.split(/\r?\n/)) {
-          const kv = fline.match(/^([a-z_]+):\s*(.+)$/i);
-          if (kv) {
-            meta[kv[1].trim()] = kv[2].trim().replace(/^["']|["']$/g, '');
+      function closeImportPasswordSheet() {
+        if (importPasswordSheet) importPasswordSheet.classList.remove('open');
+        if (actionBackdrop && (!importConfirmSheet || !importConfirmSheet.classList.contains('open'))) {
+          actionBackdrop.classList.remove('open');
+        }
+        if (inputImportPassword) inputImportPassword.value = '';
+      }
+
+      if (btnCloseImportPassword) btnCloseImportPassword.addEventListener('click', closeImportPasswordSheet);
+      if (btnCancelImportPassword) btnCancelImportPassword.addEventListener('click', closeImportPasswordSheet);
+
+      if (btnSubmitImportPassword) {
+        btnSubmitImportPassword.addEventListener('click', () => {
+          if (!pendingImportBundle) return;
+          const pwd = (inputImportPassword ? inputImportPassword.value : '').trim();
+          if (!pwd) {
+            if (importPasswordError) {
+              importPasswordError.textContent = 'Please enter your encryption password.';
+              importPasswordError.style.display = 'block';
+            }
+            if (inputImportPassword) inputImportPassword.style.borderColor = 'var(--danger)';
+            return;
           }
-        }
 
-        if (meta.generator !== 'Antigravity Studio') {
-          throw new Error('Invalid generator: File was not created by Antigravity Studio.');
-        }
-        if (meta.export_version !== '1.0') {
-          throw new Error(`Unsupported export version (${meta.export_version || 'unknown'}).`);
-        }
+          btnSubmitImportPassword.disabled = true;
+          btnSubmitImportPassword.innerHTML = `<svg class="fa-icon fa-spin" viewBox="0 0 512 512" style="width:14px;height:14px;margin-right:6px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M48.5 224L40 224c-13.3 0-24-10.7-24-24L16 72c0-9.7 5.8-18.5 14.8-22.2s19.3-1.7 26.2 5.2L98.6 96.6c87.6-86.5 228.7-86.2 315.8 1c87.5 87.5 87.5 229.3 0 316.8s-229.3 87.5-316.8 0c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0c62.5 62.5 163.8 62.5 226.3 0s62.5-163.8 0-226.3c-62.2-62.2-162.7-62.5-225.3-1L185 183c6.9 6.9 8.9 17.2 5.2 26.2s-12.5 14.8-22.2 14.8L48.5 224z"/></svg>Decrypting...`;
+          if (btnCancelImportPassword) btnCancelImportPassword.disabled = true;
+          if (btnCloseImportPassword) btnCloseImportPassword.disabled = true;
+          if (importPasswordError) importPasswordError.style.display = 'none';
 
-        // 5. Verify Checksum over entire post-frontmatter body (CRLF normalized to LF)
-        if (meta.checksum && meta.checksum.startsWith('sha256:')) {
-          const expectedHash = meta.checksum.split(':')[1].trim().toLowerCase();
-          const normalizedBody = postFrontmatterBody.replace(/\r\n/g, '\n').trim();
-          const encoder = new TextEncoder();
-          const data = encoder.encode(normalizedBody);
-          const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-          const hashArray = Array.from(new Uint8Array(hashBuffer));
-          const computedHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('').toLowerCase();
-
-          if (computedHash !== expectedHash) {
-            throw new Error('Integrity check failed: Checksum mismatch indicates file was modified or corrupted.');
-          }
-        }
-
-        // 6. Section-scoped item tallies extraction
-        const tallies = {
-          ssh_keys: (postFrontmatterBody.match(/### SSH Key:\s*`([^`]+)`/g) || []).length,
-          api_keys: 0,
-          skills: (postFrontmatterBody.match(/### Skill:\s*`([^`]+)`/g) || []).length,
-          mcps: 0,
-          packages: 0,
-        };
-
-        const apiMatch = postFrontmatterBody.match(/## Section: API Keys[\s\S]*?```json\s*([\s\S]*?)\s*```/);
-        if (apiMatch) {
-          try {
-            const keys = JSON.parse(apiMatch[1]);
-            tallies.api_keys = typeof keys === 'object' && keys !== null ? Object.keys(keys).length : 0;
-          } catch (_) {}
-        }
-
-        const mcpMatch = postFrontmatterBody.match(/## Section: MCP Servers[\s\S]*?```json\s*([\s\S]*?)\s*```/);
-        if (mcpMatch) {
-          try {
-            const mcps = JSON.parse(mcpMatch[1]);
-            tallies.mcps = typeof mcps === 'object' && mcps !== null ? Object.keys(mcps).length : 0;
-          } catch (_) {}
-        }
-
-        const pkgMatch = postFrontmatterBody.match(/## Section: Alpine Linux Packages[\s\S]*?```json\s*([\s\S]*?)\s*```/);
-        if (pkgMatch) {
-          try {
-            const pkgs = JSON.parse(pkgMatch[1]);
-            tallies.packages = Array.isArray(pkgs) ? pkgs.length : 0;
-          } catch (_) {}
-        }
-
-        return { text, meta, tallies, postFrontmatterBody };
+          sendWs({
+            type: 'import_configurations',
+            content: pendingImportBundle.text,
+            password: pwd
+          });
+        });
       }
 
       function resetImportSheetUI() {
@@ -9395,10 +9647,16 @@
         if (btnCloseImportConfirm) btnCloseImportConfirm.disabled = false;
       }
 
-      function renderImportConfirmSheet(tallies) {
+      function renderImportConfirmSheet(tallies, isLegacy) {
         if (!detectedItemsList || !importConfirmSheet) return;
         resetImportSheetUI();
         detectedItemsList.innerHTML = '';
+
+        if (isLegacy) {
+          if (importSheetSubtitle) {
+            importSheetSubtitle.innerHTML = '<span style="color:#f59e0b;font-weight:600;">Legacy Unencrypted File:</span> This backup was created with an older version of Antigravity Studio without password protection:';
+          }
+        }
 
         const items = [
           { label: 'SSH Keys', count: tallies.ssh_keys, icon: 'key' },
@@ -9428,7 +9686,9 @@
 
       function closeImportConfirmSheet() {
         if (importConfirmSheet) importConfirmSheet.classList.remove('open');
-        if (actionBackdrop) actionBackdrop.classList.remove('open');
+        if (actionBackdrop && (!importPasswordSheet || !importPasswordSheet.classList.contains('open'))) {
+          actionBackdrop.classList.remove('open');
+        }
         pendingImportBundle = null;
       }
 
@@ -9467,6 +9727,26 @@
         if (btnCloseImportConfirm) btnCloseImportConfirm.disabled = false;
 
         if (!msg.success) {
+          // If password sheet is open, report error there so user can re-try
+          if (importPasswordSheet && importPasswordSheet.classList.contains('open')) {
+            if (btnSubmitImportPassword) {
+              btnSubmitImportPassword.disabled = false;
+              btnSubmitImportPassword.textContent = 'Decrypt & Restore';
+            }
+            if (btnCancelImportPassword) btnCancelImportPassword.disabled = false;
+            if (btnCloseImportPassword) btnCloseImportPassword.disabled = false;
+            if (inputImportPassword) {
+              inputImportPassword.style.borderColor = 'var(--danger)';
+              inputImportPassword.focus();
+            }
+            if (importPasswordError) {
+              importPasswordError.textContent = msg.error || 'Incorrect password or corrupted backup file.';
+              importPasswordError.style.display = 'block';
+            }
+            showToast(msg.error || 'Decryption failed: check your password');
+            return;
+          }
+
           if (importSheetTitle) importSheetTitle.textContent = 'Restoration Failed';
           if (importResultSummaryBox) {
             importResultSummaryBox.style.display = 'flex';
@@ -9487,11 +9767,19 @@
           return;
         }
 
-        // Success flow
+        // On success: close password sheet if open
+        if (importPasswordSheet && importPasswordSheet.classList.contains('open')) {
+          closeImportPasswordSheet();
+        }
+
+        // Open confirm sheet in "Restoration Complete" state
+        resetImportSheetUI();
         if (importSheetTitle) importSheetTitle.textContent = 'Restoration Complete';
         if (importSheetSubtitle) importSheetSubtitle.textContent = 'Configurations were safely applied locally to your environment:';
         if (detectedItemsList) detectedItemsList.style.display = 'none';
         if (importZeroOverwriteNote) importZeroOverwriteNote.style.display = 'none';
+        if (importActionButtonsRow) importActionButtonsRow.style.display = 'none';
+        if (importDoneButtonRow) importDoneButtonRow.style.display = 'block';
 
         const summary = msg.summary || {};
         const categories = [
@@ -9536,6 +9824,14 @@
           importResultSummaryBox.style.display = 'flex';
           importResultSummaryBox.innerHTML = summaryHtml;
         }
+
+        if (importConfirmSheet) {
+          importConfirmSheet.classList.add('open');
+          if (actionBackdrop) actionBackdrop.classList.add('open');
+        }
+
+        showToast('Configurations successfully restored!');
+      }
 
         if (importActionButtonsRow) importActionButtonsRow.style.display = 'none';
         if (importDoneButtonRow) importDoneButtonRow.style.display = 'block';
