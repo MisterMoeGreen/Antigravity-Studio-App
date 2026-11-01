@@ -165,6 +165,9 @@ object EnvironmentBootstrapper {
                 File(agyOptDir, "version.json").writeText(
                     """{"version":"1.4.12","upstream_tag":"v1.4.12","installed_at":${System.currentTimeMillis() / 1000},"migrated":true}"""
                 )
+                try {
+                    Os.chmod(agyOptDir.absolutePath, 0b101_101_101) // 0555 VFS hardening (ARGON-01)
+                } catch (_: Exception) {}
                 Log.i(TAG, "Legacy libagy.so migration complete.")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to migrate legacy libagy.so", e)

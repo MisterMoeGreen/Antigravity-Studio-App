@@ -1392,7 +1392,14 @@ async def install_or_update_engine(
         return {"status": "busy", "message": "Engine download/installation is already in progress"}
 
     async with _engine_install_lock:
-        if not download_url:
+        if download_url:
+            allowed_prefix = f"https://github.com/{ENGINE_UPSTREAM_REPO}/releases/download/"
+            if not download_url.startswith(allowed_prefix):
+                return {
+                    "status": "error",
+                    "message": f"Untrusted engine download URL: must start with {allowed_prefix}",
+                }
+        else:
             chk = await check_engine_updates()
             if chk.get("status") != "ok" or not chk.get("download_url"):
                 return {"status": "error", "message": chk.get("message", "Could not locate engine release asset")}
@@ -1464,18 +1471,21 @@ async def install_or_update_engine(
                                     loop,
                                 )
 
-                # Extract agy.va39 from tarball
+                # Extract agy.va39 from tarball safely (PEP 706)
                 asyncio.run_coroutine_threadsafe(
                     _notify("extracting", 88, "Extracting engine executable..."),
                     loop,
                 )
                 with tarfile.open(tar_path, "r:gz") as tf:
-                    tf.extract("agy.va39", path=str(ENGINE_STAGING_DIR))
+                    if hasattr(tarfile, "data_filter"):
+                        tf.extract("agy.va39", path=str(ENGINE_STAGING_DIR), filter="data")
+                    else:
+                        tf.extract("agy.va39", path=str(ENGINE_STAGING_DIR))
 
                 staged_raw = ENGINE_STAGING_DIR / "agy.va39"
                 staged_bin = ENGINE_STAGING_DIR / "agy"
-                if not staged_raw.is_file():
-                    return False, "Archive did not contain agy.va39 executable", ""
+                if not staged_raw.is_file() or staged_raw.is_symlink():
+                    return False, "Archive did not contain valid agy.va39 executable", ""
                 staged_raw.rename(staged_bin)
                 os.chmod(staged_bin, 0o755)
 
@@ -1516,17 +1526,18 @@ async def install_or_update_engine(
                 # Clean staging archive
                 shutil.rmtree(ENGINE_STAGING_DIR, ignore_errors=True)
 
-                # VFS Hardening (ARGON-01): protect directory from untrusted deletions
-                try:
-                    os.chmod(ENGINE_OPT_DIR, 0o555)
-                except Exception:
-                    pass
-
                 return True, "", discovered_ver
 
             except Exception as ex:
                 logger.exception("Engine installation failed")
                 return False, str(ex), ""
+            finally:
+                # VFS Hardening (ARGON-01): protect directory from untrusted deletions
+                if ENGINE_BIN.exists():
+                    try:
+                        os.chmod(ENGINE_OPT_DIR, 0o555)
+                    except Exception:
+                        pass
 
         ok, err_msg, final_ver = await asyncio.to_thread(_do_download_and_extract)
         if ok:
