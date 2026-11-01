@@ -59,6 +59,7 @@ The Android SDK must contain:
 Verify `gradle.properties` in the project root contains:
 ```properties
 org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+org.gradle.daemon=false
 android.useAndroidX=true
 kotlin.code.style=official
 android.nonTransitiveRClass=true
@@ -66,6 +67,8 @@ android.aapt2FromMavenOverride=/data/data/com.termux/files/usr/bin/aapt2
 android.suppressUnsupportedCompileSdk=35
 ```
 
+> **Why `org.gradle.daemon=false` is required**: In the Android/PRoot container environment, persistent background Gradle daemons keep pipe descriptors open, which causes subshells and terminal sessions to hang indefinitely after builds finish. Disabling the daemon forces Gradle to run in single-use mode and exit immediately upon completion.
+>
 > **Why `android.aapt2FromMavenOverride` is required**: The Google Maven-distributed `aapt2` x86_64/glibc binary cannot run on native Android ARM64 Termux. Pointing Gradle to the native Termux `aapt2` package ensures fast, native resource compilation.
 
 ### 2.4 Signing Keystore
@@ -141,8 +144,8 @@ For Android to install an update in-place without requiring the user to uninstal
 
 Edit [`version.properties`](file:///data/data/com.termux/files/home/storage/shared/Documents/AgyStudio/version.properties):
 ```properties
-VERSION_CODE=39
-VERSION_NAME=1.6.0
+VERSION_CODE=43
+VERSION_NAME=1.6.1
 AGY_VERSION=1.4.12
 AGY_SHA256=...
 ```
@@ -150,10 +153,10 @@ AGY_SHA256=...
 ### Step 3: Run the Gradle Release Build
 > [!IMPORTANT]
 > **Always invoke via `bash ./gradlew`!**
-> Because the repository is located on Android FUSE shared storage, running bare `./gradlew` will fail with `Permission denied`. Always use `bash ./gradlew`. Bound max workers to avoid triggering Android's Phantom Process Killer:
+> Because the repository is located on Android FUSE shared storage, running bare `./gradlew` will fail with `Permission denied`. Always use `bash ./gradlew`. Bound max workers and disable the background daemon to avoid hangs and triggering Android's Phantom Process Killer:
 
 ```bash
-bash ./gradlew assembleRelease --max-workers=2
+bash ./gradlew assembleRelease --max-workers=2 --no-daemon
 ```
 
 During this build, Gradle will automatically:
@@ -172,7 +175,7 @@ aapt dump badging app/build/outputs/apk/release/app-release.apk | head -n 3
 Stage the APK to the user's **Downloads** folder for one-tap installation:
 ```bash
 cp -f app/build/outputs/apk/release/app-release.apk /storage/emulated/0/Download/AntigravityStudio.apk
-cp -f app/build/outputs/apk/release/app-release.apk /storage/emulated/0/Download/AntigravityStudio-v1.6.0.apk
+cp -f app/build/outputs/apk/release/app-release.apk /storage/emulated/0/Download/AntigravityStudio-v1.6.1.apk
 ```
 
 ---
