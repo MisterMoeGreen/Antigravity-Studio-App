@@ -36,6 +36,7 @@ Manually entering these credentials and reconfiguring tools via touch screens cr
 specs/v1.6.3/
 ├── 01-settings-export-import-agent-provisioning.md # Settings UI, dual-phase validation, markdown schema
 ├── 02-local-configuration-restoration-engine.md   # Zero-leak local restore pipeline, apk progress streaming, dynamic warning visibility
+├── 03-mandatory-password-encryption-bundle.md     # Mandatory AES-256-GCM + scrypt encryption, password UX, V1/V2 compatibility
 └── OVERVIEW_AND_IMPLEMENTATION_GUIDE.md           # Master overview, architecture, and acceptance criteria
 ```
 
@@ -59,6 +60,14 @@ specs/v1.6.3/
 - [x] **AC-1.6.3.21 (API Keys Store Schema Envelope)**: The local engine merges restored keys into the `"keys"` object inside `~/.gemini/config/api_keys.json` with the standard versioned schema envelope and updates the API keys manifest.
 - [x] **AC-1.6.3.22 (SSH Config & Directory Bootstrap)**: The local engine creates missing parent directories (`mkdir -p`) and reconciles `~/.ssh/config` `IdentityFile` entries for all restored keys.
 - [x] **AC-1.6.3.23 (Live Streaming Progress for Packages)**: Missing packages trigger differential `apk add --no-cache` inside `APK_MUTATION_LOCK`, streaming real-time status to the UI during downloads and displaying a structured completion summary card.
+- [ ] **AC-1.6.3.24 (Mandatory Password Fields on Export)**: The Export subview provides password and confirm-password fields with show/hide toggles. The export button is strictly disabled until passwords match and have length >= 8.
+- [ ] **AC-1.6.3.25 (V2 Encrypted Envelope Generation)**: Tapping export generates a bundle with `<!-- ANTIGRAVITY_STUDIO_EXPORT_V2_ENCRYPTED -->`, valid scrypt parameters, salt, nonce, tag, and Base64-encoded AES-256-GCM ciphertext.
+- [ ] **AC-1.6.3.26 (Direct Storage Staging)**: The encrypted `.agy.md` file is saved to `/storage/emulated/0/Download/` containing zero plaintext credentials.
+- [ ] **AC-1.6.3.27 (V2 Detection & Decryption Bottom-Sheet)**: Picking an encrypted bundle automatically triggers `#importPasswordSheet` with export date and source version.
+- [ ] **AC-1.6.3.28 (Wrong Password Handling)**: Entering an incorrect password highlights the field in red, displays an inline error, leaves the sheet open for retry, and causes zero disk or state modifications.
+- [ ] **AC-1.6.3.29 (Successful Decryption & Restore Pipeline Hand-Off)**: Entering the correct password derives the key via `scrypt`, decrypts the payload in RAM, validates the inner SHA-256 checksum, and seamlessly invokes the local restoration engine.
+- [ ] **AC-1.6.3.30 (Legacy V1 Backward Compatibility)**: Uploading an unencrypted `V1` backup (`<!-- ANTIGRAVITY_STUDIO_EXPORT_V1 -->`) displays a legacy notice and restores normally without requiring a password.
+- [ ] **AC-1.6.3.31 (Mobile Touch Standards & Zero-Latency)**: Password toggle buttons and modal actions adhere to 44px minimum touch targets and 300ms tap elimination rules.
 
 ---
 
