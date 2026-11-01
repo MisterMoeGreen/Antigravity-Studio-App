@@ -83,7 +83,7 @@ flowchart TD
     end
 
     subgraph NativeLibs ["Virtualization & Native Libs (/data/app/.../lib/arm64)"]
-        AgyCore["libagy.so (Antigravity Engine - 201MB)"]
+        AgyLauncher["libagy_launcher.so (Native Linker Bridge - 49KB)"]
         PRoot["libproot.so (W^X-Aware Tracer Engine)"]
         AnonLoader["libproot_loader.so (Anonymous ELF Loader)"]
         Bridge["libagy_sh.so (Multicall Bridge: apk, node, gcc...)"]
@@ -95,6 +95,7 @@ flowchart TD
 
     subgraph Sandbox ["App Sandbox Storage (/data/data/ai.agy.app/files)"]
         UsrBin["usr/bin/* (Symlink Farm: agy, agy-sh, apk, node, gcc...)"]
+        AgyEngine["usr/opt/agy/agy (Unbundled CLI Engine - ~64MB)"]
         UsrRootfs["usr/rootfs/ (Alpine Linux Minirootfs v3.20.9)"]
         Telemetry["usr/tmp/android_telemetry.json"]
         Resolv["usr/etc/resolv.conf (Dynamic DNS)"]
@@ -105,8 +106,10 @@ flowchart TD
 
     Activity <-->|HTTP / WebSocket on 127.0.0.1:8081| ServerPy
     Service -->|Spawns with LD_PRELOAD| ServerPy
-    ServerPy -->|Executes Subprocesses| AgyCore
-    AgyCore -->|run_command| Shim
+    ServerPy -->|Executes Subprocesses| UsrBin
+    UsrBin -->|agy| AgyLauncher
+    AgyLauncher -->|Dispatches via libglibc_ld.so| AgyEngine
+    AgyEngine -->|run_command| Shim
     Shim -->|Redirects to| UsrBin
 
     UsrBin -->|Host Tools| HostTools
@@ -243,6 +246,13 @@ For detailed technical specifications, architectural diagrams, security audits, 
 * [v1.1.0 Dynamic DNS, Hardware Telemetry & In-App Updaters](specs/1.1.0/OVERVIEW_AND_IMPLEMENTATION_GUIDE.md)
 * [v1.0.0 Core Virtualization, APK Geometry & Host Toolchains](specs/initial/OVERVIEW_AND_IMPLEMENTATION_GUIDE.md)
 * [v1.3.0 Implementation & Verification Log](specs/v1.3.0/IMPLEMENTATION_LOG.md)
+
+---
+
+## Upstream Lineage & Attribution
+
+* **Google Antigravity CLI**: Antigravity Studio interfaces with the official Linux ARM64 binary of Google's Antigravity CLI (`agy`), compiled from Google's monorepo (`google3`). All model communication, agent reasoning, and authentication route authentically through official Google channels.
+* **Kernel VA39 Compatibility Layer ([wallentx/antigravity-cli-termux](https://github.com/wallentx/antigravity-cli-termux))**: Gratefully recognized as the upstream distribution pipeline providing the 39-bit Virtual Address (VA39) memory patch over Google's TCMalloc runtime, making standard Linux ARM64 binaries compatible with Android kernels. Antigravity Studio downloads the standalone Linux ARM64 engine on-demand directly from this pipeline.
 
 ---
 

@@ -14,7 +14,8 @@ object EnvironmentBootstrapper {
     private const val TAG = "Bootstrapper"
 
     private val BIN_SYMLINKS = mapOf(
-        "agy" to "libagy.so",
+        "agy" to "libagy_launcher.so",
+        "agy.va39" to "libagy_launcher.so",
         "bash" to "libbash.so",
         "sh" to "libbash.so",
         "busybox" to "libbusybox.so",
@@ -88,8 +89,10 @@ object EnvironmentBootstrapper {
         val gitCoreDir = File(usrDir, "libexec/git-core")
         val etcDir = File(usrDir, "etc")
         val tmpDir = File(usrDir, "tmp")
+        val optDir = File(usrDir, "opt")
+        val agyOptDir = File(optDir, "agy")
 
-        listOf(usrDir, homeDir, workspaceDir, glibcLibDir, usrLibDir, binDir, gitCoreDir, etcDir, tmpDir).forEach {
+        listOf(usrDir, homeDir, workspaceDir, glibcLibDir, usrLibDir, binDir, gitCoreDir, etcDir, tmpDir, optDir, agyOptDir).forEach {
             it.mkdirs()
         }
         try {
@@ -150,6 +153,23 @@ object EnvironmentBootstrapper {
 
         // Symlink libproot_loader.so for PRoot anonymous memory loader (Spec 01)
         createOrUpdateSymlink(File(usrLibDir, "libproot_loader.so"), "$nativeDir/libproot_loader.so")
+
+        // Migrate legacy bundled libagy.so if upgrading from an older APK build (v1.7.0 unbundling)
+        val agyEngineFile = File(agyOptDir, "agy")
+        val legacyLibAgy = File(nativeDir, "libagy.so")
+        if (!agyEngineFile.exists() && legacyLibAgy.exists()) {
+            try {
+                Log.i(TAG, "Migrating legacy bundled libagy.so to ${agyEngineFile.absolutePath}...")
+                legacyLibAgy.copyTo(agyEngineFile, overwrite = true)
+                Os.chmod(agyEngineFile.absolutePath, 0b111_101_101) // 0755
+                File(agyOptDir, "version.json").writeText(
+                    """{"version":"1.4.12","upstream_tag":"v1.4.12","installed_at":${System.currentTimeMillis() / 1000},"migrated":true}"""
+                )
+                Log.i(TAG, "Legacy libagy.so migration complete.")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to migrate legacy libagy.so", e)
+            }
+        }
 
         // Extract rootfs.tar.zst on first launch, guarded by os-release existence check (Spec 03)
         val rootfsDir = File(filesDir, "rootfs")

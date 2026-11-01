@@ -333,8 +333,8 @@ class AgyForegroundService : Service() {
         android.system.Os.chmod(usrBinDir.absolutePath, 0b111_000_000)
 
         val symlinkMap = mapOf(
-            "agy" to "libagy.so",
-            "agy.va39" to "libagy.so",
+            "agy" to "libagy_launcher.so",
+            "agy.va39" to "libagy_launcher.so",
             "bash" to "libbash.so",
             "sh" to "libbash.so",
             "git" to "libgit.so",

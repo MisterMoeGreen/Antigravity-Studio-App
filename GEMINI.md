@@ -82,45 +82,29 @@ Gradle's build script automatically discovers keystores in `.android/` or `~/.an
 
 ---
 
-## 3. Upstream Google Antigravity CLI (`agy`) Binary Management
+## 3. Decoupled Antigravity CLI (`agy`) Engine Architecture (v1.7.0)
 
-Antigravity Studio packages the standalone Antigravity CLI binary inside the APK as `lib/arm64-v8a/libagy.so`. At app launch, the bootstrapper symlinks `$usr/bin/agy` to this native library.
+In Antigravity Studio v1.7.0+, the CLI engine is **unbundled** from the APK, slashing APK size from ~180MB down to ~35MB.
 
-### 3.1 Upstream Source
-- Termux local source: `/data/data/com.termux/files/usr/bin/agy.va39`
-- Upstream GitHub releases: `https://github.com/wallentx/antigravity-cli-termux/releases/latest`
+### 3.1 Architecture Overview
+* **Native Launcher Bridge (`libagy_launcher.so`)**: Packaged in `app/src/main/jniLibs/arm64-v8a/libagy_launcher.so` (~49KB). The bootstrapper symlinks `$usr/bin/agy` to this native binary.
+* **On-Demand Engine Storage**: Downloaded directly on-demand to `/data/data/ai.agy.app/files/usr/opt/agy/agy`.
+* **Zero-Mutation Execution**: Bypasses on-device `patchelf`. When `agy` is called, `libagy_launcher.so` directly invokes Glibc's dynamic linker:
+  ```bash
+  /data/data/ai.agy.app/files/usr/glibc/lib/ld-linux-aarch64.so.1 \
+    --library-path /data/data/ai.agy.app/files/usr/glibc/lib \
+    /data/data/ai.agy.app/files/usr/opt/agy/agy [args...]
+  ```
+  This runs at 100% native ARM64 speed, completely satisfies Android SELinux `W^X` policies (since the dynamic linker is in `nativeLibraryDir`), and preserves the upstream byte-for-byte SHA256 integrity.
 
-To update Termux's local `agy` to the newest upstream version before building:
-```bash
-agy update -y
-```
+### 3.2 Upstream Source & Lineage
+* **Upstream Releases**: [`https://github.com/wallentx/antigravity-cli-termux/releases/latest`](https://github.com/wallentx/antigravity-cli-termux/releases/latest)
+* The upstream pipeline tracks Google's official Linux ARM64 binary and provides the VA39 memory patch (adapting Google's TCMalloc 48-bit Virtual Address instructions to Android's 39-bit kernel address space).
+* The engine can be downloaded, updated, or repaired independently of the app via **Settings [⚙] → Software Updates → Antigravity CLI Engine**.
 
-### 3.2 Automated Binary Verification & Patching
-The project includes an automated integrity checker and patcher at [`scripts/verify_or_patch_libagy.sh`](file:///data/data/com.termux/files/home/storage/shared/Documents/AgyStudio/scripts/verify_or_patch_libagy.sh). This script:
-1. Inspects `app/src/main/jniLibs/arm64-v8a/libagy.so`.
-2. Validates ELF header and segment mappings using `llvm-readelf` to enforce the following **4 invariants**:
-   - `PT_INTERP` points to `/data/data/ai.agy.app/files/usr/glibc/lib/ld-linux-aarch64.so.1`.
-   - `DT_RPATH` / `DT_RUNPATH` points to `/data/data/ai.agy.app/files/usr/glibc/lib`.
-   - `PT_LOAD` segments conform to 16KB (`0x4000`) page alignment.
-   - `DT_STRTAB` virtual address falls strictly within a valid, memory-mapped `PT_LOAD` segment with zero residual `/data/data/com.termux` strings.
-3. If missing or corrupted, copies `/data/data/com.termux/files/usr/bin/agy.va39`, applies 16KB page alignment (`patchelf --page-size 16384`), configures the Glibc dynamic interpreter and RPATH, and applies byte-safe replacement of `/data/data/com.termux` with `/data/data/ai.agy.app`.
-
-This script is registered directly as the Gradle task `verifyLibAgy` and runs automatically before every build (`preBuild`).
-
-To manually run the verification/patch script at any time:
-```bash
-bash scripts/verify_or_patch_libagy.sh
-```
-
-To diagnose or sanity-check the binary headers directly:
-```bash
-llvm-readelf -l -d app/src/main/jniLibs/arm64-v8a/libagy.so | grep -E "INTERP|RPATH|RUNPATH|STRTAB|LOAD|warning|error"
-```
-
-### 3.3 Runtime Execution & Glibc vs. Bionic Isolation
-- `libagy.so` is a **Glibc dynamic executable**. Android OS and Termux utilities run under **Bionic** `libc.so`.
-- When spawning `agy` from Python (`server.py`) or Kotlin, **never** set `LD_LIBRARY_PATH` to `/data/data/ai.agy.app/files/usr/lib` (Bionic). Let `libagy.so` resolve its dependencies solely through its embedded `DT_RPATH` (`/data/data/ai.agy.app/files/usr/glibc/lib`).
-- In `app/build.gradle.kts`, `packaging.jniLibs.useLegacyPackaging = true` **must remain enabled**. This forces physical extraction of native binaries to `/data/app/.../lib/arm64/` with executable permissions, allowing `execve()` on Android.
+### 3.3 Verification & Build Task
+* The Gradle task `verifyLibAgy` executes `bash scripts/verify_or_patch_libagy.sh` before `preBuild`.
+* It verifies that `libagy_launcher.so` is compiled from `app/src/main/cpp/agy_launcher.c` and ensures `libagy.so` is never bundled in the APK.
 
 ---
 

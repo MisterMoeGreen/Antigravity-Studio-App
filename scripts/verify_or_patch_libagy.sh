@@ -2,45 +2,40 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LIB_AGY="${PROJECT_ROOT}/app/src/main/jniLibs/arm64-v8a/libagy.so"
-AGY_SRC="/data/data/com.termux/files/usr/bin/agy.va39"
-TARGET_PKG="ai.agy.app"
+JNI_DIR="${PROJECT_ROOT}/app/src/main/jniLibs/arm64-v8a"
+LIB_LAUNCHER="${JNI_DIR}/libagy_launcher.so"
+LIB_AGY="${JNI_DIR}/libagy.so"
+SRC_LAUNCHER="${PROJECT_ROOT}/app/src/main/cpp/agy_launcher.c"
 
-is_corrupt() {
-  if [ ! -f "$LIB_AGY" ]; then
-    return 0
-  fi
-  if command -v llvm-readelf >/dev/null 2>&1; then
-    if llvm-readelf -d "$LIB_AGY" 2>&1 | grep -qi "unable to parse DT_STRTAB"; then
-      return 0
-    fi
-  elif command -v aarch64-linux-gnu-readelf >/dev/null 2>&1; then
-    if aarch64-linux-gnu-readelf -d "$LIB_AGY" 2>&1 | grep -qi "unable to parse DT_STRTAB"; then
-      return 0
-    fi
-  elif command -v readelf >/dev/null 2>&1; then
-    if readelf -d "$LIB_AGY" 2>&1 | grep -qi "unable to parse DT_STRTAB"; then
-      return 0
-    fi
-  fi
-  return 1
-}
-
-if is_corrupt; then
-  echo "libagy.so is missing or has corrupted DT_STRTAB. Re-patching from $AGY_SRC..."
-  if [ ! -f "$AGY_SRC" ]; then
-    echo "ERROR: Upstream $AGY_SRC not found!" >&2
-    exit 1
-  fi
-  mkdir -p "$(dirname "$LIB_AGY")"
-  cp -f "$AGY_SRC" "$LIB_AGY"
-  chmod 755 "$LIB_AGY"
-  patchelf --page-size 16384 \
-    --set-interpreter "/data/data/${TARGET_PKG}/files/usr/glibc/lib/ld-linux-aarch64.so.1" \
-    --force-rpath --set-rpath "/data/data/${TARGET_PKG}/files/usr/glibc/lib" \
-    "$LIB_AGY"
-  python3 -c "path='$LIB_AGY'; d=open(path,'rb').read(); open(path,'wb').write(d.replace(b'/data/data/com.termux',b'/data/data/${TARGET_PKG}'))"
-  echo "Successfully patched libagy.so"
-else
-  echo "libagy.so ELF integrity verified."
+# In v1.7.0+, agy binary is unbundled and managed on-demand.
+# Remove legacy bundled libagy.so if present to keep APK size minimal (~35MB).
+if [ -f "$LIB_AGY" ]; then
+    echo "Unbundling: Removing legacy $LIB_AGY from APK jniLibs..."
+    rm -f "$LIB_AGY"
 fi
+
+mkdir -p "$JNI_DIR"
+
+# Ensure libagy_launcher.so is built from source
+if [ ! -f "$LIB_LAUNCHER" ] || [ "$SRC_LAUNCHER" -nt "$LIB_LAUNCHER" ]; then
+    echo "Compiling native launcher bridge: libagy_launcher.so..."
+    CC_BIN="${CC:-gcc}"
+    if ! command -v "$CC_BIN" >/dev/null 2>&1; then
+        if command -v clang >/dev/null 2>&1; then
+            CC_BIN="clang"
+        fi
+    fi
+    $CC_BIN -static -O2 -Wall \
+      -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384 \
+      "$SRC_LAUNCHER" -o "$LIB_LAUNCHER"
+    chmod 755 "$LIB_LAUNCHER"
+    strip "$LIB_LAUNCHER" 2>/dev/null || true
+    echo "Successfully compiled libagy_launcher.so"
+fi
+
+if [ ! -f "$LIB_LAUNCHER" ]; then
+    echo "ERROR: libagy_launcher.so could not be built!" >&2
+    exit 1
+fi
+
+echo "libagy_launcher.so verified successfully (unbundled engine architecture)."

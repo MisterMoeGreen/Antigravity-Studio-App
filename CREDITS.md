@@ -66,10 +66,15 @@
   * **Code**: [MIT License](https://opensource.org/licenses/MIT)
 * **Usage**: Application UI vector iconography across toolbars, dialogs, drawers, and status indicators.
 
+### 12. wallentx / `antigravity-cli-termux`
+* **Repository**: [https://github.com/wallentx/antigravity-cli-termux](https://github.com/wallentx/antigravity-cli-termux)
+* **Author**: wallentx & community contributors
+* **Usage**: Core upstream project providing the VA39 kernel compatibility layer (rewriting TCMalloc 48-bit Virtual Address instructions and bitmasks to fit 39-bit Android memory layouts). Antigravity Studio downloads the standalone Linux ARM64 engine on-demand directly from this upstream release pipeline.
+
 ---
 
 ## Community Acknowledgments
 
-* **wallentx / `antigravity-cli-termux`**: Gratefully acknowledged for pioneering the initial community exploration of running Google Antigravity inside Android's Termux environment.
+* **wallentx / `antigravity-cli-termux`**: Gratefully acknowledged for pioneering the initial community exploration and maintaining the automated upstream release pipeline for Android ARM64 compatibility.
 * **Termux Community**: For packaging and maintaining Android-compatible AArch64 ports of developer toolchains.
 * **Font Awesome**: Gratefully acknowledged for providing open-source, high-quality vector iconography.

@@ -23,6 +23,7 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import tarfile
 import time
 import urllib.error
 import urllib.request
@@ -1257,6 +1258,283 @@ async def check_github_updates() -> dict[str, Any]:
         "download_url": download_url,
         "changelog": body,
     }
+
+
+# ---------------------------------------------------------------------------
+# Decoupled Antigravity CLI Engine Management (v1.7.0 On-Demand Zero-Mutation)
+# ---------------------------------------------------------------------------
+
+ENGINE_OPT_DIR = USR_DIR / "opt" / "agy"
+ENGINE_BIN = ENGINE_OPT_DIR / "agy"
+ENGINE_VERSION_FILE = ENGINE_OPT_DIR / "version.json"
+ENGINE_STAGING_DIR = ENGINE_OPT_DIR / ".staging"
+GLIBC_LD_PATH = USR_DIR / "glibc" / "lib" / "ld-linux-aarch64.so.1"
+GLIBC_LIB_DIR = USR_DIR / "glibc" / "lib"
+ENGINE_UPSTREAM_REPO = "wallentx/antigravity-cli-termux"
+_engine_install_lock = asyncio.Lock()
+
+
+def get_engine_status() -> dict[str, Any]:
+    installed = ENGINE_BIN.is_file() and os.access(ENGINE_BIN, os.X_OK)
+    version = None
+    upstream_tag = None
+    installed_at = 0
+    migrated = False
+
+    if installed:
+        if ENGINE_VERSION_FILE.is_file():
+            try:
+                data = json.loads(ENGINE_VERSION_FILE.read_text(encoding="utf-8"))
+                version = data.get("version")
+                upstream_tag = data.get("upstream_tag")
+                installed_at = data.get("installed_at", 0)
+                migrated = data.get("migrated", False)
+            except Exception:
+                pass
+        if not version and GLIBC_LD_PATH.is_file():
+            try:
+                res = subprocess.run(
+                    [str(GLIBC_LD_PATH), "--library-path", str(GLIBC_LIB_DIR), str(ENGINE_BIN), "--version"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5.0,
+                )
+                if res.returncode == 0:
+                    version = res.stdout.strip()
+                    try:
+                        ENGINE_VERSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+                        ENGINE_VERSION_FILE.write_text(
+                            json.dumps({
+                                "version": version,
+                                "upstream_tag": f"v{version}",
+                                "installed_at": int(time.time()),
+                            })
+                        )
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+    return {
+        "installed": installed,
+        "version": version,
+        "upstream_tag": upstream_tag or (f"v{version}" if version else None),
+        "installed_at": installed_at,
+        "migrated": migrated,
+        "status": "ready" if installed else "missing",
+    }
+
+
+async def check_engine_updates() -> dict[str, Any]:
+    status = get_engine_status()
+    cur_ver = status.get("version")
+    url = f"https://api.github.com/repos/{ENGINE_UPSTREAM_REPO}/releases/latest"
+
+    cmd = ["curl", "-sSL", "-H", f"User-Agent: AntigravityStudio/{APP_VERSION}", url]
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8.0)
+    if proc.returncode != 0 or not stdout:
+        return {"status": "error", "message": "Failed to connect to engine upstream releases"}
+
+    try:
+        data = json.loads(stdout.decode("utf-8"))
+    except Exception as exc:
+        return {"status": "error", "message": f"Malformed JSON from engine releases: {exc}"}
+
+    tag_name = data.get("tag_name", "").lstrip("v")
+    body = data.get("body", "")
+    download_url = None
+    tar_size = 0
+
+    for asset in data.get("assets", []):
+        aname = asset.get("name", "")
+        if aname == "antigravity-termux-standalone.tar.gz":
+            download_url = asset.get("browser_download_url")
+            tar_size = asset.get("size", 0)
+            break
+
+    has_update = False
+    if not status["installed"]:
+        has_update = True
+    elif cur_ver and tag_name and tag_name != cur_ver.lstrip("v"):
+        try:
+            r_parts = [int(p) for p in tag_name.split("-")[0].split(".")]
+            l_parts = [int(p) for p in cur_ver.lstrip("v").split("-")[0].split(".")]
+            max_len = max(len(r_parts), len(l_parts))
+            r_parts += [0] * (max_len - len(r_parts))
+            l_parts += [0] * (max_len - len(l_parts))
+            if r_parts > l_parts:
+                has_update = True
+        except Exception:
+            if tag_name != cur_ver.lstrip("v"):
+                has_update = True
+
+    return {
+        "status": "ok",
+        "installed": status["installed"],
+        "has_update": has_update,
+        "current_version": cur_ver or "Not Installed",
+        "latest_version": tag_name,
+        "download_url": download_url,
+        "tar_size": tar_size,
+        "changelog": body,
+    }
+
+
+async def install_or_update_engine(
+    download_url: Optional[str] = None,
+    tag_name: Optional[str] = None,
+    broadcast_callback: Optional[Any] = None,
+) -> dict[str, Any]:
+    if _engine_install_lock.locked():
+        return {"status": "busy", "message": "Engine download/installation is already in progress"}
+
+    async with _engine_install_lock:
+        if not download_url:
+            chk = await check_engine_updates()
+            if chk.get("status") != "ok" or not chk.get("download_url"):
+                return {"status": "error", "message": chk.get("message", "Could not locate engine release asset")}
+            download_url = chk["download_url"]
+            tag_name = chk.get("latest_version")
+
+        async def _notify(phase: str, pct: int, message: str = "", **kwargs: Any) -> None:
+            if broadcast_callback:
+                try:
+                    await broadcast_callback(
+                        {
+                            "type": "engine_install_progress",
+                            "phase": phase,
+                            "progress_pct": pct,
+                            "message": message,
+                            **kwargs,
+                        }
+                    )
+                except Exception as ex:
+                    logger.warning("Engine progress notification error: %s", ex)
+
+        await _notify("starting", 0, "Initializing download...")
+
+        loop = asyncio.get_running_loop()
+
+        def _do_download_and_extract() -> tuple[bool, str, str]:
+            try:
+                # 1. Unlock directory permissions (0755) for modification
+                try:
+                    if ENGINE_OPT_DIR.exists():
+                        os.chmod(ENGINE_OPT_DIR, 0o755)
+                except Exception:
+                    pass
+
+                ENGINE_OPT_DIR.mkdir(parents=True, exist_ok=True)
+                if ENGINE_STAGING_DIR.exists():
+                    shutil.rmtree(ENGINE_STAGING_DIR, ignore_errors=True)
+                ENGINE_STAGING_DIR.mkdir(parents=True, exist_ok=True)
+
+                tar_path = ENGINE_STAGING_DIR / "standalone.tar.gz"
+
+                # Stream download with progress tracking
+                req = urllib.request.Request(
+                    download_url, headers={"User-Agent": f"AntigravityStudio/{APP_VERSION}"}
+                )
+                with urllib.request.urlopen(req, timeout=60.0) as resp, open(tar_path, "wb") as out:
+                    total_bytes = int(resp.headers.get("Content-Length", 0))
+                    downloaded = 0
+                    chunk_size = 512 * 1024
+                    last_pct = 0
+                    while True:
+                        chunk = resp.read(chunk_size)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                        downloaded += len(chunk)
+                        if total_bytes > 0:
+                            pct = min(85, int((downloaded / total_bytes) * 85))
+                            if pct != last_pct and (pct - last_pct >= 2 or pct == 85):
+                                last_pct = pct
+                                asyncio.run_coroutine_threadsafe(
+                                    _notify(
+                                        "downloading",
+                                        pct,
+                                        f"Downloading engine ({downloaded // (1024*1024)}MB / {total_bytes // (1024*1024)}MB)...",
+                                        downloaded_bytes=downloaded,
+                                        total_bytes=total_bytes,
+                                    ),
+                                    loop,
+                                )
+
+                # Extract agy.va39 from tarball
+                asyncio.run_coroutine_threadsafe(
+                    _notify("extracting", 88, "Extracting engine executable..."),
+                    loop,
+                )
+                with tarfile.open(tar_path, "r:gz") as tf:
+                    tf.extract("agy.va39", path=str(ENGINE_STAGING_DIR))
+
+                staged_raw = ENGINE_STAGING_DIR / "agy.va39"
+                staged_bin = ENGINE_STAGING_DIR / "agy"
+                if not staged_raw.is_file():
+                    return False, "Archive did not contain agy.va39 executable", ""
+                staged_raw.rename(staged_bin)
+                os.chmod(staged_bin, 0o755)
+
+                # Validation execution via glibc dynamic linker
+                asyncio.run_coroutine_threadsafe(
+                    _notify("verifying", 94, "Verifying engine ELF integrity..."),
+                    loop,
+                )
+                res = subprocess.run(
+                    [str(GLIBC_LD_PATH), "--library-path", str(GLIBC_LIB_DIR), str(staged_bin), "--version"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10.0,
+                )
+                if res.returncode != 0:
+                    err = res.stderr.strip() or f"Process exited with code {res.returncode}"
+                    return False, f"Integrity check failed: {err}", ""
+
+                discovered_ver = res.stdout.strip()
+
+                # Atomic swap into target location
+                if ENGINE_BIN.exists():
+                    try:
+                        ENGINE_BIN.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                staged_bin.rename(ENGINE_BIN)
+                os.chmod(ENGINE_BIN, 0o755)
+
+                # Write metadata
+                meta = {
+                    "version": discovered_ver,
+                    "upstream_tag": tag_name or f"v{discovered_ver}",
+                    "installed_at": int(time.time()),
+                }
+                ENGINE_VERSION_FILE.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+
+                # Clean staging archive
+                shutil.rmtree(ENGINE_STAGING_DIR, ignore_errors=True)
+
+                # VFS Hardening (ARGON-01): protect directory from untrusted deletions
+                try:
+                    os.chmod(ENGINE_OPT_DIR, 0o555)
+                except Exception:
+                    pass
+
+                return True, "", discovered_ver
+
+            except Exception as ex:
+                logger.exception("Engine installation failed")
+                return False, str(ex), ""
+
+        ok, err_msg, final_ver = await asyncio.to_thread(_do_download_and_extract)
+        if ok:
+            await _notify("ready", 100, f"Antigravity CLI engine {final_ver} ready!", version=final_ver)
+            return {"status": "ok", "version": final_ver}
+        else:
+            await _notify("error", 0, f"Installation failed: {err_msg}", error=err_msg)
+            return {"status": "error", "message": err_msg}
 
 
 # ---------------------------------------------------------------------------
@@ -3646,6 +3924,27 @@ class AgyProcessOrchestrator:
             emitted_any_content = False
 
             try:
+                engine_st = get_engine_status()
+                if not engine_st["installed"]:
+                    await self.broadcast(
+                        {
+                            "type": "system_card",
+                            "conversation_id": cid,
+                            "title": "Antigravity CLI Engine Required",
+                            "markdown": "The Antigravity CLI engine is not installed yet. Open **Settings [⚙] → Software Updates** to download and install the engine (~64MB).",
+                            "level": "error",
+                        }
+                    )
+                    await self.broadcast(
+                        {
+                            "type": "turn_complete",
+                            "conversation_id": cid,
+                            "turn_id": turn_id,
+                            "status": "ENGINE_MISSING",
+                        }
+                    )
+                    return
+
                 if not AGY_BIN.exists():
                     raise FileNotFoundError(
                         f"Antigravity CLI binary not found at {AGY_BIN}. Ensure `agy` is installed in Termux."
@@ -6214,6 +6513,28 @@ class AgyWebServer:
                 except Exception as exc:
                     return _json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
+        if path == "/api/engine/status":
+            return _json_response(get_engine_status())
+
+        if path == "/api/engine/check":
+            res = await check_engine_updates()
+            return _json_response(res)
+
+        if path == "/api/engine/install":
+            if request.method == "POST":
+                try:
+                    payload = json.loads(request.body.decode("utf-8")) if request.body else {}
+                except Exception:
+                    payload = {}
+                res = await install_or_update_engine(
+                    download_url=payload.get("download_url"),
+                    tag_name=payload.get("tag_name"),
+                    broadcast_callback=self.broadcast,
+                )
+                if res.get("status") == "ok":
+                    asyncio.create_task(self.refresh_models())
+                return _json_response(res)
+
         if path == "/api/updates/check":
             res = await check_github_updates()
             return _json_response(res)
@@ -6362,8 +6683,10 @@ class AgyWebServer:
                         "system_info": {
                             "app_version": f"v{APP_VERSION}",
                             "agy_version": f"v{get_agy_version()}",
+                            "engine_version": get_engine_status().get("version"),
                             "device": get_android_hardware_telemetry().get("device", "Android Device"),
                         },
+                        "engine": get_engine_status(),
                         "sessions": sessions,
                         "is_running": self.orchestrator.is_running,
                         "is_authenticating": self.orchestrator.is_authenticating,
@@ -7052,6 +7375,44 @@ class AgyWebServer:
             except Exception as exc:
                 await websocket.send(json.dumps({
                     "type": "update_check_result",
+                    "status": "error",
+                    "message": str(exc),
+                }))
+            return
+
+        # Engine Status & Lifecycle (v1.7.0 Decoupled Engine)
+        if mtype == "get_engine_status":
+            st = get_engine_status()
+            await websocket.send(json.dumps({"type": "engine_status_result", **st}))
+            return
+
+        if mtype == "check_engine_updates":
+            try:
+                res = await check_engine_updates()
+                await websocket.send(json.dumps({"type": "engine_update_check_result", **res}))
+            except Exception as exc:
+                await websocket.send(json.dumps({
+                    "type": "engine_update_check_result",
+                    "status": "error",
+                    "message": str(exc),
+                }))
+            return
+
+        if mtype == "install_engine":
+            dl_url = data.get("download_url")
+            tag_name = data.get("tag_name")
+            try:
+                res = await install_or_update_engine(
+                    download_url=dl_url,
+                    tag_name=tag_name,
+                    broadcast_callback=self.broadcast,
+                )
+                await websocket.send(json.dumps({"type": "engine_install_result", **res}))
+                if res.get("status") == "ok":
+                    asyncio.create_task(self.refresh_models())
+            except Exception as exc:
+                await websocket.send(json.dumps({
+                    "type": "engine_install_result",
                     "status": "error",
                     "message": str(exc),
                 }))
