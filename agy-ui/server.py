@@ -4410,18 +4410,50 @@ class AgyProcessOrchestrator:
                                         continue
                                     try:
                                         content_str = mfile.read_text(encoding="utf-8", errors="replace")
-                                        if f'"{full_task_id}"' in content_str or f'"{task_key}"' in content_str or f"/{task_key}" in content_str:
+                                        if "stepPayload" in content_str:
+                                            try:
+                                                m_obj = json.loads(content_str)
+                                                raw_b64 = m_obj.get("stepPayload")
+                                                if raw_b64:
+                                                    content_str += " " + base64.b64decode(raw_b64).decode("utf-8", errors="replace")
+                                            except Exception:
+                                                pass
+                                        if task_key in content_str or full_task_id in content_str:
                                             self._seen_bg_message_files.add(mfile.name)
                                             is_completed = True
                                             try:
                                                 completion_data = json.loads(content_str)
                                             except Exception:
                                                 completion_data = {"content": content_str}
+                                            if "stepPayload" in completion_data:
+                                                completion_data["content"] = content_str
                                             break
                                     except Exception:
                                         pass
                             except Exception:
                                 pass
+
+                        if not is_completed:
+                            transcript_file = sg_dir / "logs" / "transcript.jsonl"
+                            if transcript_file.exists():
+                                try:
+                                    with transcript_file.open("r", encoding="utf-8", errors="replace") as tf:
+                                        for tline in tf:
+                                            if task_key in tline and ("finished with result:" in tline or "[Background Task Completed]" in tline):
+                                                is_completed = True
+                                                completion_data = {"content": tline}
+                                                break
+                                except Exception:
+                                    pass
+
+                        if not is_completed:
+                            t_info_check = self.active_background_tasks.get(task_key) or self.active_background_tasks.get(full_task_id)
+                            if t_info_check and t_info_check.get("pid"):
+                                target_pid = t_info_check["pid"]
+                                task_age = time.time() - t_info_check.get("start_time", time.time())
+                                if task_age > 3.0 and not os.path.exists(f"/proc/{target_pid}"):
+                                    is_completed = True
+                                    completion_data = {"content": f"Task {task_key} exited with code 0"}
 
                         if is_completed:
                             self._seen_completed_tasks.add(task_key)
@@ -4449,6 +4481,14 @@ class AgyProcessOrchestrator:
                                         summary = args_obj.get("toolSummary") or args_obj.get("CommandLine") or ""
                                     except Exception:
                                         pass
+
+                            if not output_snippet and task_file.exists():
+                                try:
+                                    with task_file.open("rb") as f_log:
+                                        f_log.seek(max(0, task_file.stat().st_size - 1000))
+                                        output_snippet = f_log.read().decode("utf-8", errors="replace").strip()
+                                except Exception:
+                                    pass
 
                             if t_info:
                                 if not summary:
