@@ -4294,9 +4294,23 @@ class AgyProcessOrchestrator:
                                 )
                                 await self.broadcast(
                                     {
+                                        "type": "conversation_assigned",
+                                        "old_conversation_id": raw_cid or None,
+                                        "conversation_id": real_cid,
+                                    }
+                                )
+                                await self.broadcast(
+                                    {
                                         "type": "session_migrated",
                                         "old_conversation_id": raw_cid or "session-draft",
                                         "new_conversation_id": real_cid,
+                                        "conversation_id": real_cid,
+                                    }
+                                )
+                                emit_native_notif_event(
+                                    {
+                                        "event": "conversation_assigned",
+                                        "old_conversation_id": raw_cid or None,
                                         "conversation_id": real_cid,
                                     }
                                 )
@@ -4369,6 +4383,39 @@ class AgyProcessOrchestrator:
                         "detail": f"Thinking ({ctx.model})...",
                     }
                 )
+                await self.broadcast(
+                    {
+                        "type": "status",
+                        "conversation_id": final_cid,
+                        "state": "running",
+                        "detail": f"Thinking ({ctx.model})...",
+                    }
+                )
+                await self.broadcast(
+                    {
+                        "type": "turn_start",
+                        "conversation_id": final_cid,
+                        "old_conversation_id": raw_cid or None,
+                        "turn_id": turn_id,
+                        "model": ctx.model,
+                        "start_time": ctx.active_snapshot.start_time if ctx.active_snapshot else time.time(),
+                    }
+                )
+                s_title = ctx.title or (f"Session {final_cid[:8]}" if final_cid else "New Conversation")
+                emit_native_notif_event(
+                    {
+                        "event": "turn_start",
+                        "conversation_id": final_cid,
+                        "title": s_title,
+                        "status": "Thinking...",
+                    }
+                )
+                await self.broadcast(
+                    {
+                        "type": "session_list",
+                        "sessions": self.get_all_sessions(limit=80),
+                    }
+                )
 
                 logger.info("Executing ACP session/prompt for [%s] turn [%s]", final_cid[:8], turn_id)
                 prompt_res = await self.acp_call("session/prompt", {
@@ -4396,19 +4443,39 @@ class AgyProcessOrchestrator:
                     ctx.active_snapshot.output_tokens = usage_summary["output_tokens"]
                     ctx.active_snapshot.thinking_tokens = usage_summary["thinking_tokens"]
 
+                meta = self.storage.get_conversation_meta(final_cid)
+                s_title = meta.get("title") or (f"Session {final_cid[:8]}" if final_cid else "Conversation")
+                if s_title and s_title != "New Conversation":
+                    ctx.title = s_title
+                    await self.broadcast(
+                        {
+                            "type": "session_renamed",
+                            "conversation_id": final_cid,
+                            "title": s_title,
+                            "silent": True,
+                        }
+                    )
+
                 await self.broadcast(
                     {
                         "type": "turn_complete",
                         "conversation_id": final_cid,
+                        "old_conversation_id": raw_cid if (raw_cid and raw_cid != final_cid) else None,
                         "turn_id": turn_id,
+                        "title": s_title,
                         "status": "CANCELLED" if stop_reason == "cancelled" else "DONE",
                         "stop_reason": stop_reason,
                         "usage": usage_summary,
                     }
                 )
 
-                meta = self.storage.get_conversation_meta(final_cid)
-                s_title = meta.get("title") or (f"Session {final_cid[:8]}" if final_cid else "Conversation")
+                await self.broadcast(
+                    {
+                        "type": "session_list",
+                        "sessions": self.get_all_sessions(limit=80),
+                    }
+                )
+
                 raw_preview = ctx.active_snapshot.raw_markdown if ctx.active_snapshot else ""
                 emit_native_notif_event(
                     {
@@ -4426,6 +4493,7 @@ class AgyProcessOrchestrator:
                         {
                             "type": "turn_complete",
                             "conversation_id": final_cid,
+                            "old_conversation_id": raw_cid if (raw_cid and raw_cid != final_cid) else None,
                             "turn_id": turn_id,
                             "status": "CANCELLED",
                             "stop_reason": "cancelled",
@@ -4446,6 +4514,7 @@ class AgyProcessOrchestrator:
                         {
                             "type": "turn_complete",
                             "conversation_id": final_cid,
+                            "old_conversation_id": raw_cid if (raw_cid and raw_cid != final_cid) else None,
                             "turn_id": turn_id,
                             "status": "ERROR",
                         }
@@ -5057,7 +5126,15 @@ class AgyProcessOrchestrator:
 
             if su_type == "agent_message_chunk":
                 content = update.get("content") or {}
-                text_delta = content.get("text") or ""
+                if isinstance(content, dict):
+                    text_delta = content.get("text") or ""
+                elif isinstance(content, str):
+                    text_delta = content
+                elif isinstance(content, list):
+                    text_delta = "".join(c.get("text", "") if isinstance(c, dict) else str(c) for c in content)
+                else:
+                    text_delta = str(update.get("text") or "")
+
                 if text_delta:
                     emitted = True
                     self._streamed_turn_ids.add(turn_id)
@@ -5072,7 +5149,15 @@ class AgyProcessOrchestrator:
 
             elif su_type == "agent_thought_chunk":
                 content = update.get("content") or {}
-                thought_delta = content.get("text") or ""
+                if isinstance(content, dict):
+                    thought_delta = content.get("text") or ""
+                elif isinstance(content, str):
+                    thought_delta = content
+                elif isinstance(content, list):
+                    thought_delta = "".join(c.get("text", "") if isinstance(c, dict) else str(c) for c in content)
+                else:
+                    thought_delta = str(update.get("text") or "")
+
                 if thought_delta:
                     emitted = True
                     if ctx.active_snapshot:
@@ -5147,6 +5232,13 @@ class AgyProcessOrchestrator:
                 new_title = update.get("title")
                 if new_title and ctx.conversation_id:
                     self.storage.rename_conversation(ctx.conversation_id, new_title)
+                    ctx.title = new_title
+                    await self.broadcast({
+                        "type": "session_renamed",
+                        "conversation_id": ctx.conversation_id,
+                        "title": new_title,
+                        "silent": True,
+                    })
                     await self.broadcast({
                         "type": "session_title_updated",
                         "conversation_id": ctx.conversation_id,
@@ -7701,7 +7793,7 @@ class AgyWebServer:
             asyncio.create_task(
                 self.orchestrator.execute_turn(
                     prompt,
-                    conversation_id=ctx.conversation_id if ctx.conversation_id else None,
+                    conversation_id=raw_cid or None,
                     attachments=saved_attachments,
                     model=ctx.model,
                     mode=ctx.mode,

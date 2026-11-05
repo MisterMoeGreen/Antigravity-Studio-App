@@ -5750,6 +5750,7 @@
           startLiveProgress(detail || 'Thinking...', st);
         } else {
           resetSendButtonToIdle();
+          stopLiveProgress();
         }
       }
 
@@ -6087,23 +6088,30 @@
             renderDirectoryListing(msg);
             break;
 
+          case 'session_migrated':
           case 'conversation_assigned': {
-            if (msg.old_conversation_id && msg.conversation_id) {
-              if (window.AndroidApp && typeof window.AndroidApp.migrateSession === 'function') {
-                window.AndroidApp.migrateSession(msg.old_conversation_id, msg.conversation_id);
+            const oldId = msg.old_conversation_id;
+            const newId = msg.conversation_id || msg.new_conversation_id;
+            if (newId) {
+              if (window.AndroidApp && typeof window.AndroidApp.migrateSession === 'function' && oldId) {
+                window.AndroidApp.migrateSession(oldId, newId);
               }
-              if (state.conversationId === msg.old_conversation_id) {
-                state.conversationId = msg.conversation_id;
+              if (!state.conversationId || state.conversationId === oldId || state.conversationId === 'default' || state.conversationId === 'session-draft') {
+                state.conversationId = newId;
+                if (window.AndroidApp && typeof window.AndroidApp.setActiveSession === 'function') {
+                  window.AndroidApp.setActiveSession(newId);
+                }
               }
-              if (state.sessionBuffers.has(msg.old_conversation_id)) {
-                const oldBuf = state.sessionBuffers.get(msg.old_conversation_id);
-                state.sessionBuffers.delete(msg.old_conversation_id);
-                oldBuf.conversationId = msg.conversation_id;
-                state.sessionBuffers.set(msg.conversation_id, oldBuf);
+              adoptDraftSessionId(newId);
+              if (oldId && state.sessionBuffers.has(oldId)) {
+                const oldBuf = state.sessionBuffers.get(oldId);
+                state.sessionBuffers.delete(oldId);
+                oldBuf.conversationId = newId;
+                state.sessionBuffers.set(newId, oldBuf);
               }
-              const sCard = state.sessions.find(s => s.conversation_id === msg.old_conversation_id);
+              const sCard = oldId ? state.sessions.find(s => s.conversation_id === oldId) : null;
               if (sCard) {
-                sCard.conversation_id = msg.conversation_id;
+                sCard.conversation_id = newId;
               }
               renderSessionDrawerList();
             }
@@ -6111,6 +6119,14 @@
           }
 
           case 'turn_start': {
+            if (msg.old_conversation_id && msg.conversation_id) {
+              if (!state.conversationId || state.conversationId === msg.old_conversation_id || state.conversationId === 'default' || state.conversationId === 'session-draft') {
+                state.conversationId = msg.conversation_id;
+                if (window.AndroidApp && typeof window.AndroidApp.setActiveSession === 'function') {
+                  window.AndroidApp.setActiveSession(msg.conversation_id);
+                }
+              }
+            }
             const cid = msg.conversation_id || state.conversationId;
             adoptDraftSessionId(cid);
             const buf = getOrCreateSessionBuffer(cid);
@@ -6127,7 +6143,10 @@
             tRec.startTime = buf.startTime;
             renderSessionDrawerList();
 
-            if (cid === state.conversationId) {
+            if (cid === state.conversationId || !state.conversationId) {
+              if (!state.conversationId && cid) {
+                state.conversationId = cid;
+              }
               setInitializingControlsState(false);
               updatePinButtonState(Boolean(buf && buf.isPinned));
               setSendButtonRunning();
@@ -6145,7 +6164,7 @@
             const delta = msg.delta || '';
             tRec.rawThoughts += delta;
 
-            if (cid === state.conversationId) {
+            if (cid === state.conversationId || !state.conversationId) {
               appendTurnThought(msg.turn_id, delta);
               if (liveProgress.active && !liveProgress.currentAction.startsWith('Thinking')) {
                 setLiveProgress('thought', 'Thinking...');
@@ -6162,7 +6181,7 @@
             // String-only background buffering (AC-2.4 & ARGON-V14-17)
             tRec.rawMarkdown += delta;
 
-            if (cid === state.conversationId) {
+            if (cid === state.conversationId || !state.conversationId) {
               appendTurnToken(msg.turn_id, delta);
               if (liveProgress.active && liveProgress.currentAction !== 'Generating response...') {
                 setLiveProgress('response', 'Generating response...');
@@ -6188,7 +6207,7 @@
               sItem.preview = buf.currentAction;
             }
 
-            if (cid === state.conversationId) {
+            if (cid === state.conversationId || !state.conversationId) {
               setRuntimeStatus('running', buf.currentAction);
               upsertTurnTool(msg.turn_id, msg);
             }
@@ -6201,7 +6220,7 @@
 
           case 'turn_complete': {
             if (msg.old_conversation_id && msg.conversation_id) {
-              if (state.conversationId === msg.old_conversation_id) {
+              if (!state.conversationId || state.conversationId === msg.old_conversation_id || state.conversationId === 'default' || state.conversationId === 'session-draft') {
                 state.conversationId = msg.conversation_id;
                 if (window.AndroidApp && typeof window.AndroidApp.setActiveSession === 'function') {
                   window.AndroidApp.setActiveSession(msg.conversation_id);
@@ -6240,10 +6259,14 @@
             }
 
             buf.isPinned = false;
-            if (cid === state.conversationId) {
+            if (cid === state.conversationId || !state.conversationId) {
+              if (!state.conversationId && cid) {
+                state.conversationId = cid;
+              }
               finalizeTurnCard(msg.turn_id, msg);
               resetSendButtonToIdle();
               setInitializingControlsState(false);
+              stopLiveProgress();
               statusDot.className = 'status-dot';
               statusText.textContent = 'Ready';
               updatePinButtonState(false);
