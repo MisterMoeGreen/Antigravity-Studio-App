@@ -7609,12 +7609,13 @@ class AgyWebServer:
                     return history[:last_user_idx + 1]
 
         # Active prompt was not yet recorded in transcript.jsonl.
-        # Append the active prompt as the latest user message.
-        history.append({
-            "role": "user",
-            "content": cleaned_active or ctx.active_prompt,
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-        })
+        # Append the active prompt as the latest user message ONLY if it contains valid user text.
+        if cleaned_active:
+            history.append({
+                "role": "user",
+                "content": cleaned_active,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            })
         return history
 
     async def ws_handler(self, websocket: ServerConnection) -> None:

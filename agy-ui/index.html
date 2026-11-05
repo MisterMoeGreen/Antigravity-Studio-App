@@ -6801,6 +6801,12 @@
         str = str.replace(/<ADDITIONAL_METADATA>[\s\S]*?<\/ADDITIONAL_METADATA>/gi, '');
         str = str.replace(/<USER_SETTINGS_CHANGE>[\s\S]*?<\/USER_SETTINGS_CHANGE>/gi, '');
         str = str.replace(/<SYSTEM_MESSAGE>[\s\S]*?<\/SYSTEM_MESSAGE>/gi, '');
+        if (/The background task\s+['"].*?['"]\s+has finished/i.test(str)) {
+          return '';
+        }
+        if (/\[Background Task (Completed|Stopped)\]/i.test(str)) {
+          return '';
+        }
         return str.trim();
       }
 
@@ -6918,8 +6924,11 @@
       });
 
       function appendUserBubble(text, attachments = [], stepIndex = null) {
-        clearWelcomeIfPresent();
         const cleaned = cleanPromptText(text);
+        if (!cleaned && (!attachments || attachments.length === 0)) {
+          return;
+        }
+        clearWelcomeIfPresent();
         let attachmentsHtml = '';
         if (attachments && attachments.length > 0) {
           const images = attachments.filter(a => (a.type || '').startsWith('image/'));
