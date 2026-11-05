@@ -4311,6 +4311,17 @@ class AgyProcessOrchestrator:
                                 except Exception:
                                     duration = 0.0
 
+                            ctx = self._sessions.get(cid)
+                            spawned_turn_id = t_info.get("spawned_during_turn_id") if t_info else None
+                            current_turn_id = getattr(ctx, "current_turn_id", None) if ctx else None
+                            is_running_in_spawned_turn = bool(
+                                spawned_turn_id
+                                and current_turn_id
+                                and spawned_turn_id == current_turn_id
+                                and ctx
+                                and ctx.is_running
+                            )
+
                             await self.broadcast({
                                 "type": "background_task_completed",
                                 "conversation_id": cid,
@@ -4320,41 +4331,49 @@ class AgyProcessOrchestrator:
                                 "duration": duration,
                                 "output_snippet": output_snippet[:600],
                             })
-                            emit_native_notif_event({
-                                "event": "task_completed",
-                                "conversation_id": cid,
-                                "title": f"Task Completed: {summary}",
-                                "status": f"Exit code {exit_code} ({int(duration)}s)",
-                                "preview": output_snippet[:200] if output_snippet else f"Exit code {exit_code} ({int(duration)}s)",
-                                "exit_code": exit_code,
-                            })
 
-                            # Guarantee agent responds proactively on natural completion (ARGON-18-05)
+                            # Only emit notification and agent turn if task completed AFTER the agent turn
                             is_user_stopped = (
                                 task_key in self._stopped_by_user_tasks
                                 or full_task_id in self._stopped_by_user_tasks
                                 or exit_code in (137, 143)
                             )
-                            if not is_user_stopped and exit_code == 0:
-                                try:
-                                    ctx = self.get_or_create_context(cid)
-                                    if ctx and not ctx.is_running and not ctx.turn_lock.locked():
-                                        notice_prompt = (
-                                            f"<SYSTEM_MESSAGE>\n"
-                                            f"[Background Task Completed]\n"
-                                            f"Task: {summary} ({task_key})\n"
-                                            f"Exit Code: {exit_code}\n"
-                                            f"Duration: {int(duration)}s\n"
-                                            f"Command Output:\n"
-                                            f"{output_snippet[:600] if output_snippet else '(No output)'}\n\n"
-                                            f"The background task '{summary}' has finished successfully with exit code 0. "
-                                            f"Please give a concise status update to the user. "
-                                            f"DO NOT restart, re-run, or spawn new background tasks unless explicitly requested by the user.\n"
-                                            f"</SYSTEM_MESSAGE>"
-                                        )
-                                        asyncio.create_task(self.execute_turn(notice_prompt, conversation_id=cid))
-                                except Exception as turn_exc:
-                                    logger.warning("Failed to trigger completion turn for %s: %s", task_key, turn_exc)
+
+                            if not is_running_in_spawned_turn and not is_user_stopped and exit_code == 0:
+                                emit_native_notif_event({
+                                    "event": "task_completed",
+                                    "conversation_id": cid,
+                                    "title": f"Task Completed: {summary}",
+                                    "status": f"Exit code {exit_code} ({int(duration)}s)",
+                                    "preview": output_snippet[:200] if output_snippet else f"Exit code {exit_code} ({int(duration)}s)",
+                                    "exit_code": exit_code,
+                                })
+
+                                notice_prompt = (
+                                    f"<SYSTEM_MESSAGE>\n"
+                                    f"[Background Task Completed]\n"
+                                    f"Task: {summary} ({task_key})\n"
+                                    f"Exit Code: {exit_code}\n"
+                                    f"Duration: {int(duration)}s\n"
+                                    f"Command Output:\n"
+                                    f"{output_snippet[:600] if output_snippet else '(No output)'}\n\n"
+                                    f"STRICT INSTRUCTIONS:\n"
+                                    f"- Summarize ONLY this single finished task: '{summary}' ({task_key}).\n"
+                                    f"- Respond with exactly ONE short sentence (e.g. \"Task '{summary}' ({task_key}) completed in {int(duration)}s.\").\n"
+                                    f"- ABSOLUTELY DO NOT list, summarize, review, or mention any other background jobs or tasks.\n"
+                                    f"- DO NOT restart, re-run, or spawn new background tasks.\n"
+                                    f"</SYSTEM_MESSAGE>"
+                                )
+
+                                async def _safe_execute_completion(prompt_text: str, target_cid: str) -> None:
+                                    for _ in range(40):
+                                        target_ctx = self.get_or_create_context(target_cid)
+                                        if target_ctx and not target_ctx.is_running and not target_ctx.turn_lock.locked():
+                                            await self.execute_turn(prompt_text, conversation_id=target_cid)
+                                            return
+                                        await asyncio.sleep(0.5)
+
+                                asyncio.create_task(_safe_execute_completion(notice_prompt, cid))
                         else:
                             if task_key not in self.active_background_tasks and full_task_id not in self.active_background_tasks:
                                 try:
@@ -4448,6 +4467,7 @@ class AgyProcessOrchestrator:
                                     "command": task_cmd,
                                     "start_time": start_time,
                                     "pid": final_pid,
+                                    "spawned_during_turn_id": getattr(ctx, "current_turn_id", None) if ctx else None,
                                 }
                                 self.active_background_tasks[task_key] = t_info
                                 await self.broadcast({
