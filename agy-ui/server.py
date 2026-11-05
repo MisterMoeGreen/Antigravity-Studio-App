@@ -3839,6 +3839,7 @@ class AgyProcessOrchestrator:
         self._bg_watcher_task: Optional[asyncio.Task] = None
         self._seen_bg_message_files: set[str] = set()
         self._seen_completed_tasks: set[str] = set()
+        self._stopped_by_user_tasks: set[str] = set()
 
     def get_all_sessions(self, search_query: str = "", limit: int = 100) -> list[dict[str, Any]]:
         persisted = self.storage.list_conversations(search_query=search_query, limit=limit)
@@ -4090,16 +4091,23 @@ class AgyProcessOrchestrator:
             self._bg_watcher_task = asyncio.create_task(self._bg_task_watcher_loop())
 
     def stop_background_task(self, cid: str, task_key: str) -> bool:
-        """Terminates the processes associated with a background task (ARGON-18-04)."""
+        """Terminates the specific processes associated with a background task (ARGON-18-04)."""
         m_id = re.search(r"task-\d+", task_key)
         canon_task_key = m_id.group(0) if m_id else task_key
         full_task_id = f"{cid}/{canon_task_key}" if cid else canon_task_key
+
+        # Mark task as explicitly stopped by user to prevent respawn loops
+        self._stopped_by_user_tasks.add(canon_task_key)
+        self._stopped_by_user_tasks.add(full_task_id)
+        self._stopped_by_user_tasks.add(task_key)
+
         t_info = (
             self.active_background_tasks.get(canon_task_key)
             or self.active_background_tasks.get(full_task_id)
             or self.active_background_tasks.get(task_key)
             or {}
         )
+        target_pid = t_info.get("pid")
         target_cmd = (t_info.get("command") or "").strip()
 
         # Fallback: check transcript.jsonl if command wasn't stored in memory
@@ -4110,10 +4118,14 @@ class AgyProcessOrchestrator:
                     with transcript_file.open("r", encoding="utf-8", errors="replace") as tf:
                         for line in tf:
                             if canon_task_key in line and "Task Description:" in line:
-                                m_desc = re.search(r"Task Description:\s*(.+)", line)
-                                if m_desc:
-                                    target_cmd = m_desc.group(1).strip()
-                                    break
+                                try:
+                                    tdata = json.loads(line)
+                                    m_desc = re.search(r"Task Description:\s*([^\n\r]+)", tdata.get("content", ""))
+                                    if m_desc:
+                                        target_cmd = m_desc.group(1).strip()
+                                        break
+                                except Exception:
+                                    pass
             except Exception:
                 pass
 
@@ -4146,46 +4158,33 @@ class AgyProcessOrchestrator:
                     stack.append(child)
             return descendants
 
-        target_pids: set[int] = set()
+        pids_to_kill: set[int] = set()
 
-        # 1. PIDs tracked during task startup
-        for p in t_info.get("pids", []):
-            if p in pid_to_cmd:
-                target_pids.add(p)
-                target_pids.update(get_all_descendants(p))
-
-        # 2. Descendants of the ACP daemon
-        acp_pid = self.acp_proc.pid if (self.acp_proc and self.acp_proc.pid) else None
-        if acp_pid:
-            for p in get_all_descendants(acp_pid):
-                p_cmd = pid_to_cmd.get(p, "").lower()
-                if "server.py" in p_cmd or "github_mcp" in p_cmd:
-                    continue
-                if p == acp_pid:
-                    continue
-
-                if target_cmd:
-                    norm_target = " ".join(target_cmd.lower().split())
-                    norm_p = " ".join(p_cmd.split())
-                    first_word = norm_target.split()[0] if norm_target else ""
-                    base_exec = os.path.basename(first_word)
-                    if (
-                        norm_target in norm_p
-                        or norm_p in norm_target
-                        or (base_exec and base_exec in norm_p.split())
-                    ):
-                        target_pids.add(p)
-                        target_pids.update(get_all_descendants(p))
-                else:
-                    target_pids.add(p)
-                    target_pids.update(get_all_descendants(p))
+        # 1. Primary path: kill the exact PID assigned to this specific task
+        if target_pid and target_pid in pid_to_cmd:
+            pids_to_kill.add(target_pid)
+            pids_to_kill.update(get_all_descendants(target_pid))
+        elif target_cmd:
+            # 2. Strict command matching: match ONLY against the full command string
+            clean_target = re.sub(r'[\x22\x27]', '', ' '.join(target_cmd.split())).strip().lower()
+            acp_pid = self.acp_proc.pid if (self.acp_proc and self.acp_proc.pid) else None
+            if acp_pid:
+                for child_pid in parent_to_children.get(acp_pid, []):
+                    p_cmd = pid_to_cmd.get(child_pid, "")
+                    if "server.py" in p_cmd or "github_mcp" in p_cmd:
+                        continue
+                    clean_p = re.sub(r'[\x22\x27]', '', ' '.join(p_cmd.split())).strip().lower()
+                    if clean_p == clean_target or clean_target in clean_p or clean_p in clean_target:
+                        pids_to_kill.add(child_pid)
+                        pids_to_kill.update(get_all_descendants(child_pid))
+                        break  # Stop after first match! NEVER kill other tasks!
 
         killed_any = False
-        for p in target_pids:
+        for p in pids_to_kill:
             try:
                 os.kill(p, signal.SIGKILL)
                 killed_any = True
-                logger.info("Terminated background task process %d (%s)", p, pid_to_cmd.get(p, ""))
+                logger.info("Terminated background task %s process %d (%s)", canon_task_key, p, pid_to_cmd.get(p, ""))
             except Exception as e:
                 logger.debug("Failed to kill process %d: %s", p, e)
 
@@ -4323,24 +4322,32 @@ class AgyProcessOrchestrator:
                                 "exit_code": exit_code,
                             })
 
-                            # Guarantee agent responds proactively on task completion (ARGON-18-05)
-                            try:
-                                ctx = self.get_or_create_context(cid)
-                                if ctx and not ctx.is_running and not ctx.turn_lock.locked():
-                                    notice_prompt = (
-                                        f"<SYSTEM_MESSAGE>\n"
-                                        f"[Background Task Completed]\n"
-                                        f"Task: {summary} ({task_key})\n"
-                                        f"Exit Code: {exit_code}\n"
-                                        f"Duration: {int(duration)}s\n"
-                                        f"Command Output:\n"
-                                        f"{output_snippet[:600] if output_snippet else '(No output)'}\n"
-                                        f"</SYSTEM_MESSAGE>\n"
-                                        f"The background task '{summary}' has finished with exit code {exit_code}. Please give a concise status update to the user."
-                                    )
-                                    asyncio.create_task(self.execute_turn(notice_prompt, conversation_id=cid))
-                            except Exception as turn_exc:
-                                logger.warning("Failed to trigger completion turn for %s: %s", task_key, turn_exc)
+                            # Guarantee agent responds proactively on natural completion (ARGON-18-05)
+                            is_user_stopped = (
+                                task_key in self._stopped_by_user_tasks
+                                or full_task_id in self._stopped_by_user_tasks
+                                or exit_code in (137, 143)
+                            )
+                            if not is_user_stopped and exit_code == 0:
+                                try:
+                                    ctx = self.get_or_create_context(cid)
+                                    if ctx and not ctx.is_running and not ctx.turn_lock.locked():
+                                        notice_prompt = (
+                                            f"<SYSTEM_MESSAGE>\n"
+                                            f"[Background Task Completed]\n"
+                                            f"Task: {summary} ({task_key})\n"
+                                            f"Exit Code: {exit_code}\n"
+                                            f"Duration: {int(duration)}s\n"
+                                            f"Command Output:\n"
+                                            f"{output_snippet[:600] if output_snippet else '(No output)'}\n"
+                                            f"</SYSTEM_MESSAGE>\n"
+                                            f"The background task '{summary}' has finished successfully with exit code 0. "
+                                            f"Please give a concise status update to the user. "
+                                            f"DO NOT restart, re-run, or spawn new background tasks unless explicitly requested by the user."
+                                        )
+                                        asyncio.create_task(self.execute_turn(notice_prompt, conversation_id=cid))
+                                except Exception as turn_exc:
+                                    logger.warning("Failed to trigger completion turn for %s: %s", task_key, turn_exc)
                         else:
                             if task_key not in self.active_background_tasks and full_task_id not in self.active_background_tasks:
                                 try:
@@ -4351,43 +4358,89 @@ class AgyProcessOrchestrator:
                                     self._seen_completed_tasks.add(task_key)
                                     continue
 
+                                # Extract exact task command from transcript.jsonl
+                                task_cmd = ""
+                                try:
+                                    transcript_file = BRAIN_DIR / cid / ".system_generated" / "logs" / "transcript.jsonl"
+                                    if transcript_file.exists():
+                                        with transcript_file.open("r", encoding="utf-8", errors="replace") as tf:
+                                            for tline in tf:
+                                                if task_key in tline and "Task Description:" in tline:
+                                                    try:
+                                                        tdata = json.loads(tline)
+                                                        m_desc = re.search(r"Task Description:\s*([^\n\r]+)", tdata.get("content", ""))
+                                                        if m_desc:
+                                                            task_cmd = m_desc.group(1).strip()
+                                                            break
+                                                    except Exception:
+                                                        pass
+                                except Exception:
+                                    pass
+
                                 ctx = self._sessions.get(cid)
+                                if not task_cmd and ctx:
+                                    task_cmd = (getattr(ctx, "last_tool_command", None) or "")
+
                                 summary = (getattr(ctx, "last_tool_summary", None) if ctx else None) or "Background Command"
-                                cmd = (getattr(ctx, "last_tool_command", None) if ctx else None) or ""
                                 try:
                                     start_time = (getattr(ctx, "last_tool_time", None) if ctx else None) or task_file.stat().st_mtime
                                 except Exception:
                                     start_time = time.time()
 
-                                # Discover running child PIDs under ACP
-                                init_pids: list[int] = []
+                                # Find the SINGLE matching child PID under ACP that is NOT already assigned
+                                assigned_pids = {
+                                    info["pid"]
+                                    for info in self.active_background_tasks.values()
+                                    if info.get("pid")
+                                }
+
+                                clean_task = re.sub(r'[\x22\x27]', '', ' '.join(task_cmd.split())).strip().lower() if task_cmd else ""
+                                matched_pid: Optional[int] = None
+                                fallback_pid: Optional[int] = None
+                                fallback_starttime: int = -1
+
                                 if self.acp_proc and self.acp_proc.pid:
                                     try:
                                         for pid_entry in os.listdir("/proc"):
                                             if not pid_entry.isdigit():
                                                 continue
                                             p_int = int(pid_entry)
+                                            if p_int in assigned_pids:
+                                                continue
                                             try:
                                                 with open(f"/proc/{p_int}/stat", "r", encoding="utf-8", errors="replace") as sf:
-                                                    s_content = sf.read()
-                                                _, _, s_rest = s_content.rpartition(") ")
-                                                if int(s_rest.split()[1]) == self.acp_proc.pid:
-                                                    with open(f"/proc/{p_int}/cmdline", "rb") as cf:
-                                                        c_line = cf.read().decode("utf-8", errors="replace").replace("\x00", " ").strip()
-                                                    if "github_mcp" not in c_line and "server.py" not in c_line:
-                                                        init_pids.append(p_int)
+                                                    stat_parts = sf.read().rpartition(") ")[2].split()
+                                                if int(stat_parts[1]) != self.acp_proc.pid:
+                                                    continue
+                                                with open(f"/proc/{p_int}/cmdline", "rb") as cf:
+                                                    raw_c = cf.read().decode("utf-8", errors="replace").replace("\x00", " ").strip()
+                                                if "github_mcp" in raw_c or "server.py" in raw_c:
+                                                    continue
+
+                                                clean_c = re.sub(r'[\x22\x27]', '', ' '.join(raw_c.split())).strip().lower()
+                                                p_st = int(stat_parts[19]) if len(stat_parts) > 19 else p_int
+
+                                                if clean_task and (clean_c == clean_task or clean_task in clean_c or clean_c in clean_task):
+                                                    matched_pid = p_int
+                                                    break
+
+                                                if p_st > fallback_starttime:
+                                                    fallback_starttime = p_st
+                                                    fallback_pid = p_int
                                             except Exception:
                                                 pass
                                     except Exception:
                                         pass
 
+                                final_pid = matched_pid if matched_pid is not None else fallback_pid
+
                                 t_info = {
                                     "task_id": task_key,
                                     "conversation_id": cid,
                                     "summary": summary,
-                                    "command": cmd,
+                                    "command": task_cmd,
                                     "start_time": start_time,
-                                    "pids": init_pids,
+                                    "pid": final_pid,
                                 }
                                 self.active_background_tasks[task_key] = t_info
                                 await self.broadcast({
@@ -8428,21 +8481,6 @@ class AgyWebServer:
                 "preview": f"Task {task_key} stopped by user.",
                 "exit_code": 137,
             })
-            # Guarantee agent acknowledges stop in chat (ARGON-18-05)
-            try:
-                ctx = self.orchestrator.get_or_create_context(cid)
-                if ctx and not ctx.is_running and not ctx.turn_lock.locked():
-                    notice_prompt = (
-                        f"<SYSTEM_MESSAGE>\n"
-                        f"[Background Task Stopped]\n"
-                        f"Task: {summary} ({task_key})\n"
-                        f"Exit Code: 137 (Stopped by user)\n"
-                        f"</SYSTEM_MESSAGE>\n"
-                        f"The background task '{summary}' was stopped by the user. Please confirm this concisely to the user."
-                    )
-                    asyncio.create_task(self.orchestrator.execute_turn(notice_prompt, conversation_id=cid))
-            except Exception as turn_exc:
-                logger.warning("Failed to trigger stop completion turn for %s: %s", task_key, turn_exc)
             return
 
         if mtype == "list_sessions":
