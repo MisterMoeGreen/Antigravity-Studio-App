@@ -3173,19 +3173,28 @@ class AntigravityStorageEngine:
                     try:
                         conn = sqlite3.connect(conv_db, timeout=5.0)
                         c = conn.cursor()
-                        c.execute("SELECT idx, payload FROM steps ORDER BY idx DESC")
-                        for s_idx, payload in c.fetchall():
-                            if isinstance(payload, str) and payload.strip().startswith("{"):
-                                try:
-                                    obj = json.loads(payload)
-                                    if obj.get("type") == "USER_INPUT" or "USER" in str(obj.get("role", "")).upper():
-                                        c_text = self._clean_user_prompt(self._extract_text(obj)).strip()
-                                        if c_text == clean_search or clean_search in c_text or c_text in clean_search:
-                                            target_step = s_idx
-                                            target_prompt = c_text
-                                            break
-                                except Exception:
-                                    pass
+                        col_names = [col[1] for col in c.execute("PRAGMA table_info(steps)").fetchall()]
+                        payload_col = "step_payload" if "step_payload" in col_names else ("payload" if "payload" in col_names else None)
+                        if payload_col:
+                            c.execute(f"SELECT idx, {payload_col} FROM steps ORDER BY idx DESC")
+                            search_bytes = clean_search.encode("utf-8", errors="replace")
+                            for s_idx, payload in c.fetchall():
+                                if isinstance(payload, bytes):
+                                    if search_bytes in payload:
+                                        target_step = s_idx
+                                        target_prompt = clean_search
+                                        break
+                                elif isinstance(payload, str) and payload.strip().startswith("{"):
+                                    try:
+                                        obj = json.loads(payload)
+                                        if obj.get("type") == "USER_INPUT" or "USER" in str(obj.get("role", "")).upper():
+                                            c_text = self._clean_user_prompt(self._extract_text(obj)).strip()
+                                            if c_text == clean_search or clean_search in c_text or c_text in clean_search:
+                                                target_step = s_idx
+                                                target_prompt = c_text
+                                                break
+                                    except Exception:
+                                        pass
                         conn.close()
                     except Exception as exc:
                         logger.warning("Error searching SQLite db for rewind: %s", exc)
@@ -3237,7 +3246,38 @@ class AntigravityStorageEngine:
                                 kept_lines.append(line)
                     path.write_text("".join(kept_lines), encoding="utf-8")
 
-            # 2. Truncate SQLite conversation database
+            # 2. Truncate chunked transcript logs (chunks/transcript & chunks/transcript_full)
+            chunks_base = brain_path / ".system_generated" / "logs" / "chunks"
+            if chunks_base.exists():
+                for sub in ("transcript", "transcript_full"):
+                    sub_dir = chunks_base / sub
+                    if sub_dir.exists():
+                        for chunk_file in list(sub_dir.glob("*.jsonl")):
+                            c_kept = []
+                            try:
+                                with chunk_file.open("r", encoding="utf-8", errors="replace") as cf:
+                                    for line in cf:
+                                        if not line.strip():
+                                            continue
+                                        try:
+                                            ev = json.loads(line)
+                                            s_idx = ev.get("step_index")
+                                            if s_idx is not None and s_idx >= target_step:
+                                                continue
+                                            c_kept.append(line)
+                                        except Exception:
+                                            c_kept.append(line)
+                                if c_kept:
+                                    chunk_file.write_text("".join(c_kept), encoding="utf-8")
+                                else:
+                                    try:
+                                        chunk_file.unlink()
+                                    except Exception:
+                                        pass
+                            except Exception as exc:
+                                logger.warning("Could not truncate chunk file %s: %s", chunk_file, exc)
+
+            # 3. Truncate SQLite conversation database
             conv_db = CONVERSATIONS_DIR / f"{cid}.db"
             remaining_steps = 0
             if conv_db.exists():
@@ -3259,7 +3299,7 @@ class AntigravityStorageEngine:
                 except Exception as exc:
                     logger.warning("Could not truncate conversation db during rewind: %s", exc)
 
-            # 3. Update conversation_summaries.db
+            # 4. Update conversation_summaries.db
             if SUMMARIES_DB.exists():
                 try:
                     conn = sqlite3.connect(SUMMARIES_DB, timeout=5.0)
@@ -4067,7 +4107,7 @@ class AgyProcessOrchestrator:
             if ctx:
                 # 2. Detect spontaneous daemon turns (e.g. reactive background task completion)
                 su_type = update.get("sessionUpdate")
-                if not ctx.is_running and su_type in ("agent_message_chunk", "agent_thought_chunk", "tool_call", "user_message_chunk"):
+                if not ctx.is_running and su_type in ("agent_message_chunk", "agent_thought_chunk", "tool_call"):
                     turn_id = f"turn-bg-{uuid.uuid4().hex[:8]}"
                     ctx.current_turn_id = turn_id
                     ctx.is_running = True
@@ -4416,16 +4456,16 @@ class AgyProcessOrchestrator:
                                 self._initializing_ctx = None
                     else:
                         self._acp_loading_sessions.add(cid)
+                        ws_uri = f"file://{ctx.workspace}" if ctx.workspace and Path(ctx.workspace).is_dir() else f"file://{HOME_DIR}"
                         try:
                             try:
-                                await self.acp_call("session/load", {"sessionId": cid}, timeout=15.0)
+                                await self.acp_call("session/load", {"sessionId": cid, "workspaceUris": [ws_uri]}, timeout=15.0)
                                 acp_session_id = cid
                             except Exception:
                                 try:
-                                    await self.acp_call("session/resume", {"sessionId": cid}, timeout=15.0)
+                                    await self.acp_call("session/resume", {"sessionId": cid, "workspaceUris": [ws_uri]}, timeout=15.0)
                                     acp_session_id = cid
                                 except Exception:
-                                    ws_uri = f"file://{ctx.workspace}" if ctx.workspace and Path(ctx.workspace).is_dir() else f"file://{HOME_DIR}"
                                     load_new = await self.acp_call("session/new", {"workspaceUris": [ws_uri]}, timeout=30.0)
                                     real_cid = str(load_new.get("sessionId") or cid)
                                     acp_session_id = real_cid
@@ -4433,6 +4473,7 @@ class AgyProcessOrchestrator:
                             self._acp_sessions[cid] = acp_session_id
                             self._acp_session_to_cid[acp_session_id] = cid
                         finally:
+                            await asyncio.sleep(0.05)
                             self._acp_loading_sessions.discard(cid)
 
                 # Synchronize dynamic configuration options
@@ -5164,7 +5205,7 @@ class AgyProcessOrchestrator:
 
                 method = msg.get("method")
                 if method:
-                    asyncio.create_task(self._handle_acp_notification(msg))
+                    await self._handle_acp_notification(msg)
 
             except asyncio.CancelledError:
                 break
@@ -7988,17 +8029,19 @@ class AgyWebServer:
 
             # Pre-load session into ACP daemon with replay suppression
             if cid not in self.orchestrator._acp_sessions and self.orchestrator.acp_proc and self.orchestrator._acp_initialized:
-                async def _preload(target_cid: str) -> None:
+                async def _preload(target_cid: str, target_ws: str) -> None:
                     self.orchestrator._acp_loading_sessions.add(target_cid)
                     try:
-                        await self.orchestrator.acp_call("session/load", {"sessionId": target_cid}, timeout=15.0)
+                        ws_uri = f"file://{target_ws}" if target_ws and Path(target_ws).is_dir() else f"file://{HOME_DIR}"
+                        await self.orchestrator.acp_call("session/load", {"sessionId": target_cid, "workspaceUris": [ws_uri]}, timeout=15.0)
                         self.orchestrator._acp_sessions[target_cid] = target_cid
                         self.orchestrator._acp_session_to_cid[target_cid] = target_cid
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("Preload session/load failed for %s: %s", target_cid, e)
                     finally:
+                        await asyncio.sleep(0.05)
                         self.orchestrator._acp_loading_sessions.discard(target_cid)
-                asyncio.create_task(_preload(cid))
+                asyncio.create_task(_preload(cid, ws))
 
             await self.broadcast(
                 {
@@ -8125,6 +8168,14 @@ class AgyWebServer:
         if mtype == "delete_session":
             cid = str(data.get("conversation_id") or "").strip()
             if cid:
+                if self.orchestrator.acp_proc and self.orchestrator._acp_initialized:
+                    try:
+                        await self.orchestrator.acp_call("session/close", {"sessionId": cid}, timeout=5.0)
+                    except Exception:
+                        pass
+                self.orchestrator._acp_sessions.pop(cid, None)
+                self.orchestrator._acp_session_to_cid.pop(cid, None)
+                self.orchestrator._sessions.pop(cid, None)
                 is_active = (self.orchestrator.config.conversation_id == cid)
                 success = self.storage.delete_conversation(cid)
                 if success:
@@ -8246,6 +8297,26 @@ class AgyWebServer:
             if cid:
                 try:
                     rewound_prompt = self.storage.rewind_conversation(cid, step_index, prompt_text)
+
+                    # Close and release session in ACP daemon so it forgets rewound turns
+                    if self.orchestrator.acp_proc and self.orchestrator._acp_initialized:
+                        try:
+                            await self.orchestrator.acp_call("session/close", {"sessionId": cid}, timeout=5.0)
+                        except Exception as e:
+                            logger.debug("session/close during rewind for %s: %s", cid, e)
+                    self.orchestrator._acp_sessions.pop(cid, None)
+                    self.orchestrator._acp_session_to_cid.pop(cid, None)
+
+                    # Reset memory state in orchestrator context
+                    c_ctx = self.orchestrator._sessions.get(cid)
+                    if c_ctx:
+                        c_ctx.is_running = False
+                        c_ctx.current_turn_id = None
+                        c_ctx.active_prompt = ""
+                        c_ctx.active_snapshot = None
+                        c_ctx.pending_question = None
+                        c_ctx.waiting_input = False
+
                     updated_history = self.storage.load_transcript(cid)
                     sessions = self.storage.list_conversations(limit=100)
                     await self.broadcast({"type": "session_list", "sessions": sessions})

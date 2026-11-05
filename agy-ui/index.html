@@ -6321,6 +6321,16 @@
           case 'session_rewound':
             state.activeTurns.clear();
             stopLiveProgress();
+            if (msg.conversation_id) {
+              const buf = state.sessionBuffers.get(msg.conversation_id);
+              if (buf) {
+                buf.activeTurns.clear();
+                buf.isRunning = false;
+                buf.activeUserPrompt = '';
+                buf.activeUserAttachments = [];
+                if (msg.messages) buf.messages = msg.messages;
+              }
+            }
             if (msg.messages) {
               renderFullHistory(msg.messages);
             }
@@ -6330,6 +6340,7 @@
               promptInput.style.height = Math.min(promptInput.scrollHeight, 130) + 'px';
               promptInput.focus();
             }
+            resetSendButtonToIdle();
             jumpToBottom(true);
             showToast('Rewound to prompt');
             break;
