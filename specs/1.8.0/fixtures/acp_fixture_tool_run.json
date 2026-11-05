@@ -1,0 +1,612 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "result": {
+      "protocolVersion": 1,
+      "agentCapabilities": {
+        "loadSession": true,
+        "load_session": true,
+        "promptCapabilities": {
+          "image": true,
+          "audio": false,
+          "embeddedContext": true
+        },
+        "sessionCapabilities": {
+          "resume": {},
+          "close": {},
+          "load": {},
+          "list": {},
+          "additionalDirectories": {}
+        },
+        "session_capabilities": {
+          "resume": {},
+          "close": {},
+          "load": {},
+          "list": {},
+          "additionalDirectories": {}
+        },
+        "auth": {
+          "logout": {}
+        },
+        "_meta": {
+          "antigravity": {
+            "tier": true,
+            "systemPrompt": {
+              "append": true
+            }
+          }
+        }
+      },
+      "agentInfo": {
+        "name": "Antigravity ACP Server",
+        "version": "1.5.1"
+      },
+      "authMethods": [
+        {
+          "id": "oauth-personal",
+          "name": "Log in with Google",
+          "description": "Log in with your Google account"
+        },
+        {
+          "id": "oauth-business",
+          "name": "Log in with Gemini Enterprise",
+          "description": "Log in with your Gemini Enterprise account"
+        },
+        {
+          "id": "gemini-api-key",
+          "name": "Gemini API key",
+          "description": "Use an API key with Gemini Developer API"
+        },
+        {
+          "id": "agent-platform",
+          "name": "Gemini Enterprise Agent Platform",
+          "description": "Use Gemini Enterprise Agent Platform (formerly Vertex AI) with Application Default Credentials"
+        }
+      ]
+    },
+    "id": 1
+  },
+  {
+    "jsonrpc": "2.0",
+    "result": {
+      "sessionId": "8c3e982b-41a6-472a-8283-439cedf3d12d",
+      "models": {
+        "availableModels": [
+          {
+            "modelId": "gemini-4-argon-medium",
+            "name": "Gemini 4 Argon (Medium)"
+          },
+          {
+            "modelId": "gemini-4-argon-high",
+            "name": "Gemini 4 Argon (High)"
+          },
+          {
+            "modelId": "gemini-4-argon-low",
+            "name": "Gemini 4 Argon (Low)"
+          },
+          {
+            "modelId": "gemini-3.8-flash-high",
+            "name": "Gemini 3.8 Flash (High)"
+          },
+          {
+            "modelId": "gemini-3.8-flash-medium",
+            "name": "Gemini 3.8 Flash (Medium)"
+          },
+          {
+            "modelId": "gemini-3.8-flash-low",
+            "name": "Gemini 3.8 Flash (Low)"
+          },
+          {
+            "modelId": "claude-opus-5-5-low",
+            "name": "Claude Opus 5.5 (Low)"
+          },
+          {
+            "modelId": "claude-opus-5-5-medium",
+            "name": "Claude Opus 5.5 (Medium)"
+          },
+          {
+            "modelId": "claude-opus-5-5-high",
+            "name": "Claude Opus 5.5 (High)"
+          },
+          {
+            "modelId": "claude-sonnet-5-5-low",
+            "name": "Claude Sonnet 5.5 (Low)"
+          },
+          {
+            "modelId": "claude-sonnet-5-5-medium",
+            "name": "Claude Sonnet 5.5 (Medium)"
+          },
+          {
+            "modelId": "claude-sonnet-5-5-high",
+            "name": "Claude Sonnet 5.5 (High)"
+          },
+          {
+            "modelId": "gpt-oss-120b-medium",
+            "name": "GPT-OSS 120B (Medium)"
+          }
+        ],
+        "currentModelId": "gemini-4-argon-medium"
+      },
+      "modes": {
+        "currentModeId": "default",
+        "availableModes": [
+          {
+            "id": "default",
+            "name": "Default",
+            "description": "Ask before edits and commands, per your permission settings."
+          },
+          {
+            "id": "accept-edits",
+            "name": "Accept edits",
+            "description": "Approve file edits in the workspace without asking."
+          },
+          {
+            "id": "plan",
+            "name": "Plan",
+            "description": "Plan carefully before executing a task."
+          }
+        ]
+      },
+      "configOptions": [
+        {
+          "id": "model",
+          "name": "Model",
+          "category": "model",
+          "type": "select",
+          "currentValue": "gemini-4-argon",
+          "options": [
+            {
+              "value": "gemini-4-argon",
+              "name": "Gemini 4 Argon"
+            },
+            {
+              "value": "gemini-3.8-flash",
+              "name": "Gemini 3.8 Flash"
+            },
+            {
+              "value": "claude-opus-5-5",
+              "name": "Claude Opus 5.5"
+            },
+            {
+              "value": "claude-sonnet-5-5",
+              "name": "Claude Sonnet 5.5"
+            },
+            {
+              "value": "gpt-oss-120b-medium",
+              "name": "GPT-OSS 120B (Medium)"
+            }
+          ]
+        },
+        {
+          "id": "thought_level",
+          "name": "Thinking Level",
+          "category": "thought_level",
+          "type": "select",
+          "currentValue": "medium",
+          "options": [
+            {
+              "value": "low",
+              "name": "Low"
+            },
+            {
+              "value": "medium",
+              "name": "Medium"
+            },
+            {
+              "value": "high",
+              "name": "High"
+            }
+          ]
+        },
+        {
+          "id": "mode",
+          "name": "Mode",
+          "category": "mode",
+          "type": "select",
+          "currentValue": "default",
+          "options": [
+            {
+              "value": "default",
+              "name": "Default",
+              "description": "Ask before edits and commands, per your permission settings."
+            },
+            {
+              "value": "accept-edits",
+              "name": "Accept edits",
+              "description": "Approve file edits in the workspace without asking."
+            },
+            {
+              "value": "plan",
+              "name": "Plan",
+              "description": "Plan carefully before executing a task."
+            }
+          ]
+        }
+      ],
+      "_meta": {
+        "antigravity": {
+          "tier": {
+            "name": "Google AI Pro",
+            "id": "g1-pro-tier",
+            "upgradeUri": "https://antigravity.google/g1-upgrade"
+          }
+        }
+      }
+    },
+    "id": 2
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "8c3e982b-41a6-472a-8283-439cedf3d12d",
+      "update": {
+        "sessionUpdate": "available_commands_update",
+        "availableCommands": [
+          {
+            "name": "goal",
+            "description": "Run until the specified goal is completely finished."
+          },
+          {
+            "name": "compact",
+            "description": "Compact the conversation now (summarize history to free up the context window)."
+          },
+          {
+            "name": "schedule",
+            "description": "Run an instruction on a recurring schedule or as a one-time timer."
+          },
+          {
+            "name": "browser",
+            "description": "Invoke a browser agent for web tasks."
+          },
+          {
+            "name": "plan",
+            "description": "Plan carefully before executing a task."
+          },
+          {
+            "name": "grill-me",
+            "description": "Interview me to align on a plan."
+          },
+          {
+            "name": "teamwork",
+            "description": "Invoke a team of agents to autonomously tackle large projects."
+          },
+          {
+            "name": "learn",
+            "description": "Reflect on recent successes or corrections to capture reusable skills or rules."
+          },
+          {
+            "name": "boost",
+            "description": "Invoke the Boost multi-agent orchestrator for complex tasks."
+          },
+          {
+            "name": "agy-customizations",
+            "description": "Comprehensive guide and reference for the Antigravity Customization System. Use to explain how customizations work, their loading priority, discovery mechanisms, and to guide the creation of skills, rules, plugins, hooks, and MCP servers."
+          },
+          {
+            "name": "antigravity-guide",
+            "description": "Provides a comprehensive guide, quick reference, and sitemap for Google Antigravity (AGY), including the Antigravity CLI (agy), Antigravity 2.0, Antigravity IDE, Python SDK, slash commands, keybindings, and customizations (skills, rules, MCP, sidecars). Activate this skill when the user asks questions about how to use, configure, or customize Antigravity, AGY, the agy CLI, the Antigravity IDE, or Antigravity 2.0."
+          },
+          {
+            "name": "argon-agent",
+            "description": "Architectural review, security auditing, and system hardening specialist. Activate ONLY when the user explicitly asks for Argon (e.g., \"run an Argon audit\", \"consult Argon\", or invokes \"argon-agent\"). Never activate automatically."
+          },
+          {
+            "name": "skoda-control",
+            "description": "Remotely monitor and control the user's \u0160koda vehicle via the My\u0160koda Public API. Activate ONLY when the user's entire prompt is strictly \"Skoda\" or \"skoda\" by itself (an exact single-word prompt). NEVER activate if \"Skoda\" or \"skoda\" is part of any longer sentence, question, or prompt."
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "8c3e982b-41a6-472a-8283-439cedf3d12d",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Run HelloTool"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "8c3e982b-41a6-472a-8283-439cedf3d12d",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "title": "Run HelloTool Script"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "8c3e982b-41a6-472a-8283-439cedf3d12d",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": "Initial investigation focuses on locating `HelloTool` within the workspace and MCP servers. The search will begin by examining the MCP directory within the application data directory, followed by a general search across workspace files.\n\n\n"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "8c3e982b-41a6-472a-8283-439cedf3d12d",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_571469",
+        "name": "run_command",
+        "args": {
+          "CommandLine": "ls -la /data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/ /data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/* 2>/dev/null; find /storage/emulated/0/Documents/AgyStudio -maxdepth 3 -iname \"*hello*\" 2>/dev/null",
+          "WaitMsBeforeAsync": 5000,
+          "toolSummary": "Locate HelloTool in MCP or workspace"
+        },
+        "status": "in_progress",
+        "kind": "execute",
+        "title": "ls -la /data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/ /data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/* 2>/dev/null; find /storage/emulated/0/Documents/AgyStudio -maxdepth 3 -iname \"*hello*\" 2>/dev/null",
+        "rawInput": {
+          "CommandLine": "ls -la /data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/ /data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/* 2>/dev/null; find /storage/emulated/0/Documents/AgyStudio -maxdepth 3 -iname \"*hello*\" 2>/dev/null",
+          "WaitMsBeforeAsync": 5000,
+          "toolSummary": "Locate HelloTool in MCP or workspace"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "8c3e982b-41a6-472a-8283-439cedf3d12d",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_571469",
+        "name": "run_command",
+        "args": {
+          "CommandLine": "ls -la /data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/ /data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/* 2>/dev/null; find /storage/emulated/0/Documents/AgyStudio -maxdepth 3 -iname \"*hello*\" 2>/dev/null",
+          "WaitMsBeforeAsync": 5000,
+          "toolSummary": "Locate HelloTool in MCP or workspace"
+        },
+        "status": "completed",
+        "kind": "execute",
+        "title": "ls -la /data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/ /data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/* 2>/dev/null; find /storage/emulated/0/Documents/AgyStudio -maxdepth 3 -iname \"*hello*\" 2>/dev/null",
+        "rawInput": {
+          "CommandLine": "ls -la /data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/ /data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/* 2>/dev/null; find /storage/emulated/0/Documents/AgyStudio -maxdepth 3 -iname \"*hello*\" 2>/dev/null",
+          "WaitMsBeforeAsync": 5000,
+          "toolSummary": "Locate HelloTool in MCP or workspace"
+        },
+        "rawOutput": {
+          "output": "The tool's output was truncated due to being too long. You can find the full output in a file at file:///data/data/ai.agy.app/files/home/.gemini/antigravity-cli/brain/8c3e982b-41a6-472a-8283-439cedf3d12d/.system_generated/steps/2/output.txt.\n\nHere is a preview with the middle of the output truncated:\nCommand exited with code 0.\n\nCommand output:\n/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/:\r\ntotal 38\r\ndrwx------    6 u0_a438  u0_a438       3452 Oct 26 18:01 .\r\ndrwx------   14 u0_a438  u0_a438       3452 Nov  5 15:21 ..\r\ndrwx------    2 u0_a438  u0_a438       3452 Nov  5 15:21 github-mcp\r\ndrwx------    2 u0_a438  u0_a438       3452 Oct 28 19:45 joules_einfallsvoll_de-joules\r\ndrwx------    2 u0_a438  u0_a438      24576 Oct 22 13:29 ms365\r\ndrwx------    2 u0_a438  u0_a438       3452 Nov  5 15:21 staging-montana-mig_joulesapp_de-joules\r\n\r\n/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/github-mcp:\r\ntotal 35\r\ndrwx------    2 u0_a438  u0_a438       3452 Nov  5 15:21 .\r\ndrwx------    6 u0_a438  u0_a438       3452 Oct 26 18:01 ..\r\n-rw-------    1 u0_a438  u0_a438        440 Nov  5 15:21 github_create_issue.json\r\n-rw-------    1 u0_a438  u0_a438        480 Nov  5 15:21 github_get_file_contents.json\r\n-rw-------    1 u0_a438  u0_a438        308 Nov  5 15:21 github_get_repository.json\r\n-rw-------    1 u0_a438  u0_a438        278 Nov  5 15:21 github_get_user.json\r\n-rw-------    1 u0_a438  u0_a438        353 Nov  5 15:21 github_list_branches.json\r\n-rw-------    1 u0_a438  u0_a438        473 Nov  5 15:21 github_list_issues.json\r\n-rw-------    1 u0_a438  u0_a438        566 Nov  5 15:21 github_search_repositories.json\r\n\r\n/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/joules_einfallsvoll_de-joules:\r\ntotal 35\r\ndrwx------    2 u0_a438  u0_a438       3452 Oct 28 19:45 .\r\ndrwx------    6 u0_a438  u0_a438       3452 Oct 26 18:01 ..\r\n-rw-------    1 u0_a438  u0_a438       1717 Oct 28 19:45 joules_call_tool.json\r\n-rw-------    1 u0_a438  u0_a438        559 Oct 28 19:45 joules_describe_tool.json\r\n-rw-------    1 u0_a438  u0_a438       1334 Oct 28 19:45 joules_explain.json\r\n-rw-------    1 u0_a438  u0_a438       1607 Oct 28 19:45 joules_find_tools.json\r\n-rw-------    1 u0_a438  u0_a438        397 Oct 28 19:45 joules_job_status.json\r\n-rw-------    1 u0_a438  u0_a438       1091 Oct 28 19:45 joules_list_tools.json\r\n-rw-------    1 u0_a438  u0_a438        943 Oct 28 19:45 joules_read_resource.json\r\n\r\n/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/ms365:\r\ntotal 1412\r\ndrwx------    2 u0_a438  u0_a438      24576 Oct 22 13:29 .\r\ndrwx------    6 u0_a438  u0_a438       3452 Oct 26 18:01 ..\r\n-rw-------    1 u0_a438  u0_a438       1396 Oct 22 13:29 accept-calendar-event.json\r\n-rw-------    1 u0_a438  u0_a438       2714 Oct 22 13:29 add-calendar-event-attachment.json\r\n-rw-------    1 u0_a438  u0_a438       2229 Oct 22 13:29 add-excel-table-rows.json\r\n-rw-------    1 u0_a438  u0_a438       2747 Oct 22 13:29 add-mail-attachment.json\r\n-rw-------    1 u0_a438  u0_a438       2068 Oct 22 13:29 cancel-calendar-event.json\r\n-rw-------    1 u0_a438  u0_a438       2032 Oct 22 13:29 clear-excel-range.json\r\n-rw-------    1 u0_a438  u0_a438       4220 Oct 22 13:29 copy-drive-item.json\r\n-rw-------    1 u0_a438  u0_a438       1449 Oct 22 13:29 copy-mail-message.json\r\n-rw-------    1 u0_a438  u0_a438       3136 Oct 22 13:29 create-calendar-event-attachment-upload-session.json\r\n-rw-------    1 u0_a438  u0_a438      15787 Oct 22 13:29 create-calendar-event.json\r\n-rw-------    1 u0_a438  u0_a438      35124 Oct 22 13:29 create-calendar.json\r\n-rw-------    1 u0_a438  u0_a438       9478 Oct 22 13:29 create-contact-child-folder.json\r\n-rw-------    1 u0_a438  u0_a438       9075 Oct 22 13:29 create-contact-folder.json\r\n-rw-------    1 u0_a438  u0_a438       7728 Oct 22 13:29 create-contact-in-folder.json\r\n-rw-------    1 u0_a438  u0_a438       9904 Oct 22 13:29 create-draft-email.json\r\n-rw-------    1 u0_a438  u0_a438       1819 Oct 22 13:29 create-drive-item-preview.json\r\n-rw-------    1 u0_a438  u0_a438       3174 Oct 22 13:29 create-drive-item-share-link.json\r\n-rw-------    1 u0_a438  u0_a438       1656 Oct 22 13:29 create-excel-chart.json\r\n-rw-------    1 u0_a438  u0_a438       2133 Oct 22 13:29 create-excel-table.json\r\n-rw-------    1 u0_a438  u0_a438       1915 Oct 22 13:29 create-focused-inbox-override.json\r\n-rw-------    1 u0_a438  u0_a438      10555 Oct 22 13:29 create-forward-draft.json\r\n-rw-------    1 u0_a438  u0_a438       3259 Oct 22 13:29 create-mail-attachment-upload-session.json\r\n-rw-------    1 u0_a438  u0_a438      22013 Oct 22 13:29 create-mail-child-folder.json\r\n-rw-------    1 u0_a438  u0_a438      21838 Oct 22 13:29 create-mail-folder.json\r\n-rw-------    1 u0_a438  u0_a438      14965 Oct 22 13:29 create-mail-rule.json\r\n-rw-------    1 u0_a438  u0_a438       3056 Oct 22 13:29 create-my-calendar-permission.json\r\n-rw-------    1 u0_a438  u0_a438      44291 Oct 22 13:29 create-onedrive-folder.json\r\n-rw-------    1 u0_a438  u0_a438      15867 Oct 22 13:29 create-onenote-notebook.json\r\n-rw-------    1 u0_a438  u0_a438      16238 Oct 22 13:29 create-onenote-page.json\r\n-rw-------    1 u0_a438  u0_a438      16082 Oct 22 13:29 create-one\n<truncated 10120 of 19994 bytes from the middle of the output>\nt-subscriptions.json\r\n-rw-------    1 u0_a438  u0_a438       2571 Oct 22 13:29 list-supported-languages.json\r\n-rw-------    1 u0_a438  u0_a438       3258 Oct 22 13:29 list-supported-time-zones.json\r\n-rw-------    1 u0_a438  u0_a438       1447 Oct 22 13:29 list-todo-checklist-items.json\r\n-rw-------    1 u0_a438  u0_a438       2325 Oct 22 13:29 list-todo-linked-resources.json\r\n-rw-------    1 u0_a438  u0_a438       1428 Oct 22 13:29 list-todo-task-lists.json\r\n-rw-------    1 u0_a438  u0_a438       2715 Oct 22 13:29 list-todo-tasks.json\r\n-rw-------    1 u0_a438  u0_a438        298 Oct 22 13:29 login.json\r\n-rw-------    1 u0_a438  u0_a438        163 Oct 22 13:29 logout.json\r\n-rw-------    1 u0_a438  u0_a438       1967 Oct 22 13:29 merge-excel-range.json\r\n-rw-------    1 u0_a438  u0_a438       1401 Oct 22 13:29 move-mail-message.json\r\n-rw-------    1 u0_a438  u0_a438      44240 Oct 22 13:29 move-rename-onedrive-item.json\r\n-rw-------    1 u0_a438  u0_a438        464 Oct 22 13:29 parse-teams-url.json\r\n-rw-------    1 u0_a438  u0_a438       2515 Oct 22 13:29 read-mail-text.json\r\n-rw-------    1 u0_a438  u0_a438       1369 Oct 22 13:29 reauthorize-subscription.json\r\n-rw-------    1 u0_a438  u0_a438        442 Oct 22 13:29 remove-account.json\r\n-rw-------    1 u0_a438  u0_a438      10937 Oct 22 13:29 reply-all-mail-message.json\r\n-rw-------    1 u0_a438  u0_a438      10982 Oct 22 13:29 reply-mail-message.json\r\n-rw-------    1 u0_a438  u0_a438       3473 Oct 22 13:29 search-onedrive-files.json\r\n-rw-------    1 u0_a438  u0_a438        442 Oct 22 13:29 select-account.json\r\n-rw-------    1 u0_a438  u0_a438       1345 Oct 22 13:29 send-draft-message.json\r\n-rw-------    1 u0_a438  u0_a438      10422 Oct 22 13:29 send-mail.json\r\n-rw-------    1 u0_a438  u0_a438       2637 Oct 22 13:29 share-drive-item.json\r\n-rw-------    1 u0_a438  u0_a438       1750 Oct 22 13:29 snooze-calendar-event-reminder.json\r\n-rw-------    1 u0_a438  u0_a438       1671 Oct 22 13:29 sort-excel-range.json\r\n-rw-------    1 u0_a438  u0_a438       2740 Oct 22 13:29 tentatively-accept-calendar-event.json\r\n-rw-------    1 u0_a438  u0_a438       1743 Oct 22 13:29 unmerge-excel-range.json\r\n-rw-------    1 u0_a438  u0_a438      15812 Oct 22 13:29 update-calendar-event.json\r\n-rw-------    1 u0_a438  u0_a438      35241 Oct 22 13:29 update-calendar.json\r\n-rw-------    1 u0_a438  u0_a438       9261 Oct 22 13:29 update-contact-folder.json\r\n-rw-------    1 u0_a438  u0_a438       2166 Oct 22 13:29 update-excel-range.json\r\n-rw-------    1 u0_a438  u0_a438       1819 Oct 22 13:29 update-excel-table-row.json\r\n-rw-------    1 u0_a438  u0_a438       2510 Oct 22 13:29 update-focused-inbox-override.json\r\n-rw-------    1 u0_a438  u0_a438      21872 Oct 22 13:29 update-mail-folder.json\r\n-rw-------    1 u0_a438  u0_a438      10088 Oct 22 13:29 update-mail-message.json\r\n-rw-------    1 u0_a438  u0_a438      14887 Oct 22 13:29 update-mail-rule.json\r\n-rw-------    1 u0_a438  u0_a438       5609 Oct 22 13:29 update-mailbox-settings.json\r\n-rw-------    1 u0_a438  u0_a438       3175 Oct 22 13:29 update-my-calendar-permission.json\r\n-rw-------    1 u0_a438  u0_a438       7292 Oct 22 13:29 update-outlook-contact.json\r\n-rw-------    1 u0_a438  u0_a438      13993 Oct 22 13:29 update-planner-bucket.json\r\n-rw-------    1 u0_a438  u0_a438       1875 Oct 22 13:29 update-planner-task-details.json\r\n-rw-------    1 u0_a438  u0_a438      13580 Oct 22 13:29 update-planner-task.json\r\n-rw-------    1 u0_a438  u0_a438      16102 Oct 22 13:29 update-specific-calendar-event.json\r\n-rw-------    1 u0_a438  u0_a438       9469 Oct 22 13:29 update-subscription.json\r\n-rw-------    1 u0_a438  u0_a438       2831 Oct 22 13:29 update-todo-checklist-item.json\r\n-rw-------    1 u0_a438  u0_a438      14011 Oct 22 13:29 update-todo-task-list.json\r\n-rw-------    1 u0_a438  u0_a438      13643 Oct 22 13:29 update-todo-task.json\r\n-rw-------    1 u0_a438  u0_a438       1841 Oct 22 13:29 upload-file-content.json\r\n-rw-------    1 u0_a438  u0_a438       1757 Oct 22 13:29 upload-my-profile-photo.json\r\n-rw-------    1 u0_a438  u0_a438        184 Oct 22 13:29 verify-login.json\r\n\r\n/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules:\r\ntotal 35\r\ndrwx------    2 u0_a438  u0_a438       3452 Nov  5 15:21 .\r\ndrwx------    6 u0_a438  u0_a438       3452 Oct 26 18:01 ..\r\n-rw-------    1 u0_a438  u0_a438       1727 Nov  5 15:21 joules_call_tool.json\r\n-rw-------    1 u0_a438  u0_a438        569 Nov  5 15:21 joules_describe_tool.json\r\n-rw-------    1 u0_a438  u0_a438       1344 Nov  5 15:21 joules_explain.json\r\n-rw-------    1 u0_a438  u0_a438       1617 Nov  5 15:21 joules_find_tools.json\r\n-rw-------    1 u0_a438  u0_a438        407 Nov  5 15:21 joules_job_status.json\r\n-rw-------    1 u0_a438  u0_a438       1101 Nov  5 15:21 joules_list_tools.json\r\n-rw-------    1 u0_a438  u0_a438        953 Nov  5 15:21 joules_read_resource.json\r\n",
+          "exit_code": 0
+        },
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "The tool's output was truncated due to being too long. You can find the full output in a file at file:///data/data/ai.agy.app/files/home/.gemini/antigravity-cli/brain/8c3e982b-41a6-472a-8283-439cedf3d12d/.system_generated/steps/2/output.txt.\n\nHere is a preview with the middle of the output truncated:\nCommand exited with code 0.\n\nCommand output:\n/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/:\r\ntotal 38\r\ndrwx------    6 u0_a438  u0_a438       3452 Oct 26 18:01 .\r\ndrwx------   14 u0_a438  u0_a438       3452 Nov  5 15:21 ..\r\ndrwx------    2 u0_a438  u0_a438       3452 Nov  5 15:21 github-mcp\r\ndrwx------    2 u0_a438  u0_a438       3452 Oct 28 19:45 joules_einfallsvoll_de-joules\r\ndrwx------    2 u0_a438  u0_a438      24576 Oct 22 13:29 ms365\r\ndrwx------    2 u0_a438  u0_a438       3452 Nov  5 15:21 staging-montana-mig_joulesapp_de-joules\r\n\r\n/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/github-mcp:\r\ntotal 35\r\ndrwx------    2 u0_a438  u0_a438       3452 Nov  5 15:21 .\r\ndrwx------    6 u0_a438  u0_a438       3452 Oct 26 18:01 ..\r\n-rw-------    1 u0_a438  u0_a438        440 Nov  5 15:21 github_create_issue.json\r\n-rw-------    1 u0_a438  u0_a438        480 Nov  5 15:21 github_get_file_contents.json\r\n-rw-------    1 u0_a438  u0_a438        308 Nov  5 15:21 github_get_repository.json\r\n-rw-------    1 u0_a438  u0_a438        278 Nov  5 15:21 github_get_user.json\r\n-rw-------    1 u0_a438  u0_a438        353 Nov  5 15:21 github_list_branches.json\r\n-rw-------    1 u0_a438  u0_a438        473 Nov  5 15:21 github_list_issues.json\r\n-rw-------    1 u0_a438  u0_a438        566 Nov  5 15:21 github_search_repositories.json\r\n\r\n/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/joules_einfallsvoll_de-joules:\r\ntotal 35\r\ndrwx------    2 u0_a438  u0_a438       3452 Oct 28 19:45 .\r\ndrwx------    6 u0_a438  u0_a438       3452 Oct 26 18:01 ..\r\n-rw-------    1 u0_a438  u0_a438       1717 Oct 28 19:45 joules_call_tool.json\r\n-rw-------    1 u0_a438  u0_a438        559 Oct 28 19:45 joules_describe_tool.json\r\n-rw-------    1 u0_a438  u0_a438       1334 Oct 28 19:45 joules_explain.json\r\n-rw-------    1 u0_a438  u0_a438       1607 Oct 28 19:45 joules_find_tools.json\r\n-rw-------    1 u0_a438  u0_a438        397 Oct 28 19:45 joules_job_status.json\r\n-rw-------    1 u0_a438  u0_a438       1091 Oct 28 19:45 joules_list_tools.json\r\n-rw-------    1 u0_a438  u0_a438        943 Oct 28 19:45 joules_read_resource.json\r\n\r\n/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/ms365:\r\ntotal 1412\r\ndrwx------    2 u0_a438  u0_a438      24576 Oct 22 13:29 .\r\ndrwx------    6 u0_a438  u0_a438       3452 Oct 26 18:01 ..\r\n-rw-------    1 u0_a438  u0_a438       1396 Oct 22 13:29 accept-calendar-event.json\r\n-rw-------    1 u0_a438  u0_a438       2714 Oct 22 13:29 add-calendar-event-attachment.json\r\n-rw-------    1 u0_a438  u0_a438       2229 Oct 22 13:29 add-excel-table-rows.json\r\n-rw-------    1 u0_a438  u0_a438       2747 Oct 22 13:29 add-mail-attachment.json\r\n-rw-------    1 u0_a438  u0_a438       2068 Oct 22 13:29 cancel-calendar-event.json\r\n-rw-------    1 u0_a438  u0_a438       2032 Oct 22 13:29 clear-excel-range.json\r\n-rw-------    1 u0_a438  u0_a438       4220 Oct 22 13:29 copy-drive-item.json\r\n-rw-------    1 u0_a438  u0_a438       1449 Oct 22 13:29 copy-mail-message.json\r\n-rw-------    1 u0_a438  u0_a438       3136 Oct 22 13:29 create-calendar-event-attachment-upload-session.json\r\n-rw-------    1 u0_a438  u0_a438      15787 Oct 22 13:29 create-calendar-event.json\r\n-rw-------    1 u0_a438  u0_a438      35124 Oct 22 13:29 create-calendar.json\r\n-rw-------    1 u0_a438  u0_a438       9478 Oct 22 13:29 create-contact-child-folder.json\r\n-rw-------    1 u0_a438  u0_a438       9075 Oct 22 13:29 create-contact-folder.json\r\n-rw-------    1 u0_a438  u0_a438       7728 Oct 22 13:29 create-contact-in-folder.json\r\n-rw-------    1 u0_a438  u0_a438       9904 Oct 22 13:29 create-draft-email.json\r\n-rw-------    1 u0_a438  u0_a438       1819 Oct 22 13:29 create-drive-item-preview.json\r\n-rw-------    1 u0_a438  u0_a438       3174 Oct 22 13:29 create-drive-item-share-link.json\r\n-rw-------    1 u0_a438  u0_a438       1656 Oct 22 13:29 create-excel-chart.json\r\n-rw-------    1 u0_a438  u0_a438       2133 Oct 22 13:29 create-excel-table.json\r\n-rw-------    1 u0_a438  u0_a438       1915 Oct 22 13:29 create-focused-inbox-override.json\r\n-rw-------    1 u0_a438  u0_a438      10555 Oct 22 13:29 create-forward-draft.json\r\n-rw-------    1 u0_a438  u0_a438       3259 Oct 22 13:29 create-mail-attachment-upload-session.json\r\n-rw-------    1 u0_a438  u0_a438      22013 Oct 22 13:29 create-mail-child-folder.json\r\n-rw-------    1 u0_a438  u0_a438      21838 Oct 22 13:29 create-mail-folder.json\r\n-rw-------    1 u0_a438  u0_a438      14965 Oct 22 13:29 create-mail-rule.json\r\n-rw-------    1 u0_a438  u0_a438       3056 Oct 22 13:29 create-my-calendar-permission.json\r\n-rw-------    1 u0_a438  u0_a438      44291 Oct 22 13:29 create-onedrive-folder.json\r\n-rw-------    1 u0_a438  u0_a438      15867 Oct 22 13:29 create-onenote-notebook.json\r\n-rw-------    1 u0_a438  u0_a438      16238 Oct 22 13:29 create-onenote-page.json\r\n-rw-------    1 u0_a438  u0_a438      16082 Oct 22 13:29 create-one\n<truncated 10120 of 19994 bytes from the middle of the output>\nt-subscriptions.json\r\n-rw-------    1 u0_a438  u0_a438       2571 Oct 22 13:29 list-supported-languages.json\r\n-rw-------    1 u0_a438  u0_a438       3258 Oct 22 13:29 list-supported-time-zones.json\r\n-rw-------    1 u0_a438  u0_a438       1447 Oct 22 13:29 list-todo-checklist-items.json\r\n-rw-------    1 u0_a438  u0_a438       2325 Oct 22 13:29 list-todo-linked-resources.json\r\n-rw-------    1 u0_a438  u0_a438       1428 Oct 22 13:29 list-todo-task-lists.json\r\n-rw-------    1 u0_a438  u0_a438       2715 Oct 22 13:29 list-todo-tasks.json\r\n-rw-------    1 u0_a438  u0_a438        298 Oct 22 13:29 login.json\r\n-rw-------    1 u0_a438  u0_a438        163 Oct 22 13:29 logout.json\r\n-rw-------    1 u0_a438  u0_a438       1967 Oct 22 13:29 merge-excel-range.json\r\n-rw-------    1 u0_a438  u0_a438       1401 Oct 22 13:29 move-mail-message.json\r\n-rw-------    1 u0_a438  u0_a438      44240 Oct 22 13:29 move-rename-onedrive-item.json\r\n-rw-------    1 u0_a438  u0_a438        464 Oct 22 13:29 parse-teams-url.json\r\n-rw-------    1 u0_a438  u0_a438       2515 Oct 22 13:29 read-mail-text.json\r\n-rw-------    1 u0_a438  u0_a438       1369 Oct 22 13:29 reauthorize-subscription.json\r\n-rw-------    1 u0_a438  u0_a438        442 Oct 22 13:29 remove-account.json\r\n-rw-------    1 u0_a438  u0_a438      10937 Oct 22 13:29 reply-all-mail-message.json\r\n-rw-------    1 u0_a438  u0_a438      10982 Oct 22 13:29 reply-mail-message.json\r\n-rw-------    1 u0_a438  u0_a438       3473 Oct 22 13:29 search-onedrive-files.json\r\n-rw-------    1 u0_a438  u0_a438        442 Oct 22 13:29 select-account.json\r\n-rw-------    1 u0_a438  u0_a438       1345 Oct 22 13:29 send-draft-message.json\r\n-rw-------    1 u0_a438  u0_a438      10422 Oct 22 13:29 send-mail.json\r\n-rw-------    1 u0_a438  u0_a438       2637 Oct 22 13:29 share-drive-item.json\r\n-rw-------    1 u0_a438  u0_a438       1750 Oct 22 13:29 snooze-calendar-event-reminder.json\r\n-rw-------    1 u0_a438  u0_a438       1671 Oct 22 13:29 sort-excel-range.json\r\n-rw-------    1 u0_a438  u0_a438       2740 Oct 22 13:29 tentatively-accept-calendar-event.json\r\n-rw-------    1 u0_a438  u0_a438       1743 Oct 22 13:29 unmerge-excel-range.json\r\n-rw-------    1 u0_a438  u0_a438      15812 Oct 22 13:29 update-calendar-event.json\r\n-rw-------    1 u0_a438  u0_a438      35241 Oct 22 13:29 update-calendar.json\r\n-rw-------    1 u0_a438  u0_a438       9261 Oct 22 13:29 update-contact-folder.json\r\n-rw-------    1 u0_a438  u0_a438       2166 Oct 22 13:29 update-excel-range.json\r\n-rw-------    1 u0_a438  u0_a438       1819 Oct 22 13:29 update-excel-table-row.json\r\n-rw-------    1 u0_a438  u0_a438       2510 Oct 22 13:29 update-focused-inbox-override.json\r\n-rw-------    1 u0_a438  u0_a438      21872 Oct 22 13:29 update-mail-folder.json\r\n-rw-------    1 u0_a438  u0_a438      10088 Oct 22 13:29 update-mail-message.json\r\n-rw-------    1 u0_a438  u0_a438      14887 Oct 22 13:29 update-mail-rule.json\r\n-rw-------    1 u0_a438  u0_a438       5609 Oct 22 13:29 update-mailbox-settings.json\r\n-rw-------    1 u0_a438  u0_a438       3175 Oct 22 13:29 update-my-calendar-permission.json\r\n-rw-------    1 u0_a438  u0_a438       7292 Oct 22 13:29 update-outlook-contact.json\r\n-rw-------    1 u0_a438  u0_a438      13993 Oct 22 13:29 update-planner-bucket.json\r\n-rw-------    1 u0_a438  u0_a438       1875 Oct 22 13:29 update-planner-task-details.json\r\n-rw-------    1 u0_a438  u0_a438      13580 Oct 22 13:29 update-planner-task.json\r\n-rw-------    1 u0_a438  u0_a438      16102 Oct 22 13:29 update-specific-calendar-event.json\r\n-rw-------    1 u0_a438  u0_a438       9469 Oct 22 13:29 update-subscription.json\r\n-rw-------    1 u0_a438  u0_a438       2831 Oct 22 13:29 update-todo-checklist-item.json\r\n-rw-------    1 u0_a438  u0_a438      14011 Oct 22 13:29 update-todo-task-list.json\r\n-rw-------    1 u0_a438  u0_a438      13643 Oct 22 13:29 update-todo-task.json\r\n-rw-------    1 u0_a438  u0_a438       1841 Oct 22 13:29 upload-file-content.json\r\n-rw-------    1 u0_a438  u0_a438       1757 Oct 22 13:29 upload-my-profile-photo.json\r\n-rw-------    1 u0_a438  u0_a438        184 Oct 22 13:29 verify-login.json\r\n\r\n/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules:\r\ntotal 35\r\ndrwx------    2 u0_a438  u0_a438       3452 Nov  5 15:21 .\r\ndrwx------    6 u0_a438  u0_a438       3452 Oct 26 18:01 ..\r\n-rw-------    1 u0_a438  u0_a438       1727 Nov  5 15:21 joules_call_tool.json\r\n-rw-------    1 u0_a438  u0_a438        569 Nov  5 15:21 joules_describe_tool.json\r\n-rw-------    1 u0_a438  u0_a438       1344 Nov  5 15:21 joules_explain.json\r\n-rw-------    1 u0_a438  u0_a438       1617 Nov  5 15:21 joules_find_tools.json\r\n-rw-------    1 u0_a438  u0_a438        407 Nov  5 15:21 joules_job_status.json\r\n-rw-------    1 u0_a438  u0_a438       1101 Nov  5 15:21 joules_list_tools.json\r\n-rw-------    1 u0_a438  u0_a438        953 Nov  5 15:21 joules_read_resource.json\r\n"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "8c3e982b-41a6-472a-8283-439cedf3d12d",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_588815",
+        "name": "read_file",
+        "args": {
+          "Path": "/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_call_tool.json"
+        },
+        "status": "in_progress",
+        "kind": "read",
+        "title": "File ../../../../../data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_call_tool.json",
+        "locations": [
+          {
+            "path": "/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_call_tool.json"
+          }
+        ],
+        "rawInput": {
+          "Path": "/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_call_tool.json"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "8c3e982b-41a6-472a-8283-439cedf3d12d",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_588815",
+        "name": "read_file",
+        "args": {
+          "Path": "/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_call_tool.json"
+        },
+        "status": "completed",
+        "kind": "read",
+        "title": "File ../../../../../data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_call_tool.json",
+        "locations": [
+          {
+            "path": "/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_call_tool.json"
+          }
+        ],
+        "rawInput": {
+          "Path": "/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_call_tool.json"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "8c3e982b-41a6-472a-8283-439cedf3d12d",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_588827",
+        "name": "read_file",
+        "args": {
+          "Path": "/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_describe_tool.json"
+        },
+        "status": "in_progress",
+        "kind": "read",
+        "title": "File ../../../../../data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_describe_tool.json",
+        "locations": [
+          {
+            "path": "/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_describe_tool.json"
+          }
+        ],
+        "rawInput": {
+          "Path": "/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_describe_tool.json"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "8c3e982b-41a6-472a-8283-439cedf3d12d",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_588827",
+        "name": "read_file",
+        "args": {
+          "Path": "/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_describe_tool.json"
+        },
+        "status": "completed",
+        "kind": "read",
+        "title": "File ../../../../../data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_describe_tool.json",
+        "locations": [
+          {
+            "path": "/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_describe_tool.json"
+          }
+        ],
+        "rawInput": {
+          "Path": "/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_describe_tool.json"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "8c3e982b-41a6-472a-8283-439cedf3d12d",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_588833",
+        "name": "read_file",
+        "args": {
+          "Path": "/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_find_tools.json"
+        },
+        "status": "in_progress",
+        "kind": "read",
+        "title": "File ../../../../../data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_find_tools.json",
+        "locations": [
+          {
+            "path": "/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_find_tools.json"
+          }
+        ],
+        "rawInput": {
+          "Path": "/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_find_tools.json"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "8c3e982b-41a6-472a-8283-439cedf3d12d",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_588833",
+        "name": "read_file",
+        "args": {
+          "Path": "/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_find_tools.json"
+        },
+        "status": "completed",
+        "kind": "read",
+        "title": "File ../../../../../data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_find_tools.json",
+        "locations": [
+          {
+            "path": "/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_find_tools.json"
+          }
+        ],
+        "rawInput": {
+          "Path": "/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_find_tools.json"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "8c3e982b-41a6-472a-8283-439cedf3d12d",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_588839",
+        "name": "read_file",
+        "args": {
+          "Path": "/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_list_tools.json"
+        },
+        "status": "in_progress",
+        "kind": "read",
+        "title": "File ../../../../../data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_list_tools.json",
+        "locations": [
+          {
+            "path": "/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_list_tools.json"
+          }
+        ],
+        "rawInput": {
+          "Path": "/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_list_tools.json"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "8c3e982b-41a6-472a-8283-439cedf3d12d",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_588839",
+        "name": "read_file",
+        "args": {
+          "Path": "/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_list_tools.json"
+        },
+        "status": "completed",
+        "kind": "read",
+        "title": "File ../../../../../data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_list_tools.json",
+        "locations": [
+          {
+            "path": "/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_list_tools.json"
+          }
+        ],
+        "rawInput": {
+          "Path": "/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/mcp/staging-montana-mig_joulesapp_de-joules/joules_list_tools.json"
+        }
+      }
+    }
+  }
+]
