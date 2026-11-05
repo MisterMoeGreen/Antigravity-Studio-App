@@ -5341,6 +5341,7 @@
           targetBuf.isPinned = Boolean(window.AndroidApp.isLiveNotificationPinned(newCid));
         }
         updatePinButtonState(Boolean(targetBuf && targetBuf.isPinned));
+        updateBgTaskBar();
 
         // 6. Show loading spinner while canonical transcript is retrieved from storage
         showSessionLoading('Loading conversation...');
@@ -6105,6 +6106,7 @@
             state.activeTurns.clear();
             renderFullHistory(msg.messages || []);
             renderSessionDrawerList();
+            updateBgTaskBar();
             if (window.AndroidApp && typeof window.AndroidApp.setActiveSession === 'function') {
               window.AndroidApp.setActiveSession(msg.conversation_id);
             }
@@ -6372,18 +6374,12 @@
           }
 
           case 'background_task_started': {
-            const cid = msg.conversation_id;
-            if (!cid || cid === state.conversationId) {
-              handleBackgroundTaskStarted(msg);
-            }
+            handleBackgroundTaskStarted(msg);
             break;
           }
 
           case 'background_task_completed': {
-            const cid = msg.conversation_id;
-            if (!cid || cid === state.conversationId) {
-              handleBackgroundTaskCompleted(msg);
-            }
+            handleBackgroundTaskCompleted(msg);
             break;
           }
 
@@ -7194,14 +7190,20 @@
 
       function updateBgTaskBar() {
         if (!bgTaskStatusBar) return;
-        if (activeBgTasks.size === 0) {
+        const currentTasks = Array.from(activeBgTasks.values()).filter(t => !t.cid || t.cid === state.conversationId);
+        if (currentTasks.length === 0) {
+          bgTaskStatusBar.style.display = 'none';
+          bgTaskStatusBar.classList.remove('completed');
+          if (bgTaskTimer) {
+            clearInterval(bgTaskTimer);
+            bgTaskTimer = null;
+          }
           return;
         }
         bgTaskStatusBar.style.display = 'flex';
         bgTaskStatusBar.classList.remove('completed');
-        const tasks = Array.from(activeBgTasks.values());
-        const first = tasks[0];
-        const countSuffix = tasks.length > 1 ? ` (+${tasks.length - 1} more)` : '';
+        const first = currentTasks[0];
+        const countSuffix = currentTasks.length > 1 ? ` (+${currentTasks.length - 1} more)` : '';
         if (bgTaskLabel) {
           bgTaskLabel.textContent = (first.summary || 'Running background command...') + countSuffix;
         }
@@ -7210,12 +7212,13 @@
         }
         if (!bgTaskTimer) {
           bgTaskTimer = setInterval(() => {
-            if (activeBgTasks.size === 0) {
+            const activeForCur = Array.from(activeBgTasks.values()).filter(t => !t.cid || t.cid === state.conversationId);
+            if (activeForCur.length === 0) {
               clearInterval(bgTaskTimer);
               bgTaskTimer = null;
               return;
             }
-            const curFirst = Array.from(activeBgTasks.values())[0];
+            const curFirst = activeForCur[0];
             const elapsed = Math.max(0, (Date.now() - curFirst.startTime) / 1000);
             if (bgTaskTime) bgTaskTime.textContent = formatElapsed(elapsed);
           }, 1000);
@@ -7226,6 +7229,7 @@
         if (!msg || !msg.task_id) return;
         activeBgTasks.set(msg.task_id, {
           taskId: msg.task_id,
+          cid: msg.conversation_id,
           summary: msg.summary || 'Background Command',
           startTime: (msg.start_time ? msg.start_time * 1000 : Date.now()),
         });
@@ -7234,10 +7238,12 @@
 
       function handleBackgroundTaskCompleted(msg) {
         if (!msg || !msg.task_id) return;
+        const isCurrent = Boolean(!msg.conversation_id || msg.conversation_id === state.conversationId);
         activeBgTasks.delete(msg.task_id);
-        if (activeBgTasks.size > 0) {
+        const remainingForCur = Array.from(activeBgTasks.values()).filter(t => !t.cid || t.cid === state.conversationId);
+        if (remainingForCur.length > 0) {
           updateBgTaskBar();
-        } else {
+        } else if (isCurrent) {
           if (bgTaskTimer) {
             clearInterval(bgTaskTimer);
             bgTaskTimer = null;
@@ -7252,12 +7258,15 @@
             }
             if (bgTaskTime) bgTaskTime.textContent = 'DONE';
             setTimeout(() => {
-              if (activeBgTasks.size === 0 && bgTaskStatusBar) {
+              const currentRemaining = Array.from(activeBgTasks.values()).filter(t => !t.cid || t.cid === state.conversationId);
+              if (currentRemaining.length === 0 && bgTaskStatusBar) {
                 bgTaskStatusBar.style.display = 'none';
                 bgTaskStatusBar.classList.remove('completed');
               }
             }, 5000);
           }
+        } else {
+          updateBgTaskBar();
         }
       }
 
@@ -7564,6 +7573,7 @@
           updatePinButtonState(false);
           stopLiveProgress();
           resetSendButtonToIdle();
+          updateBgTaskBar();
           if (sessionTitle) {
             sessionTitle.textContent = 'New Conversation';
           }
