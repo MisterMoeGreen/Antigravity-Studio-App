@@ -3752,6 +3752,8 @@ class AgyProcessOrchestrator:
         persisted_cids = {p["conversation_id"] for p in persisted}
         active_entries = []
         for cid, ctx in self._sessions.items():
+            if not cid or cid in ("default", "null", "undefined") or cid.startswith("session-"):
+                continue
             if cid not in persisted_cids and (ctx.is_running or (cid == self.active_view_cid and not cid.startswith("session-"))):
                 active_entries.append({
                     "conversation_id": cid,
@@ -4105,7 +4107,7 @@ class AgyProcessOrchestrator:
         raw_cid = (conversation_id or "").strip()
         if raw_cid in self._migrated_cids:
             raw_cid = self._migrated_cids[raw_cid]
-        is_new_session = not raw_cid or raw_cid.startswith("session-")
+        is_new_session = not raw_cid or raw_cid.startswith("session-") or raw_cid in ("default", "null", "undefined")
 
         if is_new_session:
             if self._new_session_lock.locked():
@@ -4319,16 +4321,17 @@ class AgyProcessOrchestrator:
                     else:
                         try:
                             await self.acp_call("session/load", {"sessionId": cid}, timeout=15.0)
+                            acp_session_id = cid
                         except Exception:
                             try:
                                 await self.acp_call("session/resume", {"sessionId": cid}, timeout=15.0)
+                                acp_session_id = cid
                             except Exception:
                                 ws_uri = f"file://{ctx.workspace}" if ctx.workspace and Path(ctx.workspace).is_dir() else f"file://{HOME_DIR}"
                                 load_new = await self.acp_call("session/new", {"workspaceUris": [ws_uri]}, timeout=30.0)
                                 real_cid = str(load_new.get("sessionId") or cid)
-                                self._acp_sessions[cid] = real_cid
+                                acp_session_id = real_cid
                                 self._acp_session_to_cid[real_cid] = cid
-                        acp_session_id = self._acp_sessions.get(cid, cid)
                         self._acp_sessions[cid] = acp_session_id
                         self._acp_session_to_cid[acp_session_id] = cid
 
@@ -7698,7 +7701,7 @@ class AgyWebServer:
             raw_cid = str(data.get("conversation_id") or "").strip()
             if raw_cid in self.orchestrator._migrated_cids:
                 raw_cid = self.orchestrator._migrated_cids[raw_cid]
-            is_new = not raw_cid or raw_cid.startswith("session-")
+            is_new = not raw_cid or raw_cid.startswith("session-") or raw_cid in ("default", "null", "undefined")
             cid = "" if is_new else raw_cid
             raw_prompt = str(data.get("prompt") or "").strip()
             if self.orchestrator.is_authenticating and raw_prompt:
@@ -7837,7 +7840,7 @@ class AgyWebServer:
 
         if mtype == "switch_session":
             cid = str(data.get("conversation_id") or "").strip()
-            if not cid:
+            if not cid or cid in ("default", "null", "undefined"):
                 return
             if cid in self.orchestrator._migrated_cids:
                 cid = self.orchestrator._migrated_cids[cid]
