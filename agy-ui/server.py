@@ -2731,10 +2731,10 @@ class AntigravityStorageEngine:
                         "UPDATE conversation_summaries SET title = ? WHERE conversation_id = ?",
                         (clean_title, cid),
                     )
-                    try:
-                        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                    except Exception:
-                        pass
+                try:
+                    conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                except Exception:
+                    pass
                 conn.close()
             except Exception as exc:
                 logger.warning("Failed updating title in conversation_summaries.db: %s", exc)
@@ -2946,10 +2946,10 @@ class AntigravityStorageEngine:
                             "DELETE FROM conversations_fts WHERE conversation_id = ?",
                             (cid,),
                         )
-                        try:
-                            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                        except Exception:
-                            pass
+                    try:
+                        conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                    except Exception:
+                        pass
                     conn.close()
                 except Exception as exc:
                     logger.warning("Failed deleting %s from conversation_summaries.db: %s", cid, exc)
