@@ -4042,6 +4042,20 @@ class AgyProcessOrchestrator:
                 logger.error("Failed to initialize agy acp daemon: %s", e)
                 raise
 
+    async def close_acp_session(self, cid: str) -> None:
+        """Closes and evicts a specific session from the agy acp daemon (ARGON-18-02)."""
+        if not self.acp_proc or self.acp_proc.returncode is not None or not self._acp_initialized:
+            self._acp_sessions.pop(cid, None)
+            self._acp_session_to_cid.pop(cid, None)
+            return
+        try:
+            await self.acp_call("session/close", {"sessionId": cid}, timeout=5.0)
+        except Exception as e:
+            logger.debug("session/close during eviction for %s: %s", cid, e)
+        finally:
+            self._acp_sessions.pop(cid, None)
+            self._acp_session_to_cid.pop(cid, None)
+
     async def recycle_acp_daemon(self) -> None:
         """Terminates and restarts the agy acp daemon to purge in-memory conversation state (ARGON-18-02)."""
         async with self.acp_lock:
@@ -8475,11 +8489,12 @@ class AgyWebServer:
                 try:
                     rewound_prompt = self.storage.rewind_conversation(cid, step_index, prompt_text)
 
-                    # Recycle ACP daemon to completely purge Go in-memory conversation state (ARGON-18-02)
+                    # Close session in ACP daemon to cleanly evict it from Go in-memory conversation state (ARGON-18-02)
+                    # Note: We must NOT kill the entire ACP daemon process because that would abort parallel turns in other sessions!
                     try:
-                        await self.orchestrator.recycle_acp_daemon()
+                        await self.orchestrator.close_acp_session(cid)
                     except Exception as e:
-                        logger.debug("recycle_acp_daemon during rewind for %s: %s", cid, e)
+                        logger.debug("close_acp_session during rewind for %s: %s", cid, e)
 
                     # Reset memory state in orchestrator context
                     c_ctx = self.orchestrator._sessions.get(cid)
