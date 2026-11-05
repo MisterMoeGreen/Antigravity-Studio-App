@@ -2538,6 +2538,115 @@ class AntigravityStorageEngine:
 
     def __init__(self) -> None:
         self._init_sqlite_wal()
+        try:
+            self.purge_all_ghost_sessions()
+        except Exception:
+            pass
+
+    def purge_all_ghost_sessions(self) -> list[str]:
+        """Scans SQLite and Protobuf summaries stores, permanently pruning any orphan/ghost
+        sessions that lack on-disk trajectory databases and brain log directories.
+        """
+        ghost_cids: list[str] = []
+        if SUMMARIES_DB.exists():
+            try:
+                conn = sqlite3.connect(SUMMARIES_DB, timeout=5.0)
+                cur = conn.cursor()
+                cur.execute("SELECT conversation_id FROM conversation_summaries")
+                for row in cur.fetchall():
+                    cid = row[0]
+                    if not cid:
+                        continue
+                    conv_db = CONVERSATIONS_DIR / f"{cid}.db"
+                    brain_dir = BRAIN_DIR / cid
+                    if not conv_db.exists() and not brain_dir.exists():
+                        ghost_cids.append(cid)
+                if ghost_cids:
+                    for g_cid in ghost_cids:
+                        cur.execute("DELETE FROM conversation_summaries WHERE conversation_id = ?", (g_cid,))
+                        cur.execute("DELETE FROM conversations_fts WHERE conversation_id = ?", (g_cid,))
+                    conn.commit()
+                    try:
+                        conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                    except Exception:
+                        pass
+                conn.close()
+            except Exception as exc:
+                logger.warning("Error purging ghost sessions from SQLite: %s", exc)
+
+        def _rv(stream: io.BytesIO) -> Optional[int]:
+            res, shift = 0, 0
+            while True:
+                b = stream.read(1)
+                if not b:
+                    return None
+                byte = b[0]
+                res |= (byte & 0x7F) << shift
+                if not (byte & 0x80):
+                    return res
+                shift += 7
+
+        def _encode_varint(val: int) -> bytes:
+            res = bytearray()
+            while val > 0x7F:
+                res.append((val & 0x7F) | 0x80)
+                val >>= 7
+            res.append(val & 0x7F)
+            return bytes(res)
+
+        for filename in ("jetbox_summaries_proto.pb", "agyhub_summaries_proto.pb"):
+            pb_path = GEMINI_DIR / filename
+            if not pb_path.exists():
+                continue
+            try:
+                data = pb_path.read_bytes()
+                s = io.BytesIO(data)
+                new_data = bytearray()
+                pruned = False
+                while s.tell() < len(data):
+                    tag = _rv(s)
+                    if tag is None:
+                        break
+                    wire = tag & 0x7
+                    if wire == 2:
+                        length = _rv(s)
+                        if length is None:
+                            break
+                        rec_content = s.read(length)
+                        sub = io.BytesIO(rec_content)
+                        sub_tag = _rv(sub)
+                        sub_cid = ""
+                        if sub_tag is not None and (sub_tag >> 3) == 1 and (sub_tag & 0x7) == 2:
+                            sub_len = _rv(sub)
+                            sub_cid = sub.read(sub_len).decode("ascii", "replace") if sub_len else ""
+                        if sub_cid:
+                            conv_db = CONVERSATIONS_DIR / f"{sub_cid}.db"
+                            brain_dir = BRAIN_DIR / sub_cid
+                            if not conv_db.exists() and not brain_dir.exists():
+                                pruned = True
+                                if sub_cid not in ghost_cids:
+                                    ghost_cids.append(sub_cid)
+                                continue
+                        new_data.extend(_encode_varint(tag))
+                        new_data.extend(_encode_varint(length))
+                        new_data.extend(rec_content)
+                    elif wire == 0:
+                        val = _rv(s)
+                        if val is None:
+                            break
+                        new_data.extend(_encode_varint(tag))
+                        new_data.extend(_encode_varint(val))
+                    else:
+                        break
+                if pruned:
+                    pb_path.write_bytes(bytes(new_data))
+                    logger.info("Purged ghost sessions from %s, new size: %d", filename, len(new_data))
+            except Exception as exc:
+                logger.warning("Error pruning ghost sessions from %s: %s", filename, exc)
+
+        if ghost_cids:
+            logger.info("Purged %d ghost sessions: %s", len(ghost_cids), ghost_cids)
+        return ghost_cids
 
     def _init_sqlite_wal(self) -> None:
         if SUMMARIES_DB.exists():
@@ -4033,6 +4142,11 @@ class AgyProcessOrchestrator:
                 self.acp_proc = None
                 self._acp_initialized = False
 
+            try:
+                self.storage.purge_all_ghost_sessions()
+            except Exception:
+                pass
+
             proc_env = dict(os.environ)
             proc_env["AGY_AUTO_UPDATE"] = "1"
             proc_env["GIT_SSH_COMMAND"] = f"{USR_DIR}/bin/ssh -F {SSH_DIR}/config"
@@ -4123,6 +4237,10 @@ class AgyProcessOrchestrator:
                 self._acp_reader_task.cancel()
             if self._acp_stderr_task and not self._acp_stderr_task.done():
                 self._acp_stderr_task.cancel()
+            try:
+                self.storage.purge_all_ghost_sessions()
+            except Exception:
+                pass
         await self.ensure_acp_daemon()
 
     def ensure_bg_task_watcher(self) -> None:
