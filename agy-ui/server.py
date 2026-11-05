@@ -4089,6 +4089,44 @@ class AgyProcessOrchestrator:
         if self._bg_watcher_task is None or self._bg_watcher_task.done():
             self._bg_watcher_task = asyncio.create_task(self._bg_task_watcher_loop())
 
+    def stop_background_task(self, cid: str, task_key: str) -> bool:
+        """Terminates the processes associated with a background task (ARGON-18-04)."""
+        log_name = f"{task_key}.log"
+        killed_any = False
+        target_pids: set[int] = set()
+
+        for pid_entry in os.listdir("/proc"):
+            if not pid_entry.isdigit():
+                continue
+            fd_dir = f"/proc/{pid_entry}/fd"
+            try:
+                for fd in os.listdir(fd_dir):
+                    try:
+                        target = os.readlink(f"{fd_dir}/{fd}")
+                        if target.endswith(log_name) and (not cid or cid in target):
+                            target_pids.add(int(pid_entry))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        for p in target_pids:
+            try:
+                os.kill(p, signal.SIGTERM)
+                killed_any = True
+            except Exception:
+                pass
+
+        if target_pids:
+            time.sleep(0.1)
+            for p in target_pids:
+                try:
+                    os.kill(p, signal.SIGKILL)
+                except Exception:
+                    pass
+
+        return killed_any
+
     async def _bg_task_watcher_loop(self) -> None:
         """Monitors brain/<cid>/.system_generated/tasks and messages for background tasks (ARGON-18-03)."""
         try:
@@ -4224,6 +4262,8 @@ class AgyProcessOrchestrator:
                                 "conversation_id": cid,
                                 "title": f"Task Completed: {summary}",
                                 "status": f"Exit code {exit_code} ({int(duration)}s)",
+                                "preview": output_snippet[:200] if output_snippet else f"Exit code {exit_code} ({int(duration)}s)",
+                                "exit_code": exit_code,
                             })
                         else:
                             if task_key not in self.active_background_tasks and full_task_id not in self.active_background_tasks:
@@ -8260,6 +8300,49 @@ class AgyWebServer:
                         "detail": "Interrupted" if stopped else "Ready",
                     }
                 )
+            return
+
+        if mtype == "stop_background_task":
+            raw_task_id = str(data.get("task_id") or "").strip()
+            cid = str(data.get("conversation_id") or self.orchestrator.active_view_cid or "").strip()
+            m_id = re.search(r"task-\d+", raw_task_id)
+            task_key = m_id.group(0) if m_id else raw_task_id
+            full_task_id = f"{cid}/{task_key}" if cid else task_key
+
+            logger.info("User requested stop for background task: %s (cid: %s)", task_key, cid)
+            self.orchestrator.stop_background_task(cid, task_key)
+
+            t_info = self.orchestrator.active_background_tasks.pop(task_key, None) or self.orchestrator.active_background_tasks.pop(full_task_id, None)
+            self.orchestrator._seen_completed_tasks.add(task_key)
+            self.orchestrator._seen_completed_tasks.add(full_task_id)
+
+            summary = (t_info.get("summary") if t_info else None) or task_key
+            duration = (time.time() - t_info.get("start_time", time.time())) if t_info else 0.0
+
+            await self.broadcast({
+                "type": "background_task_completed",
+                "conversation_id": cid,
+                "task_id": task_key,
+                "summary": summary,
+                "exit_code": 137,
+                "duration": duration,
+                "output_snippet": "Task stopped by user.",
+            })
+            await self.broadcast({
+                "type": "system_card",
+                "conversation_id": cid,
+                "title": f"Task Stopped: {summary}",
+                "markdown": f"⏹ Background task `{task_key}` was stopped by the user.",
+                "level": "warning",
+            })
+            emit_native_notif_event({
+                "event": "task_completed",
+                "conversation_id": cid,
+                "title": f"Task Stopped: {summary}",
+                "status": "Stopped by user",
+                "preview": f"Task {task_key} stopped by user.",
+                "exit_code": 137,
+            })
             return
 
         if mtype == "list_sessions":

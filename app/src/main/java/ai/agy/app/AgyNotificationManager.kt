@@ -529,13 +529,18 @@ object AgyNotificationManager {
                     val newCid = obj.optString("conversation_id", "").trim()
                     migrateSession(context, oldCid, newCid)
                 }
-                "turn_complete" -> {
+                "turn_complete", "task_completed" -> {
+                    val summary = obj.optString("title", if (event == "task_completed") "Background task finished" else "")
+                    val status = obj.optString("status", "COMPLETED")
+                    val preview = obj.optString("preview", "")
+                    val finalPreview = if (preview.isNotBlank()) preview else status
+                    val exitCode = obj.optInt("exit_code", 0)
                     postCompletionNotification(
                         context = context,
                         conversationId = cid,
-                        sessionTitle = obj.optString("title", ""),
-                        rawPreview = obj.optString("preview", ""),
-                        turnStatus = obj.optString("status", "COMPLETED")
+                        sessionTitle = summary,
+                        rawPreview = finalPreview,
+                        turnStatus = if (exitCode == 0 && !status.equals("ERROR", ignoreCase = true)) "COMPLETED" else "ERROR"
                     )
                 }
             }

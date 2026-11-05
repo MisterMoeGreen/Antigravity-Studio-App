@@ -3579,6 +3579,16 @@
     </div>
   </section>
 
+  <!-- Background Tasks Bottom Sheet (ARGON-18-04) -->
+  <section class="bottom-sheet" id="bgTaskActionSheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">
+      <span>Active Background Jobs (<span id="bgTaskSheetCount">0</span>)</span>
+      <button class="icon-btn" id="btnCloseBgTaskAction" style="width:30px;height:30px;" title="Close"><svg class="fa-icon" viewBox="0 0 384 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M342.6 150.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L192 210.7 86.6 105.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L146.7 256 41.4 361.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192 301.3 297.4 406.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L237.3 256 342.6 150.6z"/></svg></button>
+    </div>
+    <div class="sheet-list" id="bgTaskSheetList" style="max-height:50vh; overflow-y:auto; padding-bottom:12px;"></div>
+  </section>
+
   <!-- Import Confirmation Bottom Sheet (v1.6.3 Spec 02) -->
   <section class="bottom-sheet" id="importConfirmSheet" aria-hidden="true">
     <div class="sheet-handle"></div>
@@ -5038,6 +5048,7 @@
           }
           setInitializingControlsState(false);
           updatePinButtonState(Boolean(defBuf && defBuf.isPinned));
+          updateBgTaskBar();
           return true;
         }
         return false;
@@ -6203,6 +6214,7 @@
                 sCard.conversation_id = newId;
               }
               renderSessionDrawerList();
+              updateBgTaskBar();
             }
             break;
           }
@@ -6233,6 +6245,7 @@
               setSendButtonRunning();
               ensureAssistantTurnCard(msg.turn_id, msg.model || state.model);
               startLiveProgress('Thinking...', buf.startTime);
+              updateBgTaskBar();
               scrollToBottom(true);
             }
             break;
@@ -7173,12 +7186,16 @@
       }
 
       // ---------------------------------------------------------------------
-      // Background Task Bar Telemetry (ARGON-18-03)
+      // Background Task Bar Telemetry & Job Control (ARGON-18-03, ARGON-18-04)
       // ---------------------------------------------------------------------
       const bgTaskStatusBar = document.getElementById('bgTaskStatusBar');
       const bgTaskLabel = document.getElementById('bgTaskLabel');
       const bgTaskTime = document.getElementById('bgTaskTime');
       const bgTaskIconWrap = document.getElementById('bgTaskIconWrap');
+      const bgTaskActionSheet = document.getElementById('bgTaskActionSheet');
+      const bgTaskSheetList = document.getElementById('bgTaskSheetList');
+      const bgTaskSheetCount = document.getElementById('bgTaskSheetCount');
+      const btnCloseBgTaskAction = document.getElementById('btnCloseBgTaskAction');
       let bgTaskTimer = null;
       const activeBgTasks = new Map();
 
@@ -7188,9 +7205,120 @@
         return `${m}:${s < 10 ? '0' : ''}${s}`;
       }
 
+      function getTasksForCurrentSession() {
+        return Array.from(activeBgTasks.values()).filter(t => {
+          if (!t.cid) return true;
+          if (t.cid === state.conversationId) return true;
+          if (!state.conversationId && state.isInitializingDraft) return true;
+          return false;
+        });
+      }
+
+      function openBgTaskActionSheet() {
+        renderBgTaskSheetList();
+        if (bgTaskActionSheet) {
+          bgTaskActionSheet.classList.add('open');
+          actionBackdrop.classList.add('open');
+        }
+      }
+
+      function closeBgTaskActionSheet() {
+        if (bgTaskActionSheet) {
+          bgTaskActionSheet.classList.remove('open');
+        }
+        if (!sessionActionSheet.classList.contains('open') && !bubbleActionSheet.classList.contains('open')) {
+          actionBackdrop.classList.remove('open');
+        }
+      }
+
+      if (btnCloseBgTaskAction) {
+        btnCloseBgTaskAction.addEventListener('click', closeBgTaskActionSheet);
+      }
+
+      if (bgTaskStatusBar) {
+        bgTaskStatusBar.addEventListener('click', () => {
+          if (bgTaskStatusBar.classList.contains('completed')) {
+            bgTaskStatusBar.style.display = 'none';
+            bgTaskStatusBar.classList.remove('completed');
+            return;
+          }
+          openBgTaskActionSheet();
+        });
+      }
+
+      function renderBgTaskSheetList() {
+        if (!bgTaskSheetList) return;
+        const currentTasks = getTasksForCurrentSession();
+        if (bgTaskSheetCount) {
+          bgTaskSheetCount.textContent = String(currentTasks.length);
+        }
+        if (currentTasks.length === 0) {
+          bgTaskSheetList.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px;">No active background jobs</div>';
+          closeBgTaskActionSheet();
+          return;
+        }
+
+        bgTaskSheetList.innerHTML = '';
+        currentTasks.forEach(t => {
+          const elapsed = Math.max(0, Math.floor((Date.now() - t.startTime) / 1000));
+          const row = document.createElement('div');
+          row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:12px;border-bottom:1px solid var(--border-subtle, rgba(255,255,255,0.06));gap:12px;';
+          row.dataset.taskId = t.taskId;
+
+          const left = document.createElement('div');
+          left.style.cssText = 'display:flex;align-items:center;gap:10px;min-width:0;flex:1;';
+          left.innerHTML = `
+            <span style="color:#60a5fa;display:inline-flex;flex-shrink:0;">
+              <svg class="fa-icon spin-icon" viewBox="0 0 512 512" style="width:16px;height:16px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M495.9 166.6c3.2 8.7 .5 18.4-6.4 24.6l-43.3 39.4c1.1 8.3 1.7 16.8 1.7 25.4s-.6 17.1-1.7 25.4l43.3 39.4c6.9 6.2 9.6 15.9 6.4 24.6c-4.4 11.9-9.7 23.3-15.8 34.3l-4.7 8.1c-6.6 11-14 21.4-22.1 31.2c-5.9 7.2-15.7 9.6-24.5 6.8l-55.7-17.7c-13.4 10.3-28.2 18.9-44 25.4l-12.5 57.1c-2 9.1-9 16.3-18.2 17.8c-13.8 2.3-28 3.5-42.5 3.5s-28.7-1.2-42.5-3.5c-9.2-1.5-16.2-8.7-18.2-17.8l-12.5-57.1c-15.8-6.5-30.6-15.1-44-25.4L83.1 425.9c-8.8 2.8-18.6 .3-24.5-6.8c-8.1-9.8-15.5-20.2-22.1-31.2l-4.7-8.1c-6.1-11-11.4-22.4-15.8-34.3c-3.2-8.7-.5-18.4 6.4-24.6l43.3-39.4C64.6 273.1 64 264.6 64 256s.6-17.1 1.7-25.4L22.4 191.2c-6.9-6.2-9.6-15.9-6.4-24.6c4.4-11.9 9.7-23.3 15.8-34.3l4.7-8.1c6.6-11 14-21.4 22.1-31.2c5.9-7.2 15.7-9.6 24.5-6.8l55.7 17.7c13.4-10.3 28.2-18.9 44-25.4l12.5-57.1c2-9.1 9-16.3 18.2-17.8C227.3 1.2 241.5 0 256 0s28.7 1.2 42.5 3.5c9.2 1.5 16.2 8.7 18.2 17.8l12.5 57.1c15.8 6.5 30.6 15.1 44 25.4l55.7-17.7c8.8-2.8 18.6-.3 24.5 6.8c8.1 9.8 15.5 20.2 22.1 31.2l4.7 8.1c6.1 11 11.4 22.4 15.8 34.3zM256 336a80 80 0 1 0 0-160 80 80 0 1 0 0 160z"/></svg>
+            </span>
+            <div style="min-width:0;flex:1;">
+              <div style="font-size:13px;font-weight:600;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(t.summary || 'Background Job')}</div>
+              <div style="font-size:11px;color:var(--text-muted);display:flex;gap:8px;align-items:center;margin-top:2px;">
+                <code>${escapeHtml(t.taskId)}</code>
+                <span>•</span>
+                <span class="bg-task-sheet-time" data-task-id="${escapeHtml(t.taskId)}">${formatElapsed(elapsed)}</span>
+              </div>
+            </div>
+          `;
+
+          const btnStop = document.createElement('button');
+          btnStop.className = 'btn-stop-bg-task';
+          btnStop.style.cssText = 'background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.35);color:#f87171;font-weight:600;font-size:12px;padding:6px 14px;border-radius:6px;cursor:pointer;flex-shrink:0;touch-action:manipulation;';
+          btnStop.textContent = 'Stop';
+          btnStop.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            btnStop.disabled = true;
+            btnStop.textContent = 'Stopping...';
+            btnStop.style.opacity = '0.7';
+            sendWs({
+              type: 'stop_background_task',
+              task_id: t.taskId,
+              conversation_id: t.cid || state.conversationId
+            });
+          });
+
+          row.appendChild(left);
+          row.appendChild(btnStop);
+          bgTaskSheetList.appendChild(row);
+        });
+      }
+
+      function updateBgTaskSheetTimers() {
+        if (!bgTaskActionSheet || !bgTaskActionSheet.classList.contains('open') || !bgTaskSheetList) return;
+        const timeEls = bgTaskSheetList.querySelectorAll('.bg-task-sheet-time');
+        timeEls.forEach(el => {
+          const tId = el.dataset.taskId;
+          const t = activeBgTasks.get(tId);
+          if (t) {
+            const elapsed = Math.max(0, Math.floor((Date.now() - t.startTime) / 1000));
+            el.textContent = formatElapsed(elapsed);
+          }
+        });
+      }
+
       function updateBgTaskBar() {
         if (!bgTaskStatusBar) return;
-        const currentTasks = Array.from(activeBgTasks.values()).filter(t => !t.cid || t.cid === state.conversationId);
+        const currentTasks = getTasksForCurrentSession();
         if (currentTasks.length === 0) {
           bgTaskStatusBar.style.display = 'none';
           bgTaskStatusBar.classList.remove('completed');
@@ -7198,12 +7326,13 @@
             clearInterval(bgTaskTimer);
             bgTaskTimer = null;
           }
+          closeBgTaskActionSheet();
           return;
         }
         bgTaskStatusBar.style.display = 'flex';
         bgTaskStatusBar.classList.remove('completed');
         const first = currentTasks[0];
-        const countSuffix = currentTasks.length > 1 ? ` (+${currentTasks.length - 1} more)` : '';
+        const countSuffix = currentTasks.length > 1 ? ` (+${currentTasks.length - 1} more) • Tap to view` : ' • Tap to stop';
         if (bgTaskLabel) {
           bgTaskLabel.textContent = (first.summary || 'Running background command...') + countSuffix;
         }
@@ -7212,15 +7341,17 @@
         }
         if (!bgTaskTimer) {
           bgTaskTimer = setInterval(() => {
-            const activeForCur = Array.from(activeBgTasks.values()).filter(t => !t.cid || t.cid === state.conversationId);
+            const activeForCur = getTasksForCurrentSession();
             if (activeForCur.length === 0) {
               clearInterval(bgTaskTimer);
               bgTaskTimer = null;
+              closeBgTaskActionSheet();
               return;
             }
             const curFirst = activeForCur[0];
             const elapsed = Math.max(0, (Date.now() - curFirst.startTime) / 1000);
             if (bgTaskTime) bgTaskTime.textContent = formatElapsed(elapsed);
+            updateBgTaskSheetTimers();
           }, 1000);
         }
       }
@@ -7234,6 +7365,9 @@
       function handleBackgroundTaskStarted(msg) {
         if (!msg || !msg.task_id) return;
         const tId = canonicalTaskId(msg.task_id);
+        if (!state.conversationId && msg.conversation_id && state.isInitializingDraft) {
+          adoptDraftSessionId(msg.conversation_id);
+        }
         activeBgTasks.set(tId, {
           taskId: tId,
           cid: msg.conversation_id,
@@ -7241,15 +7375,21 @@
           startTime: (msg.start_time ? msg.start_time * 1000 : Date.now()),
         });
         updateBgTaskBar();
+        if (bgTaskActionSheet && bgTaskActionSheet.classList.contains('open')) {
+          renderBgTaskSheetList();
+        }
       }
 
       function handleBackgroundTaskCompleted(msg) {
         if (!msg || !msg.task_id) return;
         const tId = canonicalTaskId(msg.task_id);
-        const isCurrent = Boolean(!msg.conversation_id || msg.conversation_id === state.conversationId);
+        const isCurrent = Boolean(!msg.conversation_id || msg.conversation_id === state.conversationId || (!state.conversationId && state.isInitializingDraft));
         activeBgTasks.delete(tId);
         activeBgTasks.delete(msg.task_id);
-        const remainingForCur = Array.from(activeBgTasks.values()).filter(t => !t.cid || t.cid === state.conversationId);
+        const remainingForCur = getTasksForCurrentSession();
+        if (bgTaskActionSheet && bgTaskActionSheet.classList.contains('open')) {
+          renderBgTaskSheetList();
+        }
         if (remainingForCur.length > 0) {
           updateBgTaskBar();
         } else if (isCurrent) {
@@ -7257,6 +7397,7 @@
             clearInterval(bgTaskTimer);
             bgTaskTimer = null;
           }
+          closeBgTaskActionSheet();
           if (bgTaskStatusBar) {
             bgTaskStatusBar.classList.add('completed');
             if (bgTaskLabel) {
@@ -7267,7 +7408,7 @@
             }
             if (bgTaskTime) bgTaskTime.textContent = 'DONE';
             setTimeout(() => {
-              const currentRemaining = Array.from(activeBgTasks.values()).filter(t => !t.cid || t.cid === state.conversationId);
+              const currentRemaining = getTasksForCurrentSession();
               if (currentRemaining.length === 0 && bgTaskStatusBar) {
                 bgTaskStatusBar.style.display = 'none';
                 bgTaskStatusBar.classList.remove('completed');
@@ -7371,6 +7512,9 @@
       function closeActionSheets() {
         sessionActionSheet.classList.remove('open');
         bubbleActionSheet.classList.remove('open');
+        const bgTaskSheet = document.getElementById('bgTaskActionSheet');
+        if (bgTaskSheet) bgTaskSheet.classList.remove('open');
+        if (typeof closeBgTaskActionSheet === 'function') closeBgTaskActionSheet();
         actionBackdrop.classList.remove('open');
         targetBubbleInfo = null;
       }
@@ -7491,6 +7635,8 @@
         bottomSheet.classList.remove('open');
         sessionActionSheet.classList.remove('open');
         bubbleActionSheet.classList.remove('open');
+        const bgTaskSheet = document.getElementById('bgTaskActionSheet');
+        if (bgTaskSheet) bgTaskSheet.classList.remove('open');
         const confirmSheet = document.getElementById('importConfirmSheet');
         if (confirmSheet) confirmSheet.classList.remove('open');
         const passwordSheet = document.getElementById('importPasswordSheet');
