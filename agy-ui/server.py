@@ -3617,6 +3617,13 @@ class AntigravityStorageEngine:
         text = re.sub(r"<ADDITIONAL_METADATA>.*?</ADDITIONAL_METADATA>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
         text = re.sub(r"<USER_SETTINGS_CHANGE>.*?</USER_SETTINGS_CHANGE>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
         text = re.sub(r"<SYSTEM_MESSAGE>.*?</SYSTEM_MESSAGE>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
+
+        # 4. Filter automated background task completion prompts
+        if re.search(r"The background task\s+['\"].*?['\"]\s+has finished", text, re.IGNORECASE):
+            return ""
+        if re.search(r"\[Background Task (Completed|Stopped)\]", text, re.IGNORECASE):
+            return ""
+
         return text.strip()
 
     @staticmethod
@@ -4339,11 +4346,11 @@ class AgyProcessOrchestrator:
                                             f"Exit Code: {exit_code}\n"
                                             f"Duration: {int(duration)}s\n"
                                             f"Command Output:\n"
-                                            f"{output_snippet[:600] if output_snippet else '(No output)'}\n"
-                                            f"</SYSTEM_MESSAGE>\n"
+                                            f"{output_snippet[:600] if output_snippet else '(No output)'}\n\n"
                                             f"The background task '{summary}' has finished successfully with exit code 0. "
                                             f"Please give a concise status update to the user. "
-                                            f"DO NOT restart, re-run, or spawn new background tasks unless explicitly requested by the user."
+                                            f"DO NOT restart, re-run, or spawn new background tasks unless explicitly requested by the user.\n"
+                                            f"</SYSTEM_MESSAGE>"
                                         )
                                         asyncio.create_task(self.execute_turn(notice_prompt, conversation_id=cid))
                                 except Exception as turn_exc:
