@@ -1028,6 +1028,50 @@
       transform: scale(0.92);
     }
 
+    /* Active Background Task Bar (ARGON-18-03) */
+    .bg-task-status-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: #93c5fd;
+      background: rgba(59, 130, 246, 0.12);
+      border: 1px solid rgba(59, 130, 246, 0.25);
+      border-radius: 6px;
+      padding: 3px 8px;
+      user-select: none;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      width: 100%;
+      min-width: 0;
+      flex-shrink: 0;
+      line-height: 1.3;
+      margin-bottom: 3px;
+      transition: all 0.2s ease;
+    }
+    .bg-task-status-bar.completed {
+      color: #86efac;
+      background: rgba(34, 197, 94, 0.12);
+      border-color: rgba(34, 197, 94, 0.25);
+    }
+    .bg-task-status-bar .spin-icon {
+      animation: liveSpin 1.2s linear infinite;
+    }
+    .bg-task-label {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 500;
+    }
+    .bg-task-time {
+      font-family: var(--font-mono, monospace);
+      font-size: 10px;
+      opacity: 0.8;
+      flex-shrink: 0;
+    }
+
     /* Workspace Status Bar & Git Badge in Chat Composer (Above Input) */
     .workspace-status-bar {
       display: flex;
@@ -3257,6 +3301,15 @@
       <!-- Attachment Previews -->
       <div id="attachmentPreviewBar" class="attachment-bar" style="display:none;"></div>
 
+
+      <!-- Active Background Task Bar (ARGON-18-03) -->
+      <div class="bg-task-status-bar" id="bgTaskStatusBar" style="display:none;">
+        <span class="bg-task-icon-wrap" id="bgTaskIconWrap">
+          <svg class="fa-icon spin-icon" viewBox="0 0 512 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M495.9 166.6c3.2 8.7 .5 18.4-6.4 24.6l-43.3 39.4c1.1 8.3 1.7 16.8 1.7 25.4s-.6 17.1-1.7 25.4l43.3 39.4c6.9 6.2 9.6 15.9 6.4 24.6c-4.4 11.9-9.7 23.3-15.8 34.3l-4.7 8.1c-6.6 11-14 21.4-22.1 31.2c-5.9 7.2-15.7 9.6-24.5 6.8l-55.7-17.7c-13.4 10.3-28.2 18.9-44 25.4l-12.5 57.1c-2 9.1-9 16.3-18.2 17.8c-13.8 2.3-28 3.5-42.5 3.5s-28.7-1.2-42.5-3.5c-9.2-1.5-16.2-8.7-18.2-17.8l-12.5-57.1c-15.8-6.5-30.6-15.1-44-25.4L83.1 425.9c-8.8 2.8-18.6 .3-24.5-6.8c-8.1-9.8-15.5-20.2-22.1-31.2l-4.7-8.1c-6.1-11-11.4-22.4-15.8-34.3c-3.2-8.7-.5-18.4 6.4-24.6l43.3-39.4C64.6 273.1 64 264.6 64 256s.6-17.1 1.7-25.4L22.4 191.2c-6.9-6.2-9.6-15.9-6.4-24.6c4.4-11.9 9.7-23.3 15.8-34.3l4.7-8.1c6.6-11 14-21.4 22.1-31.2c5.9-7.2 15.7-9.6 24.5-6.8l55.7 17.7c13.4-10.3 28.2-18.9 44-25.4l12.5-57.1c2-9.1 9-16.3 18.2-17.8C227.3 1.2 241.5 0 256 0s28.7 1.2 42.5 3.5c9.2 1.5 16.2 8.7 18.2 17.8l12.5 57.1c15.8 6.5 30.6 15.1 44 25.4l55.7-17.7c8.8-2.8 18.6-.3 24.5 6.8c8.1 9.8 15.5 20.2 22.1 31.2l4.7 8.1c6.1 11 11.4 22.4 15.8 34.3zM256 336a80 80 0 1 0 0-160 80 80 0 1 0 0 160z"/></svg>
+        </span>
+        <span class="bg-task-label" id="bgTaskLabel">Running background task...</span>
+        <span class="bg-task-time" id="bgTaskTime">0:00</span>
+      </div>
 
       <!-- Active Workspace Status Line with Git Branch (Above Input Row) -->
       <div class="workspace-status-bar" id="workspaceStatusBar" title="Active directory. Tap to switch folder.">
@@ -6318,6 +6371,22 @@
             break;
           }
 
+          case 'background_task_started': {
+            const cid = msg.conversation_id;
+            if (!cid || cid === state.conversationId) {
+              handleBackgroundTaskStarted(msg);
+            }
+            break;
+          }
+
+          case 'background_task_completed': {
+            const cid = msg.conversation_id;
+            if (!cid || cid === state.conversationId) {
+              handleBackgroundTaskCompleted(msg);
+            }
+            break;
+          }
+
           case 'session_rewound':
             state.activeTurns.clear();
             stopLiveProgress();
@@ -7105,6 +7174,91 @@
           </div>
         `;
         appendRowToChat(row);
+      }
+
+      // ---------------------------------------------------------------------
+      // Background Task Bar Telemetry (ARGON-18-03)
+      // ---------------------------------------------------------------------
+      const bgTaskStatusBar = document.getElementById('bgTaskStatusBar');
+      const bgTaskLabel = document.getElementById('bgTaskLabel');
+      const bgTaskTime = document.getElementById('bgTaskTime');
+      const bgTaskIconWrap = document.getElementById('bgTaskIconWrap');
+      let bgTaskTimer = null;
+      const activeBgTasks = new Map();
+
+      function formatElapsed(sec) {
+        const m = Math.floor(sec / 60);
+        const s = Math.floor(sec % 60);
+        return `${m}:${s < 10 ? '0' : ''}${s}`;
+      }
+
+      function updateBgTaskBar() {
+        if (!bgTaskStatusBar) return;
+        if (activeBgTasks.size === 0) {
+          return;
+        }
+        bgTaskStatusBar.style.display = 'flex';
+        bgTaskStatusBar.classList.remove('completed');
+        const tasks = Array.from(activeBgTasks.values());
+        const first = tasks[0];
+        const countSuffix = tasks.length > 1 ? ` (+${tasks.length - 1} more)` : '';
+        if (bgTaskLabel) {
+          bgTaskLabel.textContent = (first.summary || 'Running background command...') + countSuffix;
+        }
+        if (bgTaskIconWrap) {
+          bgTaskIconWrap.innerHTML = `<svg class="fa-icon spin-icon" viewBox="0 0 512 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M495.9 166.6c3.2 8.7 .5 18.4-6.4 24.6l-43.3 39.4c1.1 8.3 1.7 16.8 1.7 25.4s-.6 17.1-1.7 25.4l43.3 39.4c6.9 6.2 9.6 15.9 6.4 24.6c-4.4 11.9-9.7 23.3-15.8 34.3l-4.7 8.1c-6.6 11-14 21.4-22.1 31.2c-5.9 7.2-15.7 9.6-24.5 6.8l-55.7-17.7c-13.4 10.3-28.2 18.9-44 25.4l-12.5 57.1c-2 9.1-9 16.3-18.2 17.8c-13.8 2.3-28 3.5-42.5 3.5s-28.7-1.2-42.5-3.5c-9.2-1.5-16.2-8.7-18.2-17.8l-12.5-57.1c-15.8-6.5-30.6-15.1-44-25.4L83.1 425.9c-8.8 2.8-18.6 .3-24.5-6.8c-8.1-9.8-15.5-20.2-22.1-31.2l-4.7-8.1c-6.1-11-11.4-22.4-15.8-34.3c-3.2-8.7-.5-18.4 6.4-24.6l43.3-39.4C64.6 273.1 64 264.6 64 256s.6-17.1 1.7-25.4L22.4 191.2c-6.9-6.2-9.6-15.9-6.4-24.6c4.4-11.9 9.7-23.3 15.8-34.3l4.7-8.1c6.6-11 14-21.4 22.1-31.2c5.9-7.2 15.7-9.6 24.5-6.8l55.7 17.7c13.4-10.3 28.2-18.9 44-25.4l12.5-57.1c2-9.1 9-16.3 18.2-17.8C227.3 1.2 241.5 0 256 0s28.7 1.2 42.5 3.5c9.2 1.5 16.2 8.7 18.2 17.8l12.5 57.1c15.8 6.5 30.6 15.1 44 25.4l55.7-17.7c8.8-2.8 18.6-.3 24.5 6.8c8.1 9.8 15.5 20.2 22.1 31.2l4.7 8.1c6.1 11 11.4 22.4 15.8 34.3zM256 336a80 80 0 1 0 0-160 80 80 0 1 0 0 160z"/></svg>`;
+        }
+        if (!bgTaskTimer) {
+          bgTaskTimer = setInterval(() => {
+            if (activeBgTasks.size === 0) {
+              clearInterval(bgTaskTimer);
+              bgTaskTimer = null;
+              return;
+            }
+            const curFirst = Array.from(activeBgTasks.values())[0];
+            const elapsed = Math.max(0, (Date.now() - curFirst.startTime) / 1000);
+            if (bgTaskTime) bgTaskTime.textContent = formatElapsed(elapsed);
+          }, 1000);
+        }
+      }
+
+      function handleBackgroundTaskStarted(msg) {
+        if (!msg || !msg.task_id) return;
+        activeBgTasks.set(msg.task_id, {
+          taskId: msg.task_id,
+          summary: msg.summary || 'Background Command',
+          startTime: (msg.start_time ? msg.start_time * 1000 : Date.now()),
+        });
+        updateBgTaskBar();
+      }
+
+      function handleBackgroundTaskCompleted(msg) {
+        if (!msg || !msg.task_id) return;
+        activeBgTasks.delete(msg.task_id);
+        if (activeBgTasks.size > 0) {
+          updateBgTaskBar();
+        } else {
+          if (bgTaskTimer) {
+            clearInterval(bgTaskTimer);
+            bgTaskTimer = null;
+          }
+          if (bgTaskStatusBar) {
+            bgTaskStatusBar.classList.add('completed');
+            if (bgTaskLabel) {
+              bgTaskLabel.textContent = `✓ ${msg.summary || 'Task'} completed (${Math.round(msg.duration || 0)}s)`;
+            }
+            if (bgTaskIconWrap) {
+              bgTaskIconWrap.innerHTML = `<svg class="fa-icon" viewBox="0 0 448 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M438.6 105.4c12.5 12.5 12.5 32.8 0 45.3l-256 256c-12.5 12.5-32.8 12.5-45.3 0l-128-128c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0L160 338.7 393.4 105.4c12.5-12.5 32.8-12.5 45.3 0z"/></svg>`;
+            }
+            if (bgTaskTime) bgTaskTime.textContent = 'DONE';
+            setTimeout(() => {
+              if (activeBgTasks.size === 0 && bgTaskStatusBar) {
+                bgTaskStatusBar.style.display = 'none';
+                bgTaskStatusBar.classList.remove('completed');
+              }
+            }, 5000);
+          }
+        }
       }
 
       function jumpToBottom(smooth = false) {

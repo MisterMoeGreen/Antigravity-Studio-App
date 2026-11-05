@@ -3040,6 +3040,20 @@ class AntigravityStorageEngine:
         if not SUMMARIES_DB.exists():
             raise FileNotFoundError("conversation_summaries.db not found")
 
+        src_db = CONVERSATIONS_DIR / f"{cid}.db"
+        src_brain = BRAIN_DIR / cid
+        src_annot = ANNOTATIONS_DIR / f"{cid}.pbtxt"
+
+        # Pre-condition validation: fail fast if source files do not exist (ARGON-18-04)
+        if not src_db.exists():
+            raise FileNotFoundError(f"Cannot branch conversation {cid}: database {src_db.name} not found")
+        if not src_brain.exists() or not src_brain.is_dir():
+            raise FileNotFoundError(f"Cannot branch conversation {cid}: transcript directory {src_brain.name} not found")
+
+        dst_db = CONVERSATIONS_DIR / f"{new_cid}.db"
+        dst_brain = BRAIN_DIR / new_cid
+        dst_annot = ANNOTATIONS_DIR / f"{new_cid}.pbtxt"
+
         conn = sqlite3.connect(SUMMARIES_DB, timeout=5.0)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -3053,65 +3067,83 @@ class AntigravityStorageEngine:
             base_title = self.get_conversation_meta(cid).get("title") or row_dict.get("title") or "Conversation"
             branch_name = f"[Branch] {base_title}"
 
-        # 1. Clone conversation SQLite database using online backup
-        src_db = CONVERSATIONS_DIR / f"{cid}.db"
-        dst_db = CONVERSATIONS_DIR / f"{new_cid}.db"
-        if src_db.exists():
+        # 1. Clone conversation SQLite database using online backup with atomic rollback
+        try:
+            src_conn = sqlite3.connect(f"file:{src_db}?mode=ro", uri=True, timeout=5.0)
+            dst_conn = sqlite3.connect(dst_db, timeout=5.0)
+            src_conn.backup(dst_conn)
             try:
-                src_conn = sqlite3.connect(f"file:{src_db}?mode=ro", uri=True, timeout=5.0)
-                dst_conn = sqlite3.connect(dst_db, timeout=5.0)
-                src_conn.backup(dst_conn)
-                try:
-                    dst_conn.execute(
-                        "UPDATE trajectory_meta SET trajectory_id = ?, cascade_id = ?",
-                        (new_cid, new_cid),
-                    )
-                    dst_conn.commit()
-                except Exception:
-                    pass
-                dst_conn.close()
-                src_conn.close()
-            except Exception as exc:
-                logger.warning("Could not backup conversation db for branch: %s", exc)
+                dst_conn.execute(
+                    "UPDATE trajectory_meta SET trajectory_id = ?, cascade_id = ?",
+                    (new_cid, new_cid),
+                )
+                dst_conn.commit()
+            except Exception:
+                pass
+            dst_conn.close()
+            src_conn.close()
+        except Exception as exc:
+            if dst_db.exists():
+                dst_db.unlink()
+            raise RuntimeError(f"Failed to clone conversation database for branch: {exc}") from exc
 
         # 2. Clone brain directory (logs, transcripts, scratch)
-        src_brain = BRAIN_DIR / cid
-        dst_brain = BRAIN_DIR / new_cid
-        if src_brain.exists() and src_brain.is_dir():
-            try:
-                shutil.copytree(src_brain, dst_brain, symlinks=True, ignore_dangling_symlinks=True)
-            except Exception as exc:
-                logger.warning("Could not copy brain directory for branch: %s", exc)
+        try:
+            shutil.copytree(src_brain, dst_brain, symlinks=True, ignore_dangling_symlinks=True)
+        except Exception as exc:
+            if dst_db.exists():
+                dst_db.unlink()
+            if dst_brain.exists():
+                shutil.rmtree(dst_brain, ignore_errors=True)
+            raise RuntimeError(f"Failed to clone brain directory for branch: {exc}") from exc
 
-        # 3. Insert record into conversation_summaries
-        with conn:
-            cursor.execute(
-                """
-                INSERT INTO conversation_summaries (
-                    conversation_id, title, preview, step_count, last_modified_time,
-                    workspace_uris, status, source, project_id, agent_name,
-                    parent_conversation_id, nesting_depth, last_user_input_time,
-                    last_user_input_step_index, app_data_dir, group_id
-                ) VALUES (?, ?, ?, ?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?, ?)
-                """,
-                (
-                    new_cid,
-                    branch_name,
-                    row_dict.get("preview", ""),
-                    row_dict.get("step_count", 0),
-                    row_dict.get("workspace_uris", str(HOME_DIR)),
-                    row_dict.get("status", "CASCADE_RUN_STATUS_IDLE"),
-                    row_dict.get("source", ""),
-                    row_dict.get("project_id", ""),
-                    row_dict.get("agent_name", "antigravity"),
-                    cid,
-                    (row_dict.get("nesting_depth") or 0) + 1,
-                    row_dict.get("last_user_input_step_index", -1),
-                    row_dict.get("app_data_dir", ""),
-                    row_dict.get("group_id", ""),
-                ),
-            )
-        conn.close()
+        # 3. Clone annotations metadata
+        if src_annot.exists():
+            try:
+                shutil.copy2(src_annot, dst_annot)
+            except Exception as exc:
+                logger.debug("Could not copy annotations for branch: %s", exc)
+
+        # 4. Insert record into conversation_summaries
+        try:
+            with conn:
+                cursor.execute(
+                    """
+                    INSERT INTO conversation_summaries (
+                        conversation_id, title, preview, step_count, last_modified_time,
+                        workspace_uris, status, source, project_id, agent_name,
+                        parent_conversation_id, nesting_depth, last_user_input_time,
+                        last_user_input_step_index, app_data_dir, group_id
+                    ) VALUES (?, ?, ?, ?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?, ?)
+                    """,
+                    (
+                        new_cid,
+                        branch_name,
+                        row_dict.get("preview", ""),
+                        row_dict.get("step_count", 0),
+                        row_dict.get("workspace_uris", str(HOME_DIR)),
+                        row_dict.get("status", "CASCADE_RUN_STATUS_IDLE"),
+                        row_dict.get("source", ""),
+                        row_dict.get("project_id", ""),
+                        row_dict.get("agent_name", "antigravity"),
+                        cid,
+                        (row_dict.get("nesting_depth") or 0) + 1,
+                        row_dict.get("last_user_input_step_index", -1),
+                        row_dict.get("app_data_dir", ""),
+                        row_dict.get("group_id", ""),
+                    ),
+                )
+        except Exception as exc:
+            if dst_db.exists():
+                dst_db.unlink()
+            if dst_brain.exists():
+                shutil.rmtree(dst_brain, ignore_errors=True)
+            if dst_annot.exists():
+                dst_annot.unlink()
+            raise RuntimeError(f"Failed to record branched conversation: {exc}") from exc
+        finally:
+            conn.close()
+
         logger.info("Branched conversation %s -> %s ('%s')", cid, new_cid, branch_name)
         return {"conversation_id": new_cid, "title": branch_name}
 
@@ -3277,18 +3309,28 @@ class AntigravityStorageEngine:
                             except Exception as exc:
                                 logger.warning("Could not truncate chunk file %s: %s", chunk_file, exc)
 
-            # 3. Truncate SQLite conversation database
+            # 3. Truncate SQLite conversation database and purge cached generation context (ARGON-18-02)
             conv_db = CONVERSATIONS_DIR / f"{cid}.db"
             remaining_steps = 0
             if conv_db.exists():
                 try:
                     conn = sqlite3.connect(conv_db, timeout=5.0)
                     with conn:
-                        for tbl in ("steps", "gen_metadata", "executor_metadata", "parent_references", "battle_mode_infos"):
+                        for tbl in ("steps", "executor_metadata", "parent_references", "battle_mode_infos"):
                             try:
                                 conn.execute(f"DELETE FROM {tbl} WHERE idx >= ?", (target_step,))
                             except Exception:
                                 pass
+                        # Clear gen_metadata completely to purge cached LLM context buffer (idx: 0)
+                        try:
+                            conn.execute("DELETE FROM gen_metadata")
+                        except Exception:
+                            pass
+                        # Flush and truncate WAL journal frames immediately
+                        try:
+                            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                        except Exception:
+                            pass
                     c = conn.cursor()
                     try:
                         c.execute("SELECT COUNT(*) FROM steps")
@@ -3789,6 +3831,11 @@ class AgyProcessOrchestrator:
         self._acp_reader_task: Optional[asyncio.Task] = None
         self._acp_stderr_task: Optional[asyncio.Task] = None
 
+        # Background Task Telemetry (ARGON-18-03)
+        self.active_background_tasks: dict[str, dict[str, Any]] = {}
+        self._bg_watcher_task: Optional[asyncio.Task] = None
+        self._seen_bg_message_files: set[str] = set()
+
     def get_all_sessions(self, search_query: str = "", limit: int = 100) -> list[dict[str, Any]]:
         persisted = self.storage.list_conversations(search_query=search_query, limit=limit)
         persisted_cids = {p["conversation_id"] for p in persisted}
@@ -3994,6 +4041,98 @@ class AgyProcessOrchestrator:
             except Exception as e:
                 logger.error("Failed to initialize agy acp daemon: %s", e)
                 raise
+
+    async def recycle_acp_daemon(self) -> None:
+        """Terminates and restarts the agy acp daemon to purge in-memory conversation state (ARGON-18-02)."""
+        async with self.acp_lock:
+            if self.acp_proc is not None:
+                try:
+                    self.acp_proc.terminate()
+                    await asyncio.wait_for(self.acp_proc.wait(), timeout=3.0)
+                except Exception:
+                    try:
+                        self.acp_proc.kill()
+                    except Exception:
+                        pass
+                self.acp_proc = None
+                self._acp_initialized = False
+            self._acp_sessions.clear()
+            self._acp_session_to_cid.clear()
+            self._pending_requests.clear()
+            if self._acp_reader_task and not self._acp_reader_task.done():
+                self._acp_reader_task.cancel()
+            if self._acp_stderr_task and not self._acp_stderr_task.done():
+                self._acp_stderr_task.cancel()
+        await self.ensure_acp_daemon()
+
+    def ensure_bg_task_watcher(self) -> None:
+        """Starts the background task completion watcher if not already running (ARGON-18-03)."""
+        if self._bg_watcher_task is None or self._bg_watcher_task.done():
+            self._bg_watcher_task = asyncio.create_task(self._bg_task_watcher_loop())
+
+    async def _bg_task_watcher_loop(self) -> None:
+        """Monitors brain/<cid>/.system_generated/messages for background task completions (ARGON-18-03)."""
+        while True:
+            try:
+                await asyncio.sleep(1.0)
+                if not self.active_background_tasks:
+                    continue
+
+                for task_id, t_info in list(self.active_background_tasks.items()):
+                    cid = t_info["conversation_id"]
+                    msg_dir = BRAIN_DIR / cid / ".system_generated" / "messages"
+
+                    completed = False
+                    exit_code = 0
+                    snippet = ""
+
+                    if msg_dir.exists() and msg_dir.is_dir():
+                        for mfile in list(msg_dir.glob("*.json")):
+                            if mfile.name in self._seen_bg_message_files:
+                                continue
+                            try:
+                                content_str = mfile.read_text(encoding="utf-8", errors="replace")
+                                if f'Task id "{task_id}" finished with result' in content_str or f'Task id "{task_id}" was canceled' in content_str:
+                                    self._seen_bg_message_files.add(mfile.name)
+                                    completed = True
+                                    m_code = re.search(r"code\s+(\d+)", content_str)
+                                    if m_code:
+                                        exit_code = int(m_code.group(1))
+                                    m_out = re.search(r"Command output:\n(.*?)(?:\nLog:|$)", content_str, re.DOTALL)
+                                    snippet = m_out.group(1).strip() if m_out else ""
+                                    break
+                            except Exception:
+                                pass
+
+                    if completed:
+                        duration = time.time() - t_info["start_time"]
+                        self.active_background_tasks.pop(task_id, None)
+                        await self.broadcast({
+                            "type": "background_task_completed",
+                            "conversation_id": cid,
+                            "task_id": task_id,
+                            "summary": t_info["summary"],
+                            "exit_code": exit_code,
+                            "duration": duration,
+                            "output_snippet": snippet[:600],
+                        })
+                        await self.broadcast({
+                            "type": "system_card",
+                            "conversation_id": cid,
+                            "title": f"Task Finished: {t_info['summary']}",
+                            "markdown": f"⚙️ Background task `{task_id}` finished with exit code `{exit_code}` ({int(duration)}s).\n\n```\n{snippet[:400] if snippet else 'Completed successfully.'}\n```",
+                            "level": "success" if exit_code == 0 else "error",
+                        })
+                        emit_native_notif_event({
+                            "event": "task_completed",
+                            "conversation_id": cid,
+                            "title": f"Task Completed: {t_info['summary']}",
+                            "status": f"Exit code {exit_code} ({int(duration)}s)",
+                        })
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.debug("Error in background task watcher loop: %s", exc)
 
     async def acp_call(self, method: str, params: dict[str, Any], timeout: float = 60.0) -> dict[str, Any]:
         if not self.acp_proc or self.acp_proc.returncode is not None or not self.acp_proc.stdin:
@@ -4459,12 +4598,16 @@ class AgyProcessOrchestrator:
                         ws_uri = f"file://{ctx.workspace}" if ctx.workspace and Path(ctx.workspace).is_dir() else f"file://{HOME_DIR}"
                         try:
                             try:
-                                await self.acp_call("session/load", {"sessionId": cid, "workspaceUris": [ws_uri]}, timeout=15.0)
+                                # Primary: session/resume restores session without replaying history (ARGON-18-01)
+                                await self.acp_call("session/resume", {"sessionId": cid, "workspaceUris": [ws_uri]}, timeout=15.0)
                                 acp_session_id = cid
-                            except Exception:
+                            except Exception as resume_err:
+                                logger.debug("session/resume failed for %s, falling back to session/load: %s", cid, resume_err)
                                 try:
-                                    await self.acp_call("session/resume", {"sessionId": cid, "workspaceUris": [ws_uri]}, timeout=15.0)
+                                    await self.acp_call("session/load", {"sessionId": cid, "workspaceUris": [ws_uri]}, timeout=15.0)
                                     acp_session_id = cid
+                                    # Allow stdout pipe replay to drain before un-suppressing
+                                    await asyncio.sleep(0.3)
                                 except Exception:
                                     load_new = await self.acp_call("session/new", {"workspaceUris": [ws_uri]}, timeout=30.0)
                                     real_cid = str(load_new.get("sessionId") or cid)
@@ -4473,7 +4616,7 @@ class AgyProcessOrchestrator:
                             self._acp_sessions[cid] = acp_session_id
                             self._acp_session_to_cid[acp_session_id] = cid
                         finally:
-                            await asyncio.sleep(0.05)
+                            await asyncio.sleep(0.1)
                             self._acp_loading_sessions.discard(cid)
 
                 # Synchronize dynamic configuration options
@@ -5370,17 +5513,35 @@ class AgyProcessOrchestrator:
                                 t_args = tc["args"]
                             break
 
-                # Detect background task launches from command execution
+                # Detect background task launches from command execution (ARGON-18-03)
                 out_str = str(t_out)
                 if "Tool is running as a background task with task id:" in out_str:
                     m_bg = re.search(r"task id:\s*([^\s\n]+)", out_str)
                     if m_bg:
                         bg_task_id = m_bg.group(1).strip()
+                        task_summary = t_args.get("toolSummary") or t_args.get("CommandLine") or "Background Command"
+                        t_info = {
+                            "task_id": bg_task_id,
+                            "conversation_id": ctx.conversation_id,
+                            "summary": task_summary,
+                            "command": str(t_args.get("CommandLine") or ""),
+                            "start_time": time.time(),
+                        }
+                        self.active_background_tasks[bg_task_id] = t_info
+                        self.ensure_bg_task_watcher()
+
+                        await self.broadcast({
+                            "type": "background_task_started",
+                            "conversation_id": ctx.conversation_id,
+                            "task_id": bg_task_id,
+                            "summary": task_summary,
+                            "start_time": t_info["start_time"],
+                        })
                         await self.broadcast({
                             "type": "system_card",
                             "conversation_id": ctx.conversation_id,
                             "title": "Background Task Active",
-                            "markdown": f"⚙️ Running in background: `{bg_task_id}`\n\nThe agent will report progress automatically when finished.",
+                            "markdown": f"⚙️ Running in background: `{task_summary}` (`{bg_task_id}`)\n\nThe agent will report progress automatically when finished.",
                             "level": "info",
                         })
 
@@ -8027,19 +8188,24 @@ class AgyWebServer:
             history = self.prepare_session_history_messages(ctx, raw_history)
             branch = get_git_branch(ctx.workspace)
 
-            # Pre-load session into ACP daemon with replay suppression
+            # Pre-load session into ACP daemon with session/resume (ARGON-18-01)
             if cid not in self.orchestrator._acp_sessions and self.orchestrator.acp_proc and self.orchestrator._acp_initialized:
                 async def _preload(target_cid: str, target_ws: str) -> None:
                     self.orchestrator._acp_loading_sessions.add(target_cid)
                     try:
                         ws_uri = f"file://{target_ws}" if target_ws and Path(target_ws).is_dir() else f"file://{HOME_DIR}"
-                        await self.orchestrator.acp_call("session/load", {"sessionId": target_cid, "workspaceUris": [ws_uri]}, timeout=15.0)
+                        try:
+                            # Primary: session/resume restores session without replaying past events
+                            await self.orchestrator.acp_call("session/resume", {"sessionId": target_cid, "workspaceUris": [ws_uri]}, timeout=15.0)
+                        except Exception:
+                            await self.orchestrator.acp_call("session/load", {"sessionId": target_cid, "workspaceUris": [ws_uri]}, timeout=15.0)
+                            await asyncio.sleep(0.3)
                         self.orchestrator._acp_sessions[target_cid] = target_cid
                         self.orchestrator._acp_session_to_cid[target_cid] = target_cid
                     except Exception as e:
-                        logger.debug("Preload session/load failed for %s: %s", target_cid, e)
+                        logger.debug("Preload session failed for %s: %s", target_cid, e)
                     finally:
-                        await asyncio.sleep(0.05)
+                        await asyncio.sleep(0.1)
                         self.orchestrator._acp_loading_sessions.discard(target_cid)
                 asyncio.create_task(_preload(cid, ws))
 
@@ -8064,6 +8230,17 @@ class AgyWebServer:
                     } if (ctx.is_running and ctx.active_snapshot) else None,
                 }
             )
+
+            # Restore active background task indicators for this session (ARGON-18-03)
+            for bg_id, bg_info in list(self.orchestrator.active_background_tasks.items()):
+                if bg_info.get("conversation_id") == cid:
+                    await self.broadcast({
+                        "type": "background_task_started",
+                        "conversation_id": cid,
+                        "task_id": bg_id,
+                        "summary": bg_info["summary"],
+                        "start_time": bg_info["start_time"],
+                    })
             await self.broadcast(
                 {
                     "type": "config_updated",
@@ -8298,14 +8475,11 @@ class AgyWebServer:
                 try:
                     rewound_prompt = self.storage.rewind_conversation(cid, step_index, prompt_text)
 
-                    # Close and release session in ACP daemon so it forgets rewound turns
-                    if self.orchestrator.acp_proc and self.orchestrator._acp_initialized:
-                        try:
-                            await self.orchestrator.acp_call("session/close", {"sessionId": cid}, timeout=5.0)
-                        except Exception as e:
-                            logger.debug("session/close during rewind for %s: %s", cid, e)
-                    self.orchestrator._acp_sessions.pop(cid, None)
-                    self.orchestrator._acp_session_to_cid.pop(cid, None)
+                    # Recycle ACP daemon to completely purge Go in-memory conversation state (ARGON-18-02)
+                    try:
+                        await self.orchestrator.recycle_acp_daemon()
+                    except Exception as e:
+                        logger.debug("recycle_acp_daemon during rewind for %s: %s", cid, e)
 
                     # Reset memory state in orchestrator context
                     c_ctx = self.orchestrator._sessions.get(cid)
