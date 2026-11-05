@@ -7225,10 +7225,17 @@
         }
       }
 
+      function canonicalTaskId(rawId) {
+        if (!rawId) return '';
+        const m = String(rawId).match(/task-\d+/);
+        return m ? m[0] : String(rawId);
+      }
+
       function handleBackgroundTaskStarted(msg) {
         if (!msg || !msg.task_id) return;
-        activeBgTasks.set(msg.task_id, {
-          taskId: msg.task_id,
+        const tId = canonicalTaskId(msg.task_id);
+        activeBgTasks.set(tId, {
+          taskId: tId,
           cid: msg.conversation_id,
           summary: msg.summary || 'Background Command',
           startTime: (msg.start_time ? msg.start_time * 1000 : Date.now()),
@@ -7238,7 +7245,9 @@
 
       function handleBackgroundTaskCompleted(msg) {
         if (!msg || !msg.task_id) return;
+        const tId = canonicalTaskId(msg.task_id);
         const isCurrent = Boolean(!msg.conversation_id || msg.conversation_id === state.conversationId);
+        activeBgTasks.delete(tId);
         activeBgTasks.delete(msg.task_id);
         const remainingForCur = Array.from(activeBgTasks.values()).filter(t => !t.cid || t.cid === state.conversationId);
         if (remainingForCur.length > 0) {

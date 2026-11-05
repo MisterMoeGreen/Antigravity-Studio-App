@@ -3746,6 +3746,9 @@ class SessionExecutionContext:
     turn_count: int = 0
     created_at: float = field(default_factory=time.time)
     last_activity: float = field(default_factory=time.time)
+    last_tool_summary: str = ""
+    last_tool_command: str = ""
+    last_tool_time: float = 0.0
 
 # Retain SessionConfig as backwards-compatible alias
 SessionConfig = SessionExecutionContext
@@ -3835,6 +3838,7 @@ class AgyProcessOrchestrator:
         self.active_background_tasks: dict[str, dict[str, Any]] = {}
         self._bg_watcher_task: Optional[asyncio.Task] = None
         self._seen_bg_message_files: set[str] = set()
+        self._seen_completed_tasks: set[str] = set()
 
     def get_all_sessions(self, search_query: str = "", limit: int = 100) -> list[dict[str, Any]]:
         persisted = self.storage.list_conversations(search_query=search_query, limit=limit)
@@ -4037,6 +4041,7 @@ class AgyProcessOrchestrator:
                     timeout=15.0,
                 )
                 self._acp_initialized = True
+                self.ensure_bg_task_watcher()
                 logger.info("agy acp daemon initialized: %s", init_res.get("agentInfo", {}))
             except Exception as e:
                 logger.error("Failed to initialize agy acp daemon: %s", e)
@@ -4085,64 +4090,181 @@ class AgyProcessOrchestrator:
             self._bg_watcher_task = asyncio.create_task(self._bg_task_watcher_loop())
 
     async def _bg_task_watcher_loop(self) -> None:
-        """Monitors brain/<cid>/.system_generated/messages for background task completions (ARGON-18-03)."""
+        """Monitors brain/<cid>/.system_generated/tasks and messages for background tasks (ARGON-18-03)."""
+        try:
+            if BRAIN_DIR.exists():
+                for mfile in BRAIN_DIR.glob("*/.system_generated/messages/*.json"):
+                    self._seen_bg_message_files.add(mfile.name)
+                    try:
+                        content = mfile.read_text(encoding="utf-8", errors="replace")
+                        for m in re.finditer(r"task-(\d+)", content):
+                            self._seen_completed_tasks.add(f"task-{m.group(1)}")
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.debug("Failed initial scan of message files: %s", e)
+
         while True:
             try:
                 await asyncio.sleep(1.0)
-                if not self.active_background_tasks:
+                if not BRAIN_DIR.exists():
                     continue
 
-                for task_id, t_info in list(self.active_background_tasks.items()):
-                    cid = t_info["conversation_id"]
-                    msg_dir = BRAIN_DIR / cid / ".system_generated" / "messages"
+                cids_to_check: set[str] = set(self._sessions.keys())
+                if self.active_view_cid:
+                    cids_to_check.add(self.active_view_cid)
 
-                    completed = False
-                    exit_code = 0
-                    snippet = ""
+                try:
+                    for cid_dir in BRAIN_DIR.iterdir():
+                        if cid_dir.is_dir() and (cid_dir / ".system_generated").is_dir():
+                            cids_to_check.add(cid_dir.name)
+                except Exception:
+                    pass
 
-                    if msg_dir.exists() and msg_dir.is_dir():
-                        for mfile in list(msg_dir.glob("*.json")):
-                            if mfile.name in self._seen_bg_message_files:
-                                continue
+                for cid in list(cids_to_check):
+                    sg_dir = BRAIN_DIR / cid / ".system_generated"
+                    tasks_dir = sg_dir / "tasks"
+                    msgs_dir = sg_dir / "messages"
+
+                    if not tasks_dir.is_dir():
+                        continue
+
+                    try:
+                        task_files = list(tasks_dir.glob("task-*.log"))
+                    except Exception:
+                        task_files = []
+
+                    for task_file in task_files:
+                        task_key = task_file.stem  # e.g. "task-1297"
+                        full_task_id = f"{cid}/{task_key}"
+
+                        if task_key in self._seen_completed_tasks or full_task_id in self._seen_completed_tasks:
+                            continue
+
+                        is_completed = False
+                        completion_data: Optional[dict[str, Any]] = None
+
+                        if msgs_dir.is_dir():
                             try:
-                                content_str = mfile.read_text(encoding="utf-8", errors="replace")
-                                if f'Task id "{task_id}" finished with result' in content_str or f'Task id "{task_id}" was canceled' in content_str:
-                                    self._seen_bg_message_files.add(mfile.name)
-                                    completed = True
-                                    m_code = re.search(r"code\s+(\d+)", content_str)
-                                    if m_code:
-                                        exit_code = int(m_code.group(1))
-                                    m_out = re.search(r"Command output:\n(.*?)(?:\nLog:|$)", content_str, re.DOTALL)
-                                    snippet = m_out.group(1).strip() if m_out else ""
-                                    break
+                                for mfile in list(msgs_dir.glob("*.json")):
+                                    if mfile.name in self._seen_bg_message_files:
+                                        continue
+                                    try:
+                                        content_str = mfile.read_text(encoding="utf-8", errors="replace")
+                                        if f'"{full_task_id}"' in content_str or f'"{task_key}"' in content_str or f"/{task_key}" in content_str:
+                                            self._seen_bg_message_files.add(mfile.name)
+                                            is_completed = True
+                                            try:
+                                                completion_data = json.loads(content_str)
+                                            except Exception:
+                                                completion_data = {"content": content_str}
+                                            break
+                                    except Exception:
+                                        pass
                             except Exception:
                                 pass
 
-                    if completed:
-                        duration = time.time() - t_info["start_time"]
-                        self.active_background_tasks.pop(task_id, None)
-                        await self.broadcast({
-                            "type": "background_task_completed",
-                            "conversation_id": cid,
-                            "task_id": task_id,
-                            "summary": t_info["summary"],
-                            "exit_code": exit_code,
-                            "duration": duration,
-                            "output_snippet": snippet[:600],
-                        })
-                        await self.broadcast({
-                            "type": "system_card",
-                            "conversation_id": cid,
-                            "title": f"Task Finished: {t_info['summary']}",
-                            "markdown": f"⚙️ Background task `{task_id}` finished with exit code `{exit_code}` ({int(duration)}s).\n\n```\n{snippet[:400] if snippet else 'Completed successfully.'}\n```",
-                            "level": "success" if exit_code == 0 else "error",
-                        })
-                        emit_native_notif_event({
-                            "event": "task_completed",
-                            "conversation_id": cid,
-                            "title": f"Task Completed: {t_info['summary']}",
-                            "status": f"Exit code {exit_code} ({int(duration)}s)",
-                        })
+                        if is_completed:
+                            self._seen_completed_tasks.add(task_key)
+                            self._seen_completed_tasks.add(full_task_id)
+
+                            t_info = self.active_background_tasks.pop(task_key, None) or self.active_background_tasks.pop(full_task_id, None)
+
+                            exit_code = 0
+                            duration = 0.0
+                            output_snippet = ""
+                            summary = ""
+
+                            if completion_data:
+                                content = completion_data.get("content", "")
+                                m_code = re.search(r"code\s+(\d+)", content)
+                                if m_code:
+                                    exit_code = int(m_code.group(1))
+                                m_out = re.search(r"Command output:\n(.*?)(?:\nLog:|$)", content, re.DOTALL)
+                                output_snippet = m_out.group(1).strip() if m_out else ""
+                                summary = completion_data.get("renderDetails", {}).get("messageTitle", "").replace(" finished", "")
+                                if not summary:
+                                    try:
+                                        args_raw = completion_data.get("sourceMetadata", {}).get("tool", {}).get("toolCall", {}).get("argumentsJson", "{}")
+                                        args_obj = json.loads(args_raw)
+                                        summary = args_obj.get("toolSummary") or args_obj.get("CommandLine") or ""
+                                    except Exception:
+                                        pass
+
+                            if t_info:
+                                if not summary:
+                                    summary = t_info.get("summary") or "Background Command"
+                                duration = time.time() - t_info.get("start_time", time.time())
+                            else:
+                                if not summary:
+                                    summary = "Background Command"
+                                try:
+                                    duration = max(0.0, time.time() - task_file.stat().st_mtime)
+                                except Exception:
+                                    duration = 0.0
+
+                            await self.broadcast({
+                                "type": "background_task_completed",
+                                "conversation_id": cid,
+                                "task_id": task_key,
+                                "summary": summary,
+                                "exit_code": exit_code,
+                                "duration": duration,
+                                "output_snippet": output_snippet[:600],
+                            })
+                            await self.broadcast({
+                                "type": "system_card",
+                                "conversation_id": cid,
+                                "title": f"Task Finished: {summary}",
+                                "markdown": f"⚙️ Background task `{task_key}` finished with exit code `{exit_code}` ({int(duration)}s).\n\n```\n{output_snippet[:400] if output_snippet else 'Completed successfully.'}\n```",
+                                "level": "success" if exit_code == 0 else "error",
+                            })
+                            emit_native_notif_event({
+                                "event": "task_completed",
+                                "conversation_id": cid,
+                                "title": f"Task Completed: {summary}",
+                                "status": f"Exit code {exit_code} ({int(duration)}s)",
+                            })
+                        else:
+                            if task_key not in self.active_background_tasks and full_task_id not in self.active_background_tasks:
+                                try:
+                                    age = time.time() - task_file.stat().st_mtime
+                                except Exception:
+                                    age = 0
+                                if age > 7200:
+                                    self._seen_completed_tasks.add(task_key)
+                                    continue
+
+                                ctx = self._sessions.get(cid)
+                                summary = (getattr(ctx, "last_tool_summary", None) if ctx else None) or "Background Command"
+                                cmd = (getattr(ctx, "last_tool_command", None) if ctx else None) or ""
+                                try:
+                                    start_time = (getattr(ctx, "last_tool_time", None) if ctx else None) or task_file.stat().st_mtime
+                                except Exception:
+                                    start_time = time.time()
+
+                                t_info = {
+                                    "task_id": task_key,
+                                    "conversation_id": cid,
+                                    "summary": summary,
+                                    "command": cmd,
+                                    "start_time": start_time,
+                                }
+                                self.active_background_tasks[task_key] = t_info
+                                await self.broadcast({
+                                    "type": "background_task_started",
+                                    "conversation_id": cid,
+                                    "task_id": task_key,
+                                    "summary": summary,
+                                    "start_time": start_time,
+                                })
+                                await self.broadcast({
+                                    "type": "system_card",
+                                    "conversation_id": cid,
+                                    "title": "Background Task Active",
+                                    "markdown": f"⚙️ Running in background: `{summary}` (`{task_key}`)\n\nThe agent will report progress automatically when finished.",
+                                    "level": "info",
+                                })
             except asyncio.CancelledError:
                 break
             except Exception as exc:
@@ -4616,21 +4738,14 @@ class AgyProcessOrchestrator:
                                 await self.acp_call("session/resume", {"sessionId": cid, "workspaceUris": [ws_uri]}, timeout=15.0)
                                 acp_session_id = cid
                             except Exception as resume_err:
-                                logger.debug("session/resume failed for %s, falling back to session/load: %s", cid, resume_err)
-                                try:
-                                    await self.acp_call("session/load", {"sessionId": cid, "workspaceUris": [ws_uri]}, timeout=15.0)
-                                    acp_session_id = cid
-                                    # Allow stdout pipe replay to drain before un-suppressing
-                                    await asyncio.sleep(0.3)
-                                except Exception:
-                                    load_new = await self.acp_call("session/new", {"workspaceUris": [ws_uri]}, timeout=30.0)
-                                    real_cid = str(load_new.get("sessionId") or cid)
-                                    acp_session_id = real_cid
-                                    self._acp_session_to_cid[real_cid] = cid
+                                logger.debug("session/resume failed for %s, falling back to session/new: %s", cid, resume_err)
+                                load_new = await self.acp_call("session/new", {"workspaceUris": [ws_uri]}, timeout=30.0)
+                                real_cid = str(load_new.get("sessionId") or cid)
+                                acp_session_id = real_cid
+                                self._acp_session_to_cid[real_cid] = cid
                             self._acp_sessions[cid] = acp_session_id
                             self._acp_session_to_cid[acp_session_id] = cid
                         finally:
-                            await asyncio.sleep(0.1)
                             self._acp_loading_sessions.discard(cid)
 
                 # Synchronize dynamic configuration options
@@ -5481,6 +5596,9 @@ class AgyProcessOrchestrator:
                 t_id = update.get("toolCallId") or f"tc-{uuid.uuid4().hex[:6]}"
                 t_name = update.get("name") or "tool"
                 t_args = update.get("args") or {}
+                ctx.last_tool_summary = str(t_args.get("toolSummary") or t_args.get("CommandLine") or t_name)
+                ctx.last_tool_command = str(t_args.get("CommandLine") or "")
+                ctx.last_tool_time = time.time()
                 tool_record = {
                     "turn_id": turn_id,
                     "tool_id": t_id,
@@ -5526,38 +5644,6 @@ class AgyProcessOrchestrator:
                             if not t_args and tc.get("args"):
                                 t_args = tc["args"]
                             break
-
-                # Detect background task launches from command execution (ARGON-18-03)
-                out_str = str(t_out)
-                if "Tool is running as a background task with task id:" in out_str:
-                    m_bg = re.search(r"task id:\s*([^\s\n]+)", out_str)
-                    if m_bg:
-                        bg_task_id = m_bg.group(1).strip()
-                        task_summary = t_args.get("toolSummary") or t_args.get("CommandLine") or "Background Command"
-                        t_info = {
-                            "task_id": bg_task_id,
-                            "conversation_id": ctx.conversation_id,
-                            "summary": task_summary,
-                            "command": str(t_args.get("CommandLine") or ""),
-                            "start_time": time.time(),
-                        }
-                        self.active_background_tasks[bg_task_id] = t_info
-                        self.ensure_bg_task_watcher()
-
-                        await self.broadcast({
-                            "type": "background_task_started",
-                            "conversation_id": ctx.conversation_id,
-                            "task_id": bg_task_id,
-                            "summary": task_summary,
-                            "start_time": t_info["start_time"],
-                        })
-                        await self.broadcast({
-                            "type": "system_card",
-                            "conversation_id": ctx.conversation_id,
-                            "title": "Background Task Active",
-                            "markdown": f"⚙️ Running in background: `{task_summary}` (`{bg_task_id}`)\n\nThe agent will report progress automatically when finished.",
-                            "level": "info",
-                        })
 
                 await self.broadcast({
                     "type": "tool_call",
@@ -8202,27 +8288,6 @@ class AgyWebServer:
             history = self.prepare_session_history_messages(ctx, raw_history)
             branch = get_git_branch(ctx.workspace)
 
-            # Pre-load session into ACP daemon with session/resume (ARGON-18-01)
-            if cid not in self.orchestrator._acp_sessions and self.orchestrator.acp_proc and self.orchestrator._acp_initialized:
-                async def _preload(target_cid: str, target_ws: str) -> None:
-                    self.orchestrator._acp_loading_sessions.add(target_cid)
-                    try:
-                        ws_uri = f"file://{target_ws}" if target_ws and Path(target_ws).is_dir() else f"file://{HOME_DIR}"
-                        try:
-                            # Primary: session/resume restores session without replaying past events
-                            await self.orchestrator.acp_call("session/resume", {"sessionId": target_cid, "workspaceUris": [ws_uri]}, timeout=15.0)
-                        except Exception:
-                            await self.orchestrator.acp_call("session/load", {"sessionId": target_cid, "workspaceUris": [ws_uri]}, timeout=15.0)
-                            await asyncio.sleep(0.3)
-                        self.orchestrator._acp_sessions[target_cid] = target_cid
-                        self.orchestrator._acp_session_to_cid[target_cid] = target_cid
-                    except Exception as e:
-                        logger.debug("Preload session failed for %s: %s", target_cid, e)
-                    finally:
-                        await asyncio.sleep(0.1)
-                        self.orchestrator._acp_loading_sessions.discard(target_cid)
-                asyncio.create_task(_preload(cid, ws))
-
             await self.broadcast(
                 {
                     "type": "session_history",
@@ -9357,6 +9422,7 @@ async def main() -> None:
             pass
 
     await app.start_ipc_server()
+    app.orchestrator.ensure_bg_task_watcher()
     try:
         async with serve(
             app.ws_handler,
