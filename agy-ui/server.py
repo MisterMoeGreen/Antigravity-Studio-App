@@ -2921,6 +2921,13 @@ class AntigravityStorageEngine:
             except Exception as exc:
                 logger.warning("Failed pruning %s from %s: %s", cid, filename, exc)
 
+        # Clean up any lingering temporary proto files
+        for tmp_file in GEMINI_DIR.glob("*summaries_proto.pb*.tmp"):
+            try:
+                tmp_file.unlink()
+            except Exception:
+                pass
+
     def delete_conversation(self, conversation_id: str) -> bool:
         cid = conversation_id.strip()
         if not cid:
@@ -2933,6 +2940,10 @@ class AntigravityStorageEngine:
                     with conn:
                         conn.execute(
                             "DELETE FROM conversation_summaries WHERE conversation_id = ?",
+                            (cid,),
+                        )
+                        conn.execute(
+                            "DELETE FROM conversations_fts WHERE conversation_id = ?",
                             (cid,),
                         )
                         try:
