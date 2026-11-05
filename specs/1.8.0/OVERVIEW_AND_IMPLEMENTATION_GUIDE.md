@@ -48,7 +48,7 @@ flowchart TD
 | **Startup Latency** | 1,500ms – 2,500ms ELF cold-start + config parse per turn. | **0ms** (persistent connection ready instantly). |
 | **Prompt Token Caching** | Low/inconsistent cache reuse across process exits. | **High cache reuse** (e.g. 11,300+ cached tokens retained). |
 | **Mid-Turn Dynamic Steering** | Impossible (turn must be killed or run to finish). | Supported natively via subsequent `session/prompt` calls. |
-| **Turn Cancellation** | Requires abrupt OS signals (`SIGINT`/`SIGTERM`/`SIGKILL`). | Clean `session/cancel` JSON-RPC notification. |
+| **Turn Interruption & Stop** | Requires abrupt OS signals (`SIGINT`/`SIGTERM`/`SIGKILL`). | Clean `session/cancel` notification (Classic Stop-First touch mode). |
 | **Protocol Format** | Unstructured stdout NDJSON scraping with heuristic regex. | Standard JSON-RPC 2.0 with explicit request IDs & types. |
 | **Model & Mode Switching** | Requires restarting the CLI with different command flags. | Dynamic in-flight reconfiguration via `session/set_config_option`. |
 | **Multi-Session Handling** | Multiplexes multiple CLI process subprocesses. | Single daemon multiplexes sessions via `sessionId` routing. |

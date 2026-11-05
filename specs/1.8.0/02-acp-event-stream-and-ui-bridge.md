@@ -115,39 +115,26 @@ When a session is created or prompt begins, ACP automatically scans installed cu
 
 ---
 
-## 4. Mid-Turn Steering & Dynamic Interruption
+## 4. Turn Cancellation & Touch Control Flow
 
-### 4.1 Native Mid-Turn Prompt Steering
-In `agy -p`, the prompt input field was locked while generation was in progress. 
+### 4.1 Decision: Classic Stop-First Mode (Option 2)
+Following UX review for mobile touchscreens, Antigravity Studio v1.8.0 standardizes on **Classic Stop-First Mode**:
+* **Mobile Touch Ergonomics**: While generation is active, the chat input bar is locked/disabled and the action button displays exclusively as **■ (Stop)**. This prevents accidental partial-message submissions or touch-keyboard layout conflicts while the viewport is actively streaming markdown or tool results.
+* **Stop Action Flow**:
+  1. The user taps **■ (Stop)**.
+  2. The frontend sends WebSocket message `{ "type": "abort_generation", "conversation_id": "<id>" }`.
+  3. `server.py` issues a clean, one-way JSON-RPC notification to the ACP daemon:
+     ```json
+     {
+       "jsonrpc": "2.0",
+       "method": "session/cancel",
+       "params": {
+         "sessionId": "<sessionId>"
+       }
+     }
+     ```
+  4. The daemon immediately halts generation and returns `stopReason: "cancelled"`.
+  5. The UI unlocks the prompt bar and restores the **Send** button, allowing the user to type their correction or next instruction.
 
-Under `agy acp`, a user can type a redirection message into the chat bar while the model is actively thinking or executing tools. Sending `session/prompt` mid-turn:
-1. Causes the ACP server to immediately finish or halt the preceding turn with `stopReason: "end_turn"` or `"interrupted"`.
-2. Evaluates the new prompt payload in the same continuous session context.
-3. Redirects agent action without dropping state or tearing down sockets.
-
-### 4.2 Graceful Turn Cancellation (`session/cancel`)
-When the user taps the **"Stop"** button on the mobile screen:
-* In the legacy architecture, `server.py` had to find and send OS signals (`SIGINT`/`SIGTERM`) to the child process.
-* In v1.8.0, `server.py` sends a one-way JSON-RPC **notification** (no `id`):
-
-```json
-{
-  "jsonrpc": "2.0",
-  "method": "session/cancel",
-  "params": {
-    "sessionId": "deb25aad-8028-4d55-aba6-7ed3988f1b03"
-  }
-}
-```
-
-The active prompt RPC responds with:
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 3,
-  "result": {
-    "stopReason": "cancelled"
-  }
-}
-```
-Generation stops instantaneously. The background daemon remains running, hot, and immediately ready for the next prompt.
+### 4.2 Protocol Capability Note (Mid-Turn Steering)
+While the underlying ACP protocol supports mid-turn prompt steering by queuing a concurrent `session/prompt` before the preceding turn completes, the mobile frontend explicitly requires an intentional tap on **Stop** before submitting new input. This preserves predictable conversation tree history and guarantees unambiguous prompt ordering over mobile connections.
