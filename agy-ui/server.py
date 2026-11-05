@@ -1275,7 +1275,7 @@ GLIBC_LIB_DIR = USR_DIR / "glibc" / "lib"
 GOOGLE_AGY_MANIFEST_URL = "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_arm64.json"
 GOOGLE_GCS_URL_PREFIX = "https://storage.googleapis.com/antigravity-public/antigravity-cli/"
 
-AGY_MIN_VERSION = os.environ.get("AGY_MIN_VERSION", "1.4.12")
+AGY_MIN_VERSION = os.environ.get("AGY_MIN_VERSION", "1.5.1")
 CURRENT_ENGINE_COMPAT_EPOCH = int(os.environ.get("ENGINE_COMPAT_EPOCH", "1"))
 FORCE_ENGINE_UPDATE = os.environ.get("FORCE_ENGINE_UPDATE", "false").lower() == "true"
 
@@ -3736,6 +3736,17 @@ class AgyProcessOrchestrator:
             title="New Conversation",
         )
 
+        # Persistent ACP Daemon Lifecycle (v1.8.0)
+        self.acp_proc: Optional[asyncio.subprocess.Process] = None
+        self.acp_lock: asyncio.Lock = asyncio.Lock()
+        self._acp_request_id: int = 0
+        self._pending_requests: dict[int, asyncio.Future] = {}
+        self._acp_sessions: dict[str, str] = {}
+        self._acp_session_to_cid: dict[str, str] = {}
+        self._acp_initialized: bool = False
+        self._acp_reader_task: Optional[asyncio.Task] = None
+        self._acp_stderr_task: Optional[asyncio.Task] = None
+
     def get_all_sessions(self, search_query: str = "", limit: int = 100) -> list[dict[str, Any]]:
         persisted = self.storage.list_conversations(search_query=search_query, limit=limit)
         persisted_cids = {p["conversation_id"] for p in persisted}
@@ -3872,6 +3883,148 @@ class AgyProcessOrchestrator:
             ctx.effort = effort
         ctx.last_activity = time.time()
         return ctx
+
+    async def ensure_acp_daemon(self) -> None:
+        async with self.acp_lock:
+            if self.acp_proc is not None and self.acp_proc.returncode is None and self._acp_initialized:
+                return
+
+            if self.acp_proc is not None:
+                try:
+                    self.acp_proc.terminate()
+                except Exception:
+                    pass
+                self.acp_proc = None
+                self._acp_initialized = False
+
+            proc_env = dict(os.environ)
+            proc_env["AGY_AUTO_UPDATE"] = "1"
+            proc_env["GIT_SSH_COMMAND"] = f"{USR_DIR}/bin/ssh -F {SSH_DIR}/config"
+            proc_env["AGY_WEB_PORT"] = str(PORT)
+            active_api_keys = get_active_api_keys()
+            for ak_k, ak_v in active_api_keys.items():
+                if ak_k not in PROTECTED_ENV_NAMES:
+                    proc_env[ak_k] = ak_v
+
+            cmd = [str(AGY_BIN), "acp", "--dangerously-skip-permissions"]
+            logger.info("Spawning persistent agy acp daemon: %s", " ".join(cmd))
+            self.acp_proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(HOME_DIR),
+                env=proc_env,
+                limit=16 * 1024 * 1024,
+                start_new_session=True,
+            )
+
+            if self._acp_reader_task and not self._acp_reader_task.done():
+                self._acp_reader_task.cancel()
+            if self._acp_stderr_task and not self._acp_stderr_task.done():
+                self._acp_stderr_task.cancel()
+
+            self._acp_reader_task = asyncio.create_task(self._consume_stdout_stream(self.acp_proc.stdout))
+            self._acp_stderr_task = asyncio.create_task(self._consume_stderr_stream(None, ""))
+
+            try:
+                init_res = await self.acp_call(
+                    "initialize",
+                    {
+                        "protocolVersion": 1,
+                        "clientInfo": {"name": "AntigravityStudio", "version": "1.8.0"},
+                        "capabilities": {
+                            "loadSession": True,
+                            "sessionCapabilities": {
+                                "resume": {},
+                                "close": {},
+                                "load": {},
+                                "list": {},
+                            },
+                        },
+                    },
+                    timeout=15.0,
+                )
+                self._acp_initialized = True
+                logger.info("agy acp daemon initialized: %s", init_res.get("agentInfo", {}))
+            except Exception as e:
+                logger.error("Failed to initialize agy acp daemon: %s", e)
+                raise
+
+    async def acp_call(self, method: str, params: dict[str, Any], timeout: float = 60.0) -> dict[str, Any]:
+        if not self.acp_proc or self.acp_proc.returncode is not None or not self.acp_proc.stdin:
+            raise RuntimeError("ACP daemon process is not running")
+
+        self._acp_request_id += 1
+        req_id = self._acp_request_id
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+        self._pending_requests[req_id] = fut
+
+        payload = {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "method": method,
+            "params": params,
+        }
+        line = json.dumps(payload) + "\n"
+        self.acp_proc.stdin.write(line.encode("utf-8"))
+        await self.acp_proc.stdin.drain()
+
+        try:
+            return await asyncio.wait_for(fut, timeout=timeout)
+        finally:
+            self._pending_requests.pop(req_id, None)
+
+    async def acp_notify(self, method: str, params: dict[str, Any]) -> None:
+        if not self.acp_proc or self.acp_proc.returncode is not None or not self.acp_proc.stdin:
+            return
+
+        payload = {
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+        }
+        line = json.dumps(payload) + "\n"
+        self.acp_proc.stdin.write(line.encode("utf-8"))
+        await self.acp_proc.stdin.drain()
+
+    async def _handle_acp_notification(self, msg: dict[str, Any]) -> None:
+        method = msg.get("method")
+        params = msg.get("params") or {}
+        if method == "session/update":
+            session_id = params.get("sessionId")
+            update = params.get("update") or {}
+            cid = self._acp_session_to_cid.get(session_id, session_id)
+            ctx = self._sessions.get(cid) if cid else None
+            if not ctx and session_id:
+                ctx = self._sessions.get(session_id)
+            if ctx:
+                turn_id = ctx.current_turn_id or f"turn-{uuid.uuid4().hex[:8]}"
+                usage_summary = getattr(ctx, "_active_usage_summary", None)
+                if usage_summary is None:
+                    usage_summary = {"input_tokens": 0, "output_tokens": 0, "thinking_tokens": 0}
+                await self._demux_json_event(
+                    ctx, turn_id, {"event": "acp_update", "update": update, "sessionId": session_id}, usage_summary
+                )
+        elif method == "session/request_permission":
+            req_id = msg.get("id")
+            if req_id is not None:
+                opts = params.get("options") or []
+                opt_id = opts[0]["optionId"] if opts and "optionId" in opts[0] else "allow_once"
+                resp = {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {
+                        "outcome": {
+                            "outcome": "selected",
+                            "optionId": opt_id,
+                        }
+                    },
+                }
+                if self.acp_proc and self.acp_proc.stdin:
+                    self.acp_proc.stdin.write((json.dumps(resp) + "\n").encode("utf-8"))
+                    await self.acp_proc.stdin.drain()
 
     def build_cli_args(
         self,
@@ -4024,7 +4177,6 @@ class AgyProcessOrchestrator:
             )
             return
 
-        # 4. Concurrency logging
         if running_sessions:
             logger.info(
                 "Session %s starting turn (parallel sessions active: %d)",
@@ -4049,7 +4201,8 @@ class AgyProcessOrchestrator:
                 "output_tokens": 0,
                 "thinking_tokens": 0,
             }
-            emitted_any_content = False
+            ctx._active_usage_summary = usage_summary
+            final_cid = cid
 
             try:
                 engine_st = get_engine_status()
@@ -4105,447 +4258,199 @@ class AgyProcessOrchestrator:
                     )
                     return
 
-                # Spawn `agy` with `--output-format stream-json --dangerously-skip-permissions`
-                cmd = self.build_cli_args(ctx, prompt=prompt, use_persistent_stdio=False)
-                logger.info("Spawning agy for [%s]: %s", cid[:8] if cid else "new", " ".join(cmd[:8]) + " ...")
+                # Ensure persistent ACP daemon is ready
+                await self.ensure_acp_daemon()
 
-                proc_env = dict(os.environ)
-                proc_env["AGY_AUTO_UPDATE"] = "1"
-                proc_env["GIT_SSH_COMMAND"] = f"{USR_DIR}/bin/ssh -F {SSH_DIR}/config"
-                proc_env["AGY_WEB_PORT"] = str(PORT)
-                proc_env["AGY_CONVERSATION_ID"] = cid
-                proc_env["AGY_TURN_ID"] = turn_id
-                active_api_keys = get_active_api_keys()
-                for ak_k, ak_v in active_api_keys.items():
-                    if ak_k not in PROTECTED_ENV_NAMES:
-                        proc_env[ak_k] = ak_v
-
-                first_str = ""
-                first_line_consumed = False
-                if is_new_session:
-                    async with self._new_session_lock:
-                        self._initializing_ctx = ctx
-                        try:
-                            # ARGON-V14-14: brief auth lock during spawn to prevent token race
-                            async with self._global_auth_lock:
-                                ctx.active_proc = await asyncio.create_subprocess_exec(
-                                    *cmd,
-                                    stdin=asyncio.subprocess.PIPE,
-                                    stdout=asyncio.subprocess.PIPE,
-                                    stderr=asyncio.subprocess.PIPE,
-                                    cwd=ctx.workspace if Path(ctx.workspace).is_dir() else str(HOME_DIR),
-                                    env=proc_env,
-                                    limit=16 * 1024 * 1024,  # 16 MiB line buffer for large tool outputs
-                                    start_new_session=True,  # setsid for process group isolation (ARGON-V14-09)
-                                )
-                            if ctx.interrupted:
-                                try:
-                                    pgid = os.getpgid(ctx.active_proc.pid)
-                                    os.killpg(pgid, signal.SIGKILL)
-                                except Exception:
-                                    pass
-                                return
+                # Resolve or initialize ACP session
+                acp_session_id = self._acp_sessions.get(cid)
+                if not acp_session_id:
+                    if is_new_session or not cid:
+                        async with self._new_session_lock:
+                            self._initializing_ctx = ctx
                             try:
-                                first_raw = await asyncio.wait_for(ctx.active_proc.stdout.readline(), timeout=30.0)
-                                if first_raw:
-                                    first_str = first_raw.decode("utf-8", errors="replace").strip()
-                                    if first_str.startswith("{"):
-                                        init_event = json.loads(first_str)
-                                        if init_event.get("event") == "init":
-                                            first_line_consumed = True
-                                            real_cid = str(init_event.get("conversation_id") or "").strip()
-                                            if real_cid:
-                                                if raw_cid:
-                                                    self._migrated_cids[raw_cid] = real_cid
-                                                ctx.conversation_id = real_cid
-                                                self._sessions[real_cid] = ctx
-                                                self.active_view_cid = real_cid
-                                                cid = real_cid
-                                                self.storage.update_conversation_workspace(real_cid, ctx.workspace)
-                                                d_model, d_mode, d_effort = self._active_view_defaults()
-                                                self.draft_context = SessionExecutionContext(
-                                                    conversation_id="",
-                                                    workspace=get_default_workspace(),
-                                                    model=d_model,
-                                                    mode=d_mode,
-                                                    effort=d_effort,
-                                                    title="New Conversation",
-                                                )
-                            except asyncio.TimeoutError:
-                                logger.warning("Timed out waiting for init event from agy stdout")
-                            except Exception as exc:
-                                logger.warning("Error reading init event from agy stdout: %s", exc)
-                        finally:
-                            self._initializing_ctx = None
-                else:
-                    async with self._global_auth_lock:
-                        ctx.active_proc = await asyncio.create_subprocess_exec(
-                            *cmd,
-                            stdin=asyncio.subprocess.PIPE,
-                            stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.PIPE,
-                            cwd=ctx.workspace if Path(ctx.workspace).is_dir() else str(HOME_DIR),
-                            env=proc_env,
-                            limit=16 * 1024 * 1024,
-                            start_new_session=True,
-                        )
+                                ws_uri = f"file://{ctx.workspace}" if ctx.workspace and Path(ctx.workspace).is_dir() else f"file://{HOME_DIR}"
+                                new_res = await self.acp_call("session/new", {"workspaceUris": [ws_uri]}, timeout=30.0)
+                                real_cid = str(new_res.get("sessionId") or "")
+                                if not real_cid:
+                                    raise RuntimeError("Failed to create ACP session: no sessionId returned")
+                                if raw_cid:
+                                    self._migrated_cids[raw_cid] = real_cid
+                                ctx.conversation_id = real_cid
+                                self._sessions[real_cid] = ctx
+                                self._acp_sessions[real_cid] = real_cid
+                                self._acp_session_to_cid[real_cid] = real_cid
+                                self.active_view_cid = real_cid
+                                final_cid = real_cid
+                                acp_session_id = real_cid
+                                self.storage.update_conversation_workspace(real_cid, ctx.workspace)
+                                d_model, d_mode, d_effort = self._active_view_defaults()
+                                self.draft_context = SessionExecutionContext(
+                                    conversation_id="",
+                                    workspace=get_default_workspace(),
+                                    model=d_model,
+                                    mode=d_mode,
+                                    effort=d_effort,
+                                    title="New Conversation",
+                                )
+                                await self.broadcast(
+                                    {
+                                        "type": "session_migrated",
+                                        "old_conversation_id": raw_cid or "session-draft",
+                                        "new_conversation_id": real_cid,
+                                        "conversation_id": real_cid,
+                                    }
+                                )
+                            finally:
+                                self._initializing_ctx = None
+                    else:
+                        try:
+                            await self.acp_call("session/load", {"sessionId": cid}, timeout=15.0)
+                        except Exception:
+                            try:
+                                await self.acp_call("session/resume", {"sessionId": cid}, timeout=15.0)
+                            except Exception:
+                                ws_uri = f"file://{ctx.workspace}" if ctx.workspace and Path(ctx.workspace).is_dir() else f"file://{HOME_DIR}"
+                                load_new = await self.acp_call("session/new", {"workspaceUris": [ws_uri]}, timeout=30.0)
+                                real_cid = str(load_new.get("sessionId") or cid)
+                                self._acp_sessions[cid] = real_cid
+                                self._acp_session_to_cid[real_cid] = cid
+                        acp_session_id = self._acp_sessions.get(cid, cid)
+                        self._acp_sessions[cid] = acp_session_id
+                        self._acp_session_to_cid[acp_session_id] = cid
 
-                if cid and (raw_cid != cid or is_new_session):
-                    if raw_cid:
-                        self._migrated_cids[raw_cid] = cid
-                    await self.broadcast(
-                        {
-                            "type": "conversation_assigned",
-                            "old_conversation_id": raw_cid or None,
-                            "conversation_id": cid,
-                        }
-                    )
-                    emit_native_notif_event(
-                        {
-                            "event": "conversation_assigned",
-                            "old_conversation_id": raw_cid or None,
-                            "conversation_id": cid,
-                        }
-                    )
+                # Synchronize dynamic configuration options
+                clean_model = ctx.model
+                if clean_model:
+                    try:
+                        await self.acp_call("session/set_config_option", {
+                            "sessionId": acp_session_id,
+                            "configId": "model",
+                            "value": clean_model,
+                        }, timeout=10.0)
+                    except Exception as e:
+                        logger.debug("Failed to set model in ACP: %s", e)
 
-                if initial_title:
-                    branch = get_git_branch(ctx.workspace)
-                    await self.broadcast(
-                        {
-                            "type": "session_history",
-                            "conversation_id": cid,
-                            "title": ctx.title,
-                            "workspace": ctx.workspace,
-                            "git_branch": branch,
-                            "messages": [
-                                {
-                                    "role": "user",
-                                    "content": prompt,
-                                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                                }
-                            ],
-                            "is_running": True,
-                            "current_action": f"Running ({ctx.model})",
-                            "config": {
-                                "conversation_id": cid,
-                                "model": ctx.model,
-                                "mode": ctx.mode,
-                                "effort": ctx.effort,
-                                "workspace": ctx.workspace,
-                                "git_branch": branch,
-                            },
-                        }
-                    )
-                    await self.broadcast(
-                        {
-                            "type": "config_updated",
-                            "conversation_id": cid,
-                            "config": {
-                                "conversation_id": cid,
-                                "model": ctx.model,
-                                "mode": ctx.mode,
-                                "effort": ctx.effort,
-                                "workspace": ctx.workspace,
-                                "git_branch": branch,
-                            },
-                        }
-                    )
+                if ctx.effort:
+                    try:
+                        await self.acp_call("session/set_config_option", {
+                            "sessionId": acp_session_id,
+                            "configId": "thought_level",
+                            "value": ctx.effort,
+                        }, timeout=10.0)
+                    except Exception as e:
+                        logger.debug("Failed to set thought_level in ACP: %s", e)
+
+                if ctx.mode and ctx.mode not in ("auto", "standard"):
+                    try:
+                        await self.acp_call("session/set_config_option", {
+                            "sessionId": acp_session_id,
+                            "configId": "mode",
+                            "value": ctx.mode,
+                        }, timeout=10.0)
+                    except Exception as e:
+                        logger.debug("Failed to set mode in ACP: %s", e)
+
+                # Prepare prompt payload
+                prompt_payload: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+                if attachments:
+                    for att in attachments:
+                        if att.get("mime_type", "").startswith("image/"):
+                            prompt_payload.append({
+                                "type": "image",
+                                "data": att.get("data"),
+                                "mimeType": att.get("mime_type"),
+                            })
 
                 await self.broadcast(
                     {
                         "type": "session_status",
-                        "conversation_id": cid,
+                        "conversation_id": final_cid,
                         "state": "running",
-                        "detail": f"Running ({ctx.model})",
-                    }
-                )
-                await self.broadcast(
-                    {
-                        "type": "status",
-                        "conversation_id": cid,
-                        "state": "running",
-                        "detail": f"Running ({ctx.model})",
-                    }
-                )
-                await self.broadcast(
-                    {
-                        "type": "turn_start",
-                        "conversation_id": cid,
-                        "turn_id": turn_id,
-                        "model": ctx.model,
-                        "start_time": ctx.active_snapshot.start_time if ctx.active_snapshot else time.time(),
-                    }
-                )
-                s_title = ctx.title or (f"Session {cid[:8]}" if cid else "New Conversation")
-                emit_native_notif_event(
-                    {
-                        "event": "turn_start",
-                        "conversation_id": cid,
-                        "title": s_title,
-                        "status": "Thinking...",
-                    }
-                )
-                await self.broadcast(
-                    {
-                        "type": "session_list",
-                        "sessions": self.get_all_sessions(limit=80),
+                        "detail": f"Thinking ({ctx.model})...",
                     }
                 )
 
-                # Read stdout and stderr concurrently
-                stdout_task = asyncio.create_task(
-                    self._consume_stdout_stream(ctx, turn_id, usage_summary, initial_line=first_str if (is_new_session and not first_line_consumed) else None)
-                )
-                stderr_task = asyncio.create_task(self._consume_stderr_stream(ctx, turn_id))
+                logger.info("Executing ACP session/prompt for [%s] turn [%s]", final_cid[:8], turn_id)
+                prompt_res = await self.acp_call("session/prompt", {
+                    "sessionId": acp_session_id,
+                    "prompt": prompt_payload,
+                }, timeout=3600.0)
 
-                emitted_any_content = await stdout_task
-                stderr_text = await stderr_task
-                return_code = await ctx.active_proc.wait()
+                stop_reason = prompt_res.get("stopReason", "end_turn")
+                usage_info = prompt_res.get("usage") or {}
+                if usage_info:
+                    usage_summary["input_tokens"] = usage_info.get("inputTokens", usage_summary["input_tokens"])
+                    usage_summary["output_tokens"] = usage_info.get("outputTokens", usage_summary["output_tokens"])
+                    usage_summary["thinking_tokens"] = usage_info.get("thoughtTokens", usage_summary["thinking_tokens"])
 
-                was_interrupted = ctx.interrupted or return_code in (
-                    -signal.SIGINT,
-                    -signal.SIGTERM,
-                    130,  # 128 + SIGINT
-                    143,  # 128 + SIGTERM
-                )
-
-                # Check if auth required was detected during streaming or in stderr
-                if not self._auth_required_detected and not was_interrupted:
-                    combined_err = (stderr_text or "").lower()
-                    if (
-                        "authentication required" in combined_err
-                        or "accounts.google.com/o/oauth2/auth" in combined_err
-                        or "you are not logged into antigravity" in combined_err
-                        or "error getting token source" in combined_err
-                        or "authentication failed or timed out" in combined_err
-                        or "please log in" in combined_err
-                        or "please visit the url to log in" in combined_err
-                    ):
-                        self._auth_required_detected = True
-
-                if self._auth_required_detected and not was_interrupted:
-                    logger.info("Session expired or authentication required during turn. Intercepting...")
-                    self._pending_auth_prompt = prompt
-                    self._pending_auth_attachments = attachments or []
-                    self.auth_cid = cid
-                    await self.broadcast(
-                        {
-                            "type": "auth_required",
-                            "reason": "expired",
-                            "conversation_id": cid,
-                        }
-                    )
-                    if ctx.active_snapshot:
-                        ctx.active_snapshot.status = "AUTH_REQUIRED"
-                        ctx.active_snapshot.end_time = time.time()
-                    await self.broadcast(
-                        {
-                            "type": "turn_complete",
-                            "conversation_id": cid,
-                            "turn_id": turn_id,
-                            "status": "AUTH_REQUIRED",
-                        }
-                    )
-                    return
-
-                if was_interrupted:
-                    status_str = "INTERRUPTED"
-                elif return_code != 0 and not emitted_any_content:
-                    cleaned_err = "\n".join(
-                        line for line in stderr_text.strip().splitlines()
-                        if not line.lower().startswith("warning:")
-                    ).strip() if stderr_text else ""
-                    if cleaned_err:
-                        await self.broadcast(
-                            {
-                                "type": "agent_token",
-                                "conversation_id": cid,
-                                "turn_id": turn_id,
-                                "delta": f"\n> **CLI Status ({return_code}):**\n```\n{cleaned_err[:2000]}\n```\n",
-                            }
-                        )
-                    else:
-                        await self.broadcast(
-                            {
-                                "type": "agent_token",
-                                "conversation_id": cid,
-                                "turn_id": turn_id,
-                                "delta": f"\n> **CLI Error ({return_code}):** Antigravity process exited prematurely with code {return_code}.\n",
-                            }
-                        )
-                    status_str = "ERROR"
-                else:
-                    status_str = "SUCCESS"
-
-                # Synchronize local `cid` if `_handle_stream_event` ("init") migrated `ctx.conversation_id`
-                old_cid = cid
-                assigned_new_cid = False
-                if ctx.conversation_id and ctx.conversation_id != cid:
-                    cid = ctx.conversation_id
-                    assigned_new_cid = True
-                elif not ctx.conversation_id or ctx.conversation_id.startswith("session-"):
-                    latest = self.storage.list_conversations(limit=1)
-                    if latest:
-                        discovered_cid = latest[0]["conversation_id"]
-                        if old_cid != discovered_cid and discovered_cid not in self._sessions:
-                            ctx.conversation_id = discovered_cid
-                            self._sessions[discovered_cid] = ctx
-                            self._sessions.pop(old_cid, None)
-                            if old_cid:
-                                self._migrated_cids[old_cid] = discovered_cid
-                            if self.active_view_cid == old_cid:
-                                self.active_view_cid = discovered_cid
-                            cid = discovered_cid
-                            assigned_new_cid = True
-                            await self.broadcast(
-                                {
-                                    "type": "conversation_assigned",
-                                    "old_conversation_id": old_cid,
-                                    "conversation_id": discovered_cid,
-                                }
-                            )
-                            emit_native_notif_event(
-                                {
-                                    "event": "conversation_assigned",
-                                    "old_conversation_id": old_cid,
-                                    "conversation_id": discovered_cid,
-                                }
-                            )
-
-                # Accumulate session telemetry
                 ctx.total_input_tokens += usage_summary["input_tokens"]
                 ctx.total_output_tokens += usage_summary["output_tokens"]
                 ctx.total_thinking_tokens += usage_summary["thinking_tokens"]
                 ctx.turn_count += 1
+                ctx.last_activity = time.time()
 
-                meta = self.storage.get_conversation_meta(cid)
-                s_title = meta.get("title") or f"Session {cid[:8]}"
-                if s_title and s_title != "New Conversation":
-                    ctx.title = s_title
-                    await self.broadcast(
-                        {
-                            "type": "session_renamed",
-                            "conversation_id": cid,
-                            "title": s_title,
-                            "silent": True,
-                        }
-                    )
+                if ctx.active_snapshot:
+                    ctx.active_snapshot.end_time = time.time()
+                    ctx.active_snapshot.status = "CANCELLED" if stop_reason == "cancelled" else "DONE"
+                    ctx.active_snapshot.input_tokens = usage_summary["input_tokens"]
+                    ctx.active_snapshot.output_tokens = usage_summary["output_tokens"]
+                    ctx.active_snapshot.thinking_tokens = usage_summary["thinking_tokens"]
 
                 await self.broadcast(
                     {
                         "type": "turn_complete",
-                        "conversation_id": cid,
-                        "old_conversation_id": old_cid if assigned_new_cid else None,
+                        "conversation_id": final_cid,
                         "turn_id": turn_id,
-                        "title": s_title,
+                        "status": "CANCELLED" if stop_reason == "cancelled" else "DONE",
+                        "stop_reason": stop_reason,
                         "usage": usage_summary,
-                        "totals": {
-                            "input_tokens": ctx.total_input_tokens,
-                            "output_tokens": ctx.total_output_tokens,
-                            "thinking_tokens": ctx.total_thinking_tokens,
-                            "turns": ctx.turn_count,
-                        },
-                        "status": status_str,
-                    }
-                )
-                await self.broadcast(
-                    {
-                        "type": "session_status",
-                        "conversation_id": cid,
-                        "state": "idle",
-                        "detail": "Ready",
                     }
                 )
 
-                # Push updated session drawer list
-                await self.broadcast(
-                    {
-                        "type": "session_list",
-                        "sessions": self.storage.list_conversations(limit=80),
-                    }
-                )
+                meta = self.storage.get_conversation_meta(final_cid)
+                s_title = meta.get("title") or (f"Session {final_cid[:8]}" if final_cid else "Conversation")
                 raw_preview = ctx.active_snapshot.raw_markdown if ctx.active_snapshot else ""
                 emit_native_notif_event(
                     {
                         "event": "turn_complete",
-                        "conversation_id": cid,
+                        "conversation_id": final_cid,
                         "title": s_title,
                         "preview": raw_preview,
-                        "status": status_str,
                     }
                 )
 
-            except asyncio.CancelledError:
-                await self.broadcast(
-                    {
-                        "type": "turn_complete",
-                        "conversation_id": cid,
-                        "turn_id": turn_id,
-                        "usage": usage_summary,
-                        "status": "INTERRUPTED",
-                    }
-                )
-                await self.broadcast(
-                    {
-                        "type": "session_status",
-                        "conversation_id": cid,
-                        "state": "idle",
-                        "detail": "Interrupted",
-                    }
-                )
-                meta = self.storage.get_conversation_meta(cid)
-                s_title = meta.get("title") or f"Session {cid[:8]}"
-                emit_native_notif_event(
-                    {
-                        "event": "turn_complete",
-                        "conversation_id": cid,
-                        "title": s_title,
-                        "preview": "Turn interrupted.",
-                        "status": "INTERRUPTED",
-                    }
-                )
-            except Exception as exc:
-                logger.exception("Error during agy turn execution for [%s]", cid[:8])
-                await self.broadcast(
-                    {
-                        "type": "agent_token",
-                        "conversation_id": cid,
-                        "turn_id": turn_id,
-                        "delta": f"\n\n**Execution Error:** `{exc}`",
-                    }
-                )
-                await self.broadcast(
-                    {
-                        "type": "turn_complete",
-                        "conversation_id": cid,
-                        "turn_id": turn_id,
-                        "usage": usage_summary,
-                        "status": "ERROR",
-                    }
-                )
-                await self.broadcast(
-                    {
-                        "type": "session_status",
-                        "conversation_id": cid,
-                        "state": "idle",
-                        "detail": "Error",
-                    }
-                )
-                meta = self.storage.get_conversation_meta(cid)
-                s_title = meta.get("title") or f"Session {cid[:8]}"
-                emit_native_notif_event(
-                    {
-                        "event": "turn_complete",
-                        "conversation_id": cid,
-                        "title": s_title,
-                        "preview": str(exc),
-                        "status": "ERROR",
-                    }
-                )
+            except Exception as e:
+                logger.error("Error in ACP turn [%s]: %s", cid[:8] if cid else "new", e)
+                if ctx.interrupted:
+                    await self.broadcast(
+                        {
+                            "type": "turn_complete",
+                            "conversation_id": final_cid,
+                            "turn_id": turn_id,
+                            "status": "CANCELLED",
+                            "stop_reason": "cancelled",
+                            "usage": usage_summary,
+                        }
+                    )
+                else:
+                    await self.broadcast(
+                        {
+                            "type": "system_card",
+                            "conversation_id": final_cid,
+                            "title": "Execution Error",
+                            "markdown": f"An error occurred while executing the turn: `{e}`",
+                            "level": "error",
+                        }
+                    )
+                    await self.broadcast(
+                        {
+                            "type": "turn_complete",
+                            "conversation_id": final_cid,
+                            "turn_id": turn_id,
+                            "status": "ERROR",
+                        }
+                    )
             finally:
-                self._streamed_turn_ids.discard(turn_id)
-                final_cid = ctx.conversation_id or cid
-                ctx.active_proc = None
                 ctx.is_running = False
                 ctx.current_turn_id = None
                 ctx.active_snapshot = None
@@ -5046,112 +4951,76 @@ class AgyProcessOrchestrator:
 
     async def _consume_stdout_stream(
         self,
-        ctx: SessionExecutionContext,
-        turn_id: str,
-        usage_summary: dict[str, int],
+        stream: Optional[asyncio.StreamReader] = None,
+        ctx: Optional[SessionExecutionContext] = None,
+        turn_id: str = "",
+        usage_summary: Optional[dict[str, int]] = None,
         initial_line: Optional[str] = None,
     ) -> bool:
-        assert ctx.active_proc and ctx.active_proc.stdout
-        emitted = False
-
-        if initial_line:
-            line = initial_line.strip()
-            if line:
-                if not line.startswith("{"):
-                    emitted = True
-                    if ctx.active_snapshot:
-                        ctx.active_snapshot.raw_markdown += line + "\n"
-                    await self.broadcast(
-                        {"type": "agent_token", "conversation_id": ctx.conversation_id, "turn_id": turn_id, "delta": line + "\n"}
-                    )
-                else:
-                    try:
-                        event = json.loads(line)
-                        if await self._demux_json_event(ctx, turn_id, event, usage_summary):
-                            emitted = True
-                    except Exception:
-                        pass
+        acp_stream = stream or (self.acp_proc.stdout if self.acp_proc else None)
+        if not acp_stream:
+            return False
 
         while True:
-            raw_line = await ctx.active_proc.stdout.readline()
-            if not raw_line:
-                break
-
-            line = raw_line.decode("utf-8", errors="replace").strip()
-            if not line:
-                continue
-
-            # Parse NDJSON line or handle raw text fallback gracefully
-            if not line.startswith("{"):
-                lower = line.lower()
-                if (
-                    "authentication required" in lower
-                    or "accounts.google.com/o/oauth2/auth" in lower
-                    or "you are not logged into antigravity" in lower
-                    or "error getting token source" in lower
-                    or "please visit the url to log in" in lower
-                ):
-                    logger.warning("Auth requirement detected in CLI stdout: %s", line)
-                    self._auth_required_detected = True
-                    if ctx.active_proc and ctx.active_proc.returncode is None:
-                        try:
-                            ctx.active_proc.terminate()
-                        except Exception:
-                            pass
-                    return False
-
-                emitted = True
-                if ctx.active_snapshot:
-                    ctx.active_snapshot.raw_markdown += line + "\n"
-                await self.broadcast(
-                    {"type": "agent_token", "conversation_id": ctx.conversation_id, "turn_id": turn_id, "delta": line + "\n"}
-                )
-                continue
-
             try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                emitted = True
-                if ctx.active_snapshot:
-                    ctx.active_snapshot.raw_markdown += line + "\n"
-                await self.broadcast(
-                    {"type": "agent_token", "conversation_id": ctx.conversation_id, "turn_id": turn_id, "delta": line + "\n"}
-                )
-                continue
+                raw_line = await acp_stream.readline()
+                if not raw_line:
+                    break
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
 
-            if await self._demux_json_event(ctx, turn_id, event, usage_summary):
-                emitted = True
+                try:
+                    msg = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.debug("ACP non-JSON line ignored: %s", line[:200])
+                    continue
 
-        return emitted
+                if not isinstance(msg, dict):
+                    continue
 
-    async def _consume_stderr_stream(self, ctx: SessionExecutionContext, turn_id: str) -> str:
-        assert ctx.active_proc and ctx.active_proc.stderr
+                req_id = msg.get("id")
+                if req_id is not None and req_id in self._pending_requests:
+                    fut = self._pending_requests[req_id]
+                    if not fut.done():
+                        if "error" in msg:
+                            err_obj = msg.get("error") or {}
+                            fut.set_exception(RuntimeError(err_obj.get("message", "ACP Error")))
+                        else:
+                            fut.set_result(msg.get("result", {}))
+                    continue
+
+                method = msg.get("method")
+                if method:
+                    asyncio.create_task(self._handle_acp_notification(msg))
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning("Error in ACP stdout consumer: %s", e)
+        return True
+
+    async def _consume_stderr_stream(
+        self,
+        ctx: Optional[SessionExecutionContext] = None,
+        turn_id: str = "",
+    ) -> str:
+        stream = self.acp_proc.stderr if self.acp_proc else None
+        if not stream:
+            return ""
         chunks: list[str] = []
         while True:
-            raw_line = await ctx.active_proc.stderr.readline()
-            if not raw_line:
+            try:
+                raw_line = await stream.readline()
+                if not raw_line:
+                    break
+                decoded = raw_line.decode("utf-8", errors="replace")
+                chunks.append(decoded)
+                logger.debug("ACP stderr: %s", decoded.strip())
+            except asyncio.CancelledError:
                 break
-            decoded = raw_line.decode("utf-8", errors="replace")
-            chunks.append(decoded)
-
-            # Real-time detection of auth expiration / sign-in requirement
-            lower = decoded.lower()
-            if (
-                "authentication required" in lower
-                or "accounts.google.com/o/oauth2/auth" in lower
-                or "you are not logged into antigravity" in lower
-                or "error getting token source" in lower
-                or "please visit the url to log in" in lower
-                or "please log in" in lower
-            ):
-                logger.warning("Auth requirement detected in CLI stderr stream: %s", decoded.strip())
-                self._auth_required_detected = True
-                # Terminate the blocked CLI process immediately to prevent 60s timeout stall
-                if ctx.active_proc and ctx.active_proc.returncode is None:
-                    try:
-                        ctx.active_proc.terminate()
-                    except Exception:
-                        pass
+            except Exception as e:
+                logger.warning("Error in ACP stderr consumer: %s", e)
                 break
         return "".join(chunks)
 
@@ -5181,6 +5050,110 @@ class AgyProcessOrchestrator:
                     usage_summary[k] = max(usage_summary[k], usage[k])
 
         etype = str(event.get("event") or event.get("type") or "").lower()
+
+        if etype == "acp_update":
+            update = event.get("update") or {}
+            su_type = update.get("sessionUpdate")
+
+            if su_type == "agent_message_chunk":
+                content = update.get("content") or {}
+                text_delta = content.get("text") or ""
+                if text_delta:
+                    emitted = True
+                    self._streamed_turn_ids.add(turn_id)
+                    if ctx.active_snapshot:
+                        ctx.active_snapshot.raw_markdown += text_delta
+                    await self.broadcast({
+                        "type": "agent_token",
+                        "conversation_id": ctx.conversation_id,
+                        "turn_id": turn_id,
+                        "delta": text_delta,
+                    })
+
+            elif su_type == "agent_thought_chunk":
+                content = update.get("content") or {}
+                thought_delta = content.get("text") or ""
+                if thought_delta:
+                    emitted = True
+                    if ctx.active_snapshot:
+                        ctx.active_snapshot.raw_thoughts += thought_delta
+                    await self.broadcast({
+                        "type": "agent_thought",
+                        "conversation_id": ctx.conversation_id,
+                        "turn_id": turn_id,
+                        "delta": thought_delta,
+                    })
+
+            elif su_type == "tool_call":
+                t_id = update.get("toolCallId") or f"tc-{uuid.uuid4().hex[:6]}"
+                t_name = update.get("name") or "tool"
+                t_args = update.get("args") or {}
+                tool_record = {
+                    "turn_id": turn_id,
+                    "tool_id": t_id,
+                    "name": t_name,
+                    "args": t_args,
+                    "status": "running",
+                    "output": "",
+                }
+                if ctx.active_snapshot:
+                    ctx.active_snapshot.tool_calls.append(tool_record)
+                await self.broadcast({
+                    "type": "tool_call",
+                    "conversation_id": ctx.conversation_id,
+                    **tool_record,
+                })
+                meta = self.storage.get_conversation_meta(ctx.conversation_id)
+                emit_native_notif_event({
+                    "event": "live_progress",
+                    "conversation_id": ctx.conversation_id,
+                    "title": meta.get("title") or f"Session {ctx.conversation_id[:8]}",
+                    "status": f"Tool: {t_name}",
+                    "elapsed": time.time() - (ctx.active_snapshot.start_time if ctx.active_snapshot else time.time()),
+                    "last_tool": f"{t_name}: {str(t_args)[:60]}",
+                    "tool_count": len(ctx.active_snapshot.tool_calls) if ctx.active_snapshot else 1,
+                })
+
+            elif su_type == "tool_call_update":
+                t_id = update.get("toolCallId")
+                t_status = update.get("status") or "completed"
+                raw_out = update.get("rawOutput") or {}
+                t_out = raw_out.get("output") or ""
+                if ctx.active_snapshot:
+                    for tc in ctx.active_snapshot.tool_calls:
+                        if tc.get("tool_id") == t_id:
+                            tc["status"] = "completed" if t_status in ("completed", "done") else t_status
+                            tc["output"] = str(t_out)[:4000]
+                            break
+                await self.broadcast({
+                    "type": "tool_call",
+                    "conversation_id": ctx.conversation_id,
+                    "turn_id": turn_id,
+                    "tool_id": t_id,
+                    "name": update.get("name") or "",
+                    "args": update.get("args") or {},
+                    "status": "completed" if t_status in ("completed", "done") else t_status,
+                    "output": str(t_out)[:4000],
+                })
+
+            elif su_type == "available_commands_update":
+                cmds = update.get("availableCommands") or []
+                await self.broadcast({
+                    "type": "available_commands",
+                    "commands": cmds,
+                })
+
+            elif su_type == "session_info_update":
+                new_title = update.get("title")
+                if new_title and ctx.conversation_id:
+                    self.storage.rename_conversation(ctx.conversation_id, new_title)
+                    await self.broadcast({
+                        "type": "session_title_updated",
+                        "conversation_id": ctx.conversation_id,
+                        "title": new_title,
+                    })
+
+            return emitted
 
         # 3. Handle Antigravity Native "step_update" streaming events
         if etype == "step_update" and isinstance(event.get("step_update"), dict):
@@ -5587,41 +5560,27 @@ class AgyProcessOrchestrator:
             target_cid = self._migrated_cids[target_cid]
         if not target_cid or target_cid not in self._sessions:
             for c in self._sessions.values():
-                if c.is_running and c.active_proc:
+                if c.is_running:
                     target_cid = c.conversation_id
                     break
+
         if not target_cid or target_cid not in self._sessions:
-            if self._initializing_ctx and self._initializing_ctx.active_proc:
-                self._initializing_ctx.interrupted = True
-                try:
-                    proc = self._initializing_ctx.active_proc
-                    pgid = os.getpgid(proc.pid)
-                    os.killpg(pgid, signal.SIGKILL)
-                except Exception:
-                    pass
-                return True
             return False
 
         ctx = self._sessions[target_cid]
-        proc = ctx.active_proc
-        if not proc or proc.returncode is not None:
-            return False
-
         ctx.interrupted = True
-        pgid = proc.pid
-        logger.info("Sending SIGINT to session [%s] process group (PGID %s)", target_cid[:8], pgid)
-        try:
-            os.killpg(pgid, signal.SIGINT)
-        except ProcessLookupError:
-            return True
 
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=2.0)
-        except asyncio.TimeoutError:
+        acp_session_id = self._acp_sessions.get(target_cid, target_cid)
+        logger.info("Sending session/cancel notification to ACP session [%s]", target_cid[:8])
+        await self.acp_notify("session/cancel", {"sessionId": acp_session_id})
+
+        if ctx.active_proc and ctx.active_proc.returncode is None:
             try:
-                os.killpg(pgid, signal.SIGKILL)
-            except ProcessLookupError:
+                pgid = os.getpgid(ctx.active_proc.pid)
+                os.killpg(pgid, signal.SIGINT)
+            except Exception:
                 pass
+
         return True
 
     async def abort_current_turn(self, conversation_id: Optional[str] = None) -> bool:
