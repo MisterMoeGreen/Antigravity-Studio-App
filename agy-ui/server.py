@@ -2641,8 +2641,17 @@ class AntigravityStorageEngine:
             app_settings = load_app_settings()
             session_workspaces = app_settings.get("session_workspaces", {})
 
+            ghost_cids: list[str] = []
             for row in cursor.fetchall():
                 cid = row["conversation_id"]
+                # Invariant: A session must possess an on-disk trajectory database or brain log directory.
+                # Phantom records resurrected by agy summary store reconciliation lack both and are ignored.
+                conv_db = CONVERSATIONS_DIR / f"{cid}.db"
+                brain_dir = BRAIN_DIR / cid
+                if not conv_db.exists() and not brain_dir.exists():
+                    ghost_cids.append(cid)
+                    continue
+
                 effective_title = self._resolve_session_title(row)
 
                 workspaces: list[str] = []
@@ -2672,6 +2681,19 @@ class AntigravityStorageEngine:
                     }
                 )
             conn.close()
+
+            if ghost_cids:
+                try:
+                    conn_rw = sqlite3.connect(SUMMARIES_DB, timeout=2.0)
+                    with conn_rw:
+                        for g_cid in ghost_cids:
+                            conn_rw.execute("DELETE FROM conversation_summaries WHERE conversation_id = ?", (g_cid,))
+                            conn_rw.execute("DELETE FROM conversations_fts WHERE conversation_id = ?", (g_cid,))
+                    conn_rw.close()
+                    for g_cid in ghost_cids:
+                        self._prune_conversation_from_proto_stores(g_cid)
+                except Exception:
+                    pass
 
         except Exception as exc:
             logger.warning("SQLite read warning on conversation_summaries.db: %s", exc)
@@ -8694,6 +8716,11 @@ class AgyWebServer:
                 is_active = (self.orchestrator.config.conversation_id == cid)
                 success = self.storage.delete_conversation(cid)
                 if success:
+                    if not self.orchestrator.is_running:
+                        try:
+                            await self.orchestrator.recycle_acp_daemon()
+                        except Exception:
+                            pass
                     sessions = self.storage.list_conversations(limit=100)
                     await self.broadcast({"type": "session_list", "sessions": sessions})
                     if is_active:
