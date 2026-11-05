@@ -4091,39 +4091,103 @@ class AgyProcessOrchestrator:
 
     def stop_background_task(self, cid: str, task_key: str) -> bool:
         """Terminates the processes associated with a background task (ARGON-18-04)."""
-        log_name = f"{task_key}.log"
-        killed_any = False
-        target_pids: set[int] = set()
+        m_id = re.search(r"task-\d+", task_key)
+        canon_task_key = m_id.group(0) if m_id else task_key
+        full_task_id = f"{cid}/{canon_task_key}" if cid else canon_task_key
+        t_info = (
+            self.active_background_tasks.get(canon_task_key)
+            or self.active_background_tasks.get(full_task_id)
+            or self.active_background_tasks.get(task_key)
+            or {}
+        )
+        target_cmd = (t_info.get("command") or "").strip()
 
+        # Fallback: check transcript.jsonl if command wasn't stored in memory
+        if not target_cmd and cid:
+            try:
+                transcript_file = BRAIN_DIR / cid / ".system_generated" / "logs" / "transcript.jsonl"
+                if transcript_file.exists():
+                    with transcript_file.open("r", encoding="utf-8", errors="replace") as tf:
+                        for line in tf:
+                            if canon_task_key in line and "Task Description:" in line:
+                                m_desc = re.search(r"Task Description:\s*(.+)", line)
+                                if m_desc:
+                                    target_cmd = m_desc.group(1).strip()
+                                    break
+            except Exception:
+                pass
+
+        # Build process hierarchy from /proc
+        parent_to_children: dict[int, list[int]] = {}
+        pid_to_cmd: dict[int, str] = {}
         for pid_entry in os.listdir("/proc"):
             if not pid_entry.isdigit():
                 continue
-            fd_dir = f"/proc/{pid_entry}/fd"
+            pid = int(pid_entry)
             try:
-                for fd in os.listdir(fd_dir):
-                    try:
-                        target = os.readlink(f"{fd_dir}/{fd}")
-                        if target.endswith(log_name) and (not cid or cid in target):
-                            target_pids.add(int(pid_entry))
-                    except Exception:
-                        pass
+                with open(f"/proc/{pid}/stat", "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+                _, _, rest = content.rpartition(") ")
+                ppid = int(rest.split()[1])
+                parent_to_children.setdefault(ppid, []).append(pid)
+                with open(f"/proc/{pid}/cmdline", "rb") as f:
+                    cmd_str = f.read().decode("utf-8", errors="replace").replace("\x00", " ").strip()
+                pid_to_cmd[pid] = cmd_str
             except Exception:
-                pass
+                continue
 
+        def get_all_descendants(root_pid: int) -> list[int]:
+            descendants: list[int] = []
+            stack = [root_pid]
+            while stack:
+                curr = stack.pop()
+                for child in parent_to_children.get(curr, []):
+                    descendants.append(child)
+                    stack.append(child)
+            return descendants
+
+        target_pids: set[int] = set()
+
+        # 1. PIDs tracked during task startup
+        for p in t_info.get("pids", []):
+            if p in pid_to_cmd:
+                target_pids.add(p)
+                target_pids.update(get_all_descendants(p))
+
+        # 2. Descendants of the ACP daemon
+        acp_pid = self.acp_proc.pid if (self.acp_proc and self.acp_proc.pid) else None
+        if acp_pid:
+            for p in get_all_descendants(acp_pid):
+                p_cmd = pid_to_cmd.get(p, "").lower()
+                if "server.py" in p_cmd or "github_mcp" in p_cmd:
+                    continue
+                if p == acp_pid:
+                    continue
+
+                if target_cmd:
+                    norm_target = " ".join(target_cmd.lower().split())
+                    norm_p = " ".join(p_cmd.split())
+                    first_word = norm_target.split()[0] if norm_target else ""
+                    base_exec = os.path.basename(first_word)
+                    if (
+                        norm_target in norm_p
+                        or norm_p in norm_target
+                        or (base_exec and base_exec in norm_p.split())
+                    ):
+                        target_pids.add(p)
+                        target_pids.update(get_all_descendants(p))
+                else:
+                    target_pids.add(p)
+                    target_pids.update(get_all_descendants(p))
+
+        killed_any = False
         for p in target_pids:
             try:
-                os.kill(p, signal.SIGTERM)
+                os.kill(p, signal.SIGKILL)
                 killed_any = True
-            except Exception:
-                pass
-
-        if target_pids:
-            time.sleep(0.1)
-            for p in target_pids:
-                try:
-                    os.kill(p, signal.SIGKILL)
-                except Exception:
-                    pass
+                logger.info("Terminated background task process %d (%s)", p, pid_to_cmd.get(p, ""))
+            except Exception as e:
+                logger.debug("Failed to kill process %d: %s", p, e)
 
         return killed_any
 
@@ -4250,13 +4314,6 @@ class AgyProcessOrchestrator:
                                 "duration": duration,
                                 "output_snippet": output_snippet[:600],
                             })
-                            await self.broadcast({
-                                "type": "system_card",
-                                "conversation_id": cid,
-                                "title": f"Task Finished: {summary}",
-                                "markdown": f"⚙️ Background task `{task_key}` finished with exit code `{exit_code}` ({int(duration)}s).\n\n```\n{output_snippet[:400] if output_snippet else 'Completed successfully.'}\n```",
-                                "level": "success" if exit_code == 0 else "error",
-                            })
                             emit_native_notif_event({
                                 "event": "task_completed",
                                 "conversation_id": cid,
@@ -4265,6 +4322,25 @@ class AgyProcessOrchestrator:
                                 "preview": output_snippet[:200] if output_snippet else f"Exit code {exit_code} ({int(duration)}s)",
                                 "exit_code": exit_code,
                             })
+
+                            # Guarantee agent responds proactively on task completion (ARGON-18-05)
+                            try:
+                                ctx = self.get_or_create_context(cid)
+                                if ctx and not ctx.is_running and not ctx.turn_lock.locked():
+                                    notice_prompt = (
+                                        f"<SYSTEM_MESSAGE>\n"
+                                        f"[Background Task Completed]\n"
+                                        f"Task: {summary} ({task_key})\n"
+                                        f"Exit Code: {exit_code}\n"
+                                        f"Duration: {int(duration)}s\n"
+                                        f"Command Output:\n"
+                                        f"{output_snippet[:600] if output_snippet else '(No output)'}\n"
+                                        f"</SYSTEM_MESSAGE>\n"
+                                        f"The background task '{summary}' has finished with exit code {exit_code}. Please give a concise status update to the user."
+                                    )
+                                    asyncio.create_task(self.execute_turn(notice_prompt, conversation_id=cid))
+                            except Exception as turn_exc:
+                                logger.warning("Failed to trigger completion turn for %s: %s", task_key, turn_exc)
                         else:
                             if task_key not in self.active_background_tasks and full_task_id not in self.active_background_tasks:
                                 try:
@@ -4283,12 +4359,35 @@ class AgyProcessOrchestrator:
                                 except Exception:
                                     start_time = time.time()
 
+                                # Discover running child PIDs under ACP
+                                init_pids: list[int] = []
+                                if self.acp_proc and self.acp_proc.pid:
+                                    try:
+                                        for pid_entry in os.listdir("/proc"):
+                                            if not pid_entry.isdigit():
+                                                continue
+                                            p_int = int(pid_entry)
+                                            try:
+                                                with open(f"/proc/{p_int}/stat", "r", encoding="utf-8", errors="replace") as sf:
+                                                    s_content = sf.read()
+                                                _, _, s_rest = s_content.rpartition(") ")
+                                                if int(s_rest.split()[1]) == self.acp_proc.pid:
+                                                    with open(f"/proc/{p_int}/cmdline", "rb") as cf:
+                                                        c_line = cf.read().decode("utf-8", errors="replace").replace("\x00", " ").strip()
+                                                    if "github_mcp" not in c_line and "server.py" not in c_line:
+                                                        init_pids.append(p_int)
+                                            except Exception:
+                                                pass
+                                    except Exception:
+                                        pass
+
                                 t_info = {
                                     "task_id": task_key,
                                     "conversation_id": cid,
                                     "summary": summary,
                                     "command": cmd,
                                     "start_time": start_time,
+                                    "pids": init_pids,
                                 }
                                 self.active_background_tasks[task_key] = t_info
                                 await self.broadcast({
@@ -4297,13 +4396,6 @@ class AgyProcessOrchestrator:
                                     "task_id": task_key,
                                     "summary": summary,
                                     "start_time": start_time,
-                                })
-                                await self.broadcast({
-                                    "type": "system_card",
-                                    "conversation_id": cid,
-                                    "title": "Background Task Active",
-                                    "markdown": f"⚙️ Running in background: `{summary}` (`{task_key}`)\n\nThe agent will report progress automatically when finished.",
-                                    "level": "info",
                                 })
             except asyncio.CancelledError:
                 break
@@ -8328,13 +8420,6 @@ class AgyWebServer:
                 "duration": duration,
                 "output_snippet": "Task stopped by user.",
             })
-            await self.broadcast({
-                "type": "system_card",
-                "conversation_id": cid,
-                "title": f"Task Stopped: {summary}",
-                "markdown": f"⏹ Background task `{task_key}` was stopped by the user.",
-                "level": "warning",
-            })
             emit_native_notif_event({
                 "event": "task_completed",
                 "conversation_id": cid,
@@ -8343,6 +8428,21 @@ class AgyWebServer:
                 "preview": f"Task {task_key} stopped by user.",
                 "exit_code": 137,
             })
+            # Guarantee agent acknowledges stop in chat (ARGON-18-05)
+            try:
+                ctx = self.orchestrator.get_or_create_context(cid)
+                if ctx and not ctx.is_running and not ctx.turn_lock.locked():
+                    notice_prompt = (
+                        f"<SYSTEM_MESSAGE>\n"
+                        f"[Background Task Stopped]\n"
+                        f"Task: {summary} ({task_key})\n"
+                        f"Exit Code: 137 (Stopped by user)\n"
+                        f"</SYSTEM_MESSAGE>\n"
+                        f"The background task '{summary}' was stopped by the user. Please confirm this concisely to the user."
+                    )
+                    asyncio.create_task(self.orchestrator.execute_turn(notice_prompt, conversation_id=cid))
+            except Exception as turn_exc:
+                logger.warning("Failed to trigger stop completion turn for %s: %s", task_key, turn_exc)
             return
 
         if mtype == "list_sessions":

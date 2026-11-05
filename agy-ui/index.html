@@ -7205,13 +7205,17 @@
         return `${m}:${s < 10 ? '0' : ''}${s}`;
       }
 
+      function isDraftOrMatchesSession(cid) {
+        if (!cid) return true;
+        if (state.conversationId === cid) return true;
+        if (!state.conversationId || state.conversationId === 'default' || state.conversationId === 'session-draft') {
+          return true;
+        }
+        return false;
+      }
+
       function getTasksForCurrentSession() {
-        return Array.from(activeBgTasks.values()).filter(t => {
-          if (!t.cid) return true;
-          if (t.cid === state.conversationId) return true;
-          if (!state.conversationId && state.isInitializingDraft) return true;
-          return false;
-        });
+        return Array.from(activeBgTasks.values()).filter(t => isDraftOrMatchesSession(t.cid));
       }
 
       function openBgTaskActionSheet() {
@@ -7365,7 +7369,7 @@
       function handleBackgroundTaskStarted(msg) {
         if (!msg || !msg.task_id) return;
         const tId = canonicalTaskId(msg.task_id);
-        if (!state.conversationId && msg.conversation_id && state.isInitializingDraft) {
+        if ((!state.conversationId || state.conversationId === 'default' || state.conversationId === 'session-draft') && msg.conversation_id) {
           adoptDraftSessionId(msg.conversation_id);
         }
         activeBgTasks.set(tId, {
@@ -7383,7 +7387,7 @@
       function handleBackgroundTaskCompleted(msg) {
         if (!msg || !msg.task_id) return;
         const tId = canonicalTaskId(msg.task_id);
-        const isCurrent = Boolean(!msg.conversation_id || msg.conversation_id === state.conversationId || (!state.conversationId && state.isInitializingDraft));
+        const isCurrent = isDraftOrMatchesSession(msg.conversation_id);
         activeBgTasks.delete(tId);
         activeBgTasks.delete(msg.task_id);
         const remainingForCur = getTasksForCurrentSession();
