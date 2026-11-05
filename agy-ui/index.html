@@ -689,6 +689,14 @@
       background: rgba(16, 185, 129, 0.18);
       color: #34d399;
     }
+    .tool-status-badge.failed {
+      background: rgba(239, 68, 68, 0.18);
+      color: #f87171;
+    }
+    .tool-status-badge.cancelled {
+      background: rgba(156, 163, 175, 0.18);
+      color: #9ca3af;
+    }
     .tool-drawer {
       padding: 8px 11px;
       border-top: 1px solid var(--border-subtle);
@@ -5167,6 +5175,14 @@
         btnSend.classList.add('stop');
         btnSend.innerHTML = ICON_STOP_HTML;
         btnSend.title = 'Stop agent turn';
+        if (promptInput) {
+          promptInput.disabled = true;
+          promptInput.placeholder = 'Agent is running... Tap Stop (■) to interrupt';
+        }
+        if (btnUpload) {
+          btnUpload.style.pointerEvents = 'none';
+          btnUpload.style.opacity = '0.4';
+        }
       }
 
       function resetSendButtonToIdle() {
@@ -5174,6 +5190,14 @@
         btnSend.classList.remove('stop');
         btnSend.innerHTML = ICON_SEND_HTML;
         btnSend.title = 'Send prompt';
+        if (promptInput) {
+          promptInput.disabled = false;
+          promptInput.placeholder = 'Ask Antigravity or type / for commands...';
+        }
+        if (btnUpload) {
+          btnUpload.style.pointerEvents = '';
+          btnUpload.style.opacity = '';
+        }
         stopLiveProgress();
       }
 
@@ -5543,6 +5567,15 @@
 
         if (args.toolAction && typeof args.toolAction === 'string') {
           return `${name} · ${args.toolAction}`;
+        }
+        if (name === 'call_mcp_tool' || name === 'mcp') {
+          let toolName = args.ToolName || args.tool || '';
+          let serverName = args.ServerName || args.server || '';
+          if (typeof toolName === 'string') toolName = toolName.replace(/"/g, '');
+          if (typeof serverName === 'string') serverName = serverName.replace(/"/g, '');
+          if (toolName) return `mcp: ${toolName}`;
+          if (serverName) return `mcp: ${serverName}`;
+          return 'call_mcp_tool';
         }
         if (name === 'run_command' || name === 'bash') {
           const cmd = args.CommandLine || args.command || '';
@@ -6215,30 +6248,33 @@
           }
 
           case 'turn_complete': {
-            const cid = msg.conversation_id;
-            if (!cid || cid === 'default' || cid === 'null' || cid === 'undefined') break;
-            const buf = getOrCreateSessionBuffer(cid);
-            buf.isRunning = false;
-            buf.waitingInput = false;
-            buf.pendingQuestion = null;
-            buf.activeUserPrompt = '';
-            buf.activeUserAttachments = [];
-            buf.startTime = 0;
-            const tRec = getOrCreateTurnRecord(buf, msg.turn_id);
-            tRec.finalized = true;
+            const cid = msg.conversation_id || state.conversationId;
+            const isCurrent = !msg.conversation_id || msg.conversation_id === state.conversationId;
+            let tRec = null;
+            if (cid && cid !== 'default' && cid !== 'null' && cid !== 'undefined') {
+              const buf = getOrCreateSessionBuffer(cid);
+              buf.isRunning = false;
+              buf.waitingInput = false;
+              buf.pendingQuestion = null;
+              buf.activeUserPrompt = '';
+              buf.activeUserAttachments = [];
+              buf.startTime = 0;
+              buf.isPinned = false;
+              tRec = getOrCreateTurnRecord(buf, msg.turn_id);
+              tRec.finalized = true;
 
-            if (msg.title && msg.title !== 'New Conversation') {
-              const renItem = state.sessions.find(x => x.conversation_id === cid);
-              if (renItem) {
-                renItem.title = msg.title;
-              }
-              if (cid === state.conversationId) {
-                sessionTitle.textContent = msg.title;
+              if (msg.title && msg.title !== 'New Conversation') {
+                const renItem = state.sessions.find(x => x.conversation_id === cid);
+                if (renItem) {
+                  renItem.title = msg.title;
+                }
+                if (cid === state.conversationId) {
+                  sessionTitle.textContent = msg.title;
+                }
               }
             }
 
-            buf.isPinned = false;
-            if (cid === state.conversationId) {
+            if (isCurrent) {
               finalizeTurnCard(msg.turn_id, msg);
               resetSendButtonToIdle();
               setInitializingControlsState(false);
@@ -6246,7 +6282,8 @@
               statusDot.className = 'status-dot';
               statusText.textContent = 'Ready';
               updatePinButtonState(false);
-            } else {
+            } else if (cid && cid !== state.conversationId) {
+              const buf = getOrCreateSessionBuffer(cid);
               buf.unread = true;
               syncUnreadToStorage();
             }
@@ -6260,7 +6297,7 @@
               const isCurrentlyOpenAndVisible = (cid === state.conversationId && document.visibilityState === 'visible');
               if (!isCurrentlyOpenAndVisible && typeof window.AndroidApp.notifyTurnComplete === 'function') {
                 const sCard = state.sessions.find(s => s.conversation_id === cid);
-                const sTitle = (sCard && sCard.title) || ('Session ' + cid.slice(0, 8));
+                const sTitle = (sCard && sCard.title) || ('Session ' + (cid ? cid.slice(0, 8) : ''));
                 const preview = (tRec && tRec.rawMarkdown) || '';
                 window.AndroidApp.notifyTurnComplete(cid, sTitle, preview, msg.status || 'COMPLETED');
               }
@@ -6972,8 +7009,19 @@
         }
 
         const label = formatToolLabel(toolMsg);
-        const statusClass = toolMsg.status === 'completed' ? 'completed' : 'running';
-        const statusLabel = toolMsg.status === 'completed' ? (faIcon('check') + ' Done') : (faIcon('bolt') + ' Running');
+        const status = String(toolMsg.status || 'running').toLowerCase();
+        const isCompleted = ['completed', 'done', 'success', 'ok'].includes(status);
+        const isFailed = ['failed', 'error'].includes(status);
+        const isCancelled = ['cancelled', 'canceled', 'aborted', 'interrupted'].includes(status);
+
+        const statusClass = isCompleted ? 'completed' : (isFailed ? 'failed' : (isCancelled ? 'cancelled' : 'running'));
+        const statusLabel = isCompleted
+          ? (faIcon('check') + ' Done')
+          : (isFailed
+              ? (faIcon('times') + ' Failed')
+              : (isCancelled
+                  ? (faIcon('ban') + ' Cancelled')
+                  : (faIcon('bolt') + ' Running')));
 
         pill.innerHTML = `
           <summary>
@@ -7003,6 +7051,24 @@
           const elapsed = ((performance.now() - t.startTime) / 1000).toFixed(1);
           t.thoughtLabel.textContent = `Thought (${elapsed}s)`;
           t.thoughtDetails.removeAttribute('open');
+        }
+        if (t.toolsMap) {
+          const turnStatus = String(msg && msg.status || '').toUpperCase();
+          for (const [toolId, pill] of t.toolsMap.entries()) {
+            const badge = pill.querySelector('.tool-status-badge');
+            if (badge && badge.classList.contains('running')) {
+              if (turnStatus === 'CANCELLED') {
+                badge.className = 'tool-status-badge cancelled';
+                badge.innerHTML = `${faIcon('ban')} Cancelled`;
+              } else if (turnStatus === 'ERROR' || turnStatus === 'FAILED') {
+                badge.className = 'tool-status-badge failed';
+                badge.innerHTML = `${faIcon('times')} Failed`;
+              } else {
+                badge.className = 'tool-status-badge completed';
+                badge.innerHTML = `${faIcon('check')} Done`;
+              }
+            }
+          }
         }
         const u = msg.usage || {};
         if (u.input_tokens || u.output_tokens || u.thinking_tokens) {

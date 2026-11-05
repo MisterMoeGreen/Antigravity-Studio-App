@@ -136,5 +136,16 @@ Following UX review for mobile touchscreens, Antigravity Studio v1.8.0 standardi
   4. The daemon immediately halts generation and returns `stopReason: "cancelled"`.
   5. The UI unlocks the prompt bar and restores the **Send** button, allowing the user to type their correction or next instruction.
 
-### 4.2 Protocol Capability Note (Mid-Turn Steering)
-While the underlying ACP protocol supports mid-turn prompt steering by queuing a concurrent `session/prompt` before the preceding turn completes, the mobile frontend explicitly requires an intentional tap on **Stop** before submitting new input. This preserves predictable conversation tree history and guarantees unambiguous prompt ordering over mobile connections.
+### 4.2 Spontaneous Daemon Turns & Background Task Lifecycle
+When tools run long-running background tasks (e.g. `run_command` tasks) or when background processes finish, the ACP daemon triggers reactive execution wakeups.
+* **Server-Initiated Spontaneous Turns**: When background tasks complete, `agy acp` automatically issues `session/update` notifications even when no explicit `session/prompt` call is pending.
+* `server.py` detects these spontaneous updates, allocates an asynchronous turn card (`turn-bg-...`), broadcasts `turn_start`, and streams the agent's progress report to the active UI.
+* Upon completion, the turn is cleanly finalized with `turn_complete` and returns the session state to `idle`.
+
+### 4.3 Tool Execution Status States
+Tool cards in the UI map the following statuses:
+* **`completed` / `done` / `success`**: Status badge `Done` (green check).
+* **`failed` / `error`**: Status badge `Failed` (red/orange cross).
+* **`running` / `in_progress`**: Status badge `Running` (amber bolt).
+* **`cancelled`**: Status badge `Cancelled` (grey).
+When a turn completes, any remaining `running` tool pills are automatically finalized to prevent lingering `Running` states.

@@ -29,9 +29,8 @@ All core Android sandbox boundaries (SELinux W^X policies, ext4 vs FUSE storage 
 * **Threat Subsystem**: Authentication Subsystem (`session/authenticate`).
 * **Root Cause**: In standard desktop environments, calling `authenticate` with `methodId: "oauth-personal"` triggers an OS browser launcher (`xdg-open`). Inside the Android Termux headless subsystem, this call throws JSON-RPC error `-32603` (`"No browser is available here..."`).
 * **Audit Verdict**: **Hardened in Spec 03**.
-* **Enforced Mitigation**: The architecture enforces a **Hybrid Authentication Gate**:
-  * Google OAuth uses the proven PTY runner executing `agy acp --login` (or `agy --login`) to capture the OAuth consent URL, routing it to native Android Chrome Custom Tabs via `@JavascriptInterface` (`MainActivity.kt`).
-  * API Key authentication directly leverages ACP JSON-RPC `authenticate`.
+* **Enforced Mitigation**: The architecture enforces an exclusive **Google OAuth PTY Gate**:
+  * Google OAuth uses the proven PTY runner executing `agy acp --login` (or `agy --login`) to capture the OAuth consent URL, routing it to native Android Chrome Custom Tabs via `@JavascriptInterface` (`MainActivity.kt`). API key authentication is not supported.
 
 ### Issue ARGON-V18-03: Stdio Deserialization Resilience on Interleaved stderr (MEDIUM)
 * **Threat Subsystem**: Event Stream Reader (`_consume_stdout_stream`).

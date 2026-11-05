@@ -3743,6 +3743,8 @@ class AgyProcessOrchestrator:
         self._pending_requests: dict[int, asyncio.Future] = {}
         self._acp_sessions: dict[str, str] = {}
         self._acp_session_to_cid: dict[str, str] = {}
+        self._acp_loading_sessions: set[str] = set()
+        self._spontaneous_turn_watchdogs: dict[str, asyncio.Task] = {}
         self._acp_initialized: bool = False
         self._acp_reader_task: Optional[asyncio.Task] = None
         self._acp_stderr_task: Optional[asyncio.Task] = None
@@ -3991,6 +3993,55 @@ class AgyProcessOrchestrator:
         self.acp_proc.stdin.write(line.encode("utf-8"))
         await self.acp_proc.stdin.drain()
 
+    def _schedule_spontaneous_turn_watchdog(self, cid: str, ctx: SessionExecutionContext) -> None:
+        if cid in self._spontaneous_turn_watchdogs:
+            self._spontaneous_turn_watchdogs[cid].cancel()
+
+        async def _watchdog():
+            try:
+                await asyncio.sleep(2.5)
+                if ctx.is_running and ctx.current_turn_id and not ctx.turn_lock.locked():
+                    turn_id = ctx.current_turn_id
+                    ctx.is_running = False
+                    ctx.current_turn_id = None
+                    ctx.current_action = ""
+                    s_title = ctx.title or (f"Session {cid[:8]}" if cid else "Conversation")
+                    usage_summary = getattr(ctx, "_active_usage_summary", {"input_tokens": 0, "output_tokens": 0, "thinking_tokens": 0})
+                    await self.broadcast({
+                        "type": "turn_complete",
+                        "conversation_id": cid,
+                        "turn_id": turn_id,
+                        "title": s_title,
+                        "status": "DONE",
+                        "stop_reason": "end_turn",
+                        "usage": usage_summary,
+                    })
+                    await self.broadcast({
+                        "type": "session_status",
+                        "conversation_id": cid,
+                        "state": "idle",
+                        "detail": "Ready",
+                    })
+                    if self.active_view_cid == cid:
+                        await self.broadcast({
+                            "type": "status",
+                            "conversation_id": cid,
+                            "state": "idle",
+                            "detail": "Ready",
+                        })
+                    emit_native_notif_event({
+                        "event": "turn_complete",
+                        "conversation_id": cid,
+                        "title": s_title,
+                        "preview": ctx.active_snapshot.raw_markdown if ctx.active_snapshot else "",
+                    })
+            except asyncio.CancelledError:
+                pass
+            finally:
+                self._spontaneous_turn_watchdogs.pop(cid, None)
+
+        self._spontaneous_turn_watchdogs[cid] = asyncio.create_task(_watchdog())
+
     async def _handle_acp_notification(self, msg: dict[str, Any]) -> None:
         method = msg.get("method")
         params = msg.get("params") or {}
@@ -3998,10 +4049,52 @@ class AgyProcessOrchestrator:
             session_id = params.get("sessionId")
             update = params.get("update") or {}
             cid = self._acp_session_to_cid.get(session_id, session_id)
+
+            # 1. Suppress replay notifications during session loading
+            if (session_id and session_id in self._acp_loading_sessions) or (cid and cid in self._acp_loading_sessions):
+                if update.get("sessionUpdate") == "session_info_update":
+                    new_title = update.get("title")
+                    if new_title and cid:
+                        self.storage.rename_conversation(cid, new_title)
+                        c_obj = self._sessions.get(cid)
+                        if c_obj:
+                            c_obj.title = new_title
+                return
+
             ctx = self._sessions.get(cid) if cid else None
             if not ctx and session_id:
                 ctx = self._sessions.get(session_id)
             if ctx:
+                # 2. Detect spontaneous daemon turns (e.g. reactive background task completion)
+                su_type = update.get("sessionUpdate")
+                if not ctx.is_running and su_type in ("agent_message_chunk", "agent_thought_chunk", "tool_call", "user_message_chunk"):
+                    turn_id = f"turn-bg-{uuid.uuid4().hex[:8]}"
+                    ctx.current_turn_id = turn_id
+                    ctx.is_running = True
+                    ctx.current_action = f"Running ({ctx.model})"
+                    ctx.active_snapshot = TurnSnapshot(turn_id=turn_id, model=ctx.model)
+                    ctx._active_usage_summary = {"input_tokens": 0, "output_tokens": 0, "thinking_tokens": 0}
+                    await self.broadcast({
+                        "type": "session_status",
+                        "conversation_id": cid,
+                        "state": "running",
+                        "detail": ctx.current_action,
+                    })
+                    if self.active_view_cid == cid:
+                        await self.broadcast({
+                            "type": "status",
+                            "conversation_id": cid,
+                            "state": "running",
+                            "detail": ctx.current_action,
+                        })
+                    await self.broadcast({
+                        "type": "turn_start",
+                        "conversation_id": cid,
+                        "turn_id": turn_id,
+                        "model": ctx.model,
+                        "start_time": time.time(),
+                    })
+
                 turn_id = ctx.current_turn_id or f"turn-{uuid.uuid4().hex[:8]}"
                 usage_summary = getattr(ctx, "_active_usage_summary", None)
                 if usage_summary is None:
@@ -4009,6 +4102,9 @@ class AgyProcessOrchestrator:
                 await self._demux_json_event(
                     ctx, turn_id, {"event": "acp_update", "update": update, "sessionId": session_id}, usage_summary
                 )
+
+                if not ctx.turn_lock.locked() and ctx.is_running:
+                    self._schedule_spontaneous_turn_watchdog(cid, ctx)
         elif method == "session/request_permission":
             req_id = msg.get("id")
             if req_id is not None:
@@ -4319,21 +4415,25 @@ class AgyProcessOrchestrator:
                             finally:
                                 self._initializing_ctx = None
                     else:
+                        self._acp_loading_sessions.add(cid)
                         try:
-                            await self.acp_call("session/load", {"sessionId": cid}, timeout=15.0)
-                            acp_session_id = cid
-                        except Exception:
                             try:
-                                await self.acp_call("session/resume", {"sessionId": cid}, timeout=15.0)
+                                await self.acp_call("session/load", {"sessionId": cid}, timeout=15.0)
                                 acp_session_id = cid
                             except Exception:
-                                ws_uri = f"file://{ctx.workspace}" if ctx.workspace and Path(ctx.workspace).is_dir() else f"file://{HOME_DIR}"
-                                load_new = await self.acp_call("session/new", {"workspaceUris": [ws_uri]}, timeout=30.0)
-                                real_cid = str(load_new.get("sessionId") or cid)
-                                acp_session_id = real_cid
-                                self._acp_session_to_cid[real_cid] = cid
-                        self._acp_sessions[cid] = acp_session_id
-                        self._acp_session_to_cid[acp_session_id] = cid
+                                try:
+                                    await self.acp_call("session/resume", {"sessionId": cid}, timeout=15.0)
+                                    acp_session_id = cid
+                                except Exception:
+                                    ws_uri = f"file://{ctx.workspace}" if ctx.workspace and Path(ctx.workspace).is_dir() else f"file://{HOME_DIR}"
+                                    load_new = await self.acp_call("session/new", {"workspaceUris": [ws_uri]}, timeout=30.0)
+                                    real_cid = str(load_new.get("sessionId") or cid)
+                                    acp_session_id = real_cid
+                                    self._acp_session_to_cid[real_cid] = cid
+                            self._acp_sessions[cid] = acp_session_id
+                            self._acp_session_to_cid[acp_session_id] = cid
+                        finally:
+                            self._acp_loading_sessions.discard(cid)
 
                 # Synchronize dynamic configuration options
                 clean_model = ctx.model
@@ -5070,6 +5170,13 @@ class AgyProcessOrchestrator:
                 break
             except Exception as e:
                 logger.warning("Error in ACP stdout consumer: %s", e)
+
+        # Fail any pending requests upon ACP stdout reader termination
+        for req_id, fut in list(self._pending_requests.items()):
+            if not fut.done():
+                fut.set_exception(RuntimeError("ACP daemon process terminated unexpectedly"))
+        self._pending_requests.clear()
+        self._acp_initialized = False
         return True
 
     async def _consume_stderr_stream(
@@ -5206,21 +5313,44 @@ class AgyProcessOrchestrator:
                 t_id = update.get("toolCallId")
                 t_status = update.get("status") or "completed"
                 raw_out = update.get("rawOutput") or {}
-                t_out = raw_out.get("output") or ""
+                t_out = raw_out.get("output") or update.get("output") or ""
+                t_name = update.get("name") or ""
+                t_args = update.get("args") or {}
+
                 if ctx.active_snapshot:
                     for tc in ctx.active_snapshot.tool_calls:
                         if tc.get("tool_id") == t_id:
-                            tc["status"] = "completed" if t_status in ("completed", "done") else t_status
-                            tc["output"] = str(t_out)[:4000]
+                            tc["status"] = t_status
+                            if t_out:
+                                tc["output"] = str(t_out)[:4000]
+                            if not t_name and tc.get("name"):
+                                t_name = tc["name"]
+                            if not t_args and tc.get("args"):
+                                t_args = tc["args"]
                             break
+
+                # Detect background task launches from command execution
+                out_str = str(t_out)
+                if "Tool is running as a background task with task id:" in out_str:
+                    m_bg = re.search(r"task id:\s*([^\s\n]+)", out_str)
+                    if m_bg:
+                        bg_task_id = m_bg.group(1).strip()
+                        await self.broadcast({
+                            "type": "system_card",
+                            "conversation_id": ctx.conversation_id,
+                            "title": "Background Task Active",
+                            "markdown": f"⚙️ Running in background: `{bg_task_id}`\n\nThe agent will report progress automatically when finished.",
+                            "level": "info",
+                        })
+
                 await self.broadcast({
                     "type": "tool_call",
                     "conversation_id": ctx.conversation_id,
                     "turn_id": turn_id,
                     "tool_id": t_id,
-                    "name": update.get("name") or "",
-                    "args": update.get("args") or {},
-                    "status": "completed" if t_status in ("completed", "done") else t_status,
+                    "name": t_name,
+                    "args": t_args,
+                    "status": t_status,
                     "output": str(t_out)[:4000],
                 })
 
@@ -7855,6 +7985,21 @@ class AgyWebServer:
             raw_history = self.storage.load_transcript(cid)
             history = self.prepare_session_history_messages(ctx, raw_history)
             branch = get_git_branch(ctx.workspace)
+
+            # Pre-load session into ACP daemon with replay suppression
+            if cid not in self.orchestrator._acp_sessions and self.orchestrator.acp_proc and self.orchestrator._acp_initialized:
+                async def _preload(target_cid: str) -> None:
+                    self.orchestrator._acp_loading_sessions.add(target_cid)
+                    try:
+                        await self.orchestrator.acp_call("session/load", {"sessionId": target_cid}, timeout=15.0)
+                        self.orchestrator._acp_sessions[target_cid] = target_cid
+                        self.orchestrator._acp_session_to_cid[target_cid] = target_cid
+                    except Exception:
+                        pass
+                    finally:
+                        self.orchestrator._acp_loading_sessions.discard(target_cid)
+                asyncio.create_task(_preload(cid))
+
             await self.broadcast(
                 {
                     "type": "session_history",

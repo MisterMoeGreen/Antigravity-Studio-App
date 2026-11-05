@@ -5,7 +5,7 @@ This document provides the high-level architecture, motivation, and migration ro
 
 The core architectural milestone of v1.8.0 is transitioning the internal execution engine from one-shot CLI batch spawning (`agy -p` with `--output-format stream-json`) to a persistent, event-driven **Agent Client Protocol (`agy acp`)** daemon.
 
-This transition eliminates turn startup latency, establishes robust JSON-RPC 2.0 typing, enables native mid-turn prompt steering, unlocks prompt token caching across turns, and preserves 100% feature parity with existing mobile touch dialogs, multi-session tabs, authentication flows, skills, MCPs, and Alpine Linux packages.
+This transition eliminates turn startup latency, establishes robust JSON-RPC 2.0 typing, unlocks prompt token caching across turns, standardizes on Classic Stop-First touch interaction, and preserves 100% feature parity with existing mobile touch dialogs, multi-session tabs, Google OAuth authentication flow, skills, MCPs, and Alpine Linux packages.
 
 ---
 
@@ -37,8 +37,7 @@ flowchart TD
         S2 -->|Persistent Stdio JSON-RPC 2.0| ACP["Persistent agy acp Daemon"]
         ACP -->|In-Memory Cache + 0ms Cold Start| Stream["Instant Streaming Chunk"]
         Stream -->|session/update Notifications| S2
-        S2 -->|session/cancel Notification| Stop["Graceful Prompt Interruption"]
-        S2 -->|session/prompt mid-turn| Steer["Dynamic Mid-Turn Steering"]
+        S2 -->|session/cancel Notification| Stop["Graceful Prompt Interruption (Stop-First)"]
     end
 ```
 
@@ -47,7 +46,7 @@ flowchart TD
 | **Process Lifecycle** | Spawns a new native OS process for every user message. | Single long-lived daemon running in the background. |
 | **Startup Latency** | 1,500ms – 2,500ms ELF cold-start + config parse per turn. | **0ms** (persistent connection ready instantly). |
 | **Prompt Token Caching** | Low/inconsistent cache reuse across process exits. | **High cache reuse** (e.g. 11,300+ cached tokens retained). |
-| **Mid-Turn Dynamic Steering** | Impossible (turn must be killed or run to finish). | Supported natively via subsequent `session/prompt` calls. |
+| **Turn Interaction Model** | Strict Stop-First (prompt locked during run). | **Classic Stop-First** (prompt input locked; tap Stop to interrupt). |
 | **Turn Interruption & Stop** | Requires abrupt OS signals (`SIGINT`/`SIGTERM`/`SIGKILL`). | Clean `session/cancel` notification (Classic Stop-First touch mode). |
 | **Protocol Format** | Unstructured stdout NDJSON scraping with heuristic regex. | Standard JSON-RPC 2.0 with explicit request IDs & types. |
 | **Model & Mode Switching** | Requires restarting the CLI with different command flags. | Dynamic in-flight reconfiguration via `session/set_config_option`. |
@@ -68,7 +67,7 @@ The v1.8.0 system consists of 3 synchronized layers:
 2. **Backend Daemon & Bridge (`agy-ui/server.py`)**:
    * Manages the persistent `agy acp` background process over asynchronous stdin/stdout pipes.
    * Maintains `AgyProcessOrchestrator` AST integrity while translating ACP JSON-RPC notifications (`session/update`) into frontend WebSocket events (`step_update`, `content_block_delta`, `tool_use`).
-   * Manages Google OAuth via background PTY runner (`agy acp --login`) and API key auth via ACP `authenticate`.
+   * Manages Google OAuth exclusively via background PTY runner (`agy acp --login` or `agy --login`).
    * Houses the `/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/ask_question.sock` domain socket for interactive touch bottom-sheets.
 
 3. **Alpine Linux Native Engine & Storage**:

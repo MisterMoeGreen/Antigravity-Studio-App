@@ -9,32 +9,19 @@ When calling ACP's native JSON-RPC method `authenticate` with `methodId: "oauth-
 "No browser is available here (no graphical display is available to open a browser). Run `agy acp --login` in a terminal on this machine, then retry; or use a Gemini API key."
 ```
 
-### 1.2 The Hybrid Solution: Preserving the PTY Bridge for Google OAuth
-To deliver a 100% seamless touch experience without requiring the user to open a terminal, Antigravity Studio v1.8.0 implements a **Hybrid Authentication Strategy**:
+### 1.2 The PTY Bridge for Google OAuth
+To deliver a 100% seamless touch experience without requiring the user to open a terminal, Antigravity Studio v1.8.0 uses dedicated Google OAuth:
 
-1. **Google OAuth Flow**:
-   * When unauthenticated, `server.py` spawns `agy acp --login` (or `agy --login`) inside an isolated pseudo-terminal PTY (`openpty()`).
-   * The orchestrator regex-captures the Google OAuth URL emitted on stdout:
-     `https://accounts.google.com/o/oauth2/auth?...`
-   * `server.py` broadcasts an `open_external_url` message over WebSocket.
-   * `MainActivity.kt` opens the OAuth URL in a native Chrome Custom Tab.
-   * Once the user approves, they paste the authorization code into the mobile dialog.
-   * `submit_auth_code(code)` writes the code + `\r\n` directly to the PTY master descriptor.
-   * The token is safely saved to `/data/data/ai.agy.app/files/home/.gemini/antigravity-oauth-token`, and the persistent ACP daemon initializes.
-
-2. **Gemini API Key Authentication Flow**:
-   * If the user configures a `GEMINI_API_KEY` in Settings, `server.py` calls the native ACP JSON-RPC method:
-     ```json
-     {
-       "jsonrpc": "2.0",
-       "id": 5,
-       "method": "authenticate",
-       "params": {
-         "methodId": "gemini-api-key"
-       }
-     }
-     ```
-   * Authentication succeeds directly over the RPC connection without spawning a PTY.
+* **Google OAuth Flow (Exclusive Authentication Path)**:
+  * Antigravity Studio operates purely via Google OAuth (`oauth-personal`). API key authentication is not supported.
+  * When unauthenticated, `server.py` spawns `agy acp --login` (or `agy --login`) inside an isolated pseudo-terminal PTY (`openpty()`).
+  * The orchestrator regex-captures the Google OAuth URL emitted on stdout:
+    `https://accounts.google.com/o/oauth2/auth?...`
+  * `server.py` broadcasts an `open_external_url` message over WebSocket.
+  * `MainActivity.kt` opens the OAuth URL in a native Chrome Custom Tab.
+  * Once the user approves, they paste the authorization code into the mobile dialog.
+  * `submit_auth_code(code)` writes the code + `\r\n` directly to the PTY master descriptor.
+  * The token is safely saved to `/data/data/ai.agy.app/files/home/.gemini/antigravity-oauth-token`, and the persistent ACP daemon initializes.
 
 ---
 

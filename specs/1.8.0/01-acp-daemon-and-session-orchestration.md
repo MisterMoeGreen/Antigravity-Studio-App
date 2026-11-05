@@ -141,7 +141,7 @@ When the user switches sessions from the conversation list, or after the app is 
 ```
 
 * **Persistence Compatibility**: Verified that ACP automatically syncs all sessions, previews, and turn titles to SQLite `conversation_summaries.db`.
-* **Zero History Replay**: Unlike batch mode which had to read past files off disk on every turn, `session/load` mounts the conversation directly in ACP's state machine without replaying turns to the terminal.
+* **Replay Chunk Suppression Gate**: During `session/load`, `agy acp` delivers past conversation history chunks via `session/update` notifications. `server.py` tracks active loading sessions (`_acp_loading_sessions`) and suppresses these historical replay notifications so they are not broadcast to the UI as live turn tokens, thoughts, or duplicate tool invocations.
 
 ### 3.3 Prompt Caching Across Turns
 In multi-turn sessions, context is retained in memory by the ACP engine. In our benchmarks:
