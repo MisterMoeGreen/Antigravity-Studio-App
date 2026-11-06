@@ -7772,6 +7772,7 @@ class AgyWebServer:
                         {
                             "type": "session_history",
                             "conversation_id": active_cid,
+                            "force_switch": True,
                             "title": meta.get("title") or ctx.title or "Conversation",
                             "meta": meta,
                             "workspace": ctx.workspace,

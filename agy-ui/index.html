@@ -4660,6 +4660,7 @@
         wsInitialized: false,
         pendingDeepLinkCid: null,
         ignoreNextInitialHistory: false,
+        isExplicitDraft: false,
       };
 
       const SLASH_COMMANDS = [
@@ -5086,6 +5087,7 @@
           renderAttachmentBar();
           autoResizePrompt();
           closeOverlays();
+          state.isExplicitDraft = true;
           state.conversationId = null;
           try { localStorage.removeItem('agy_last_active_cid'); } catch (_) {}
           if (window.AndroidApp && typeof window.AndroidApp.setActiveSession === 'function') {
@@ -5324,6 +5326,7 @@
         }
 
         // 2. Set new active conversation
+        state.isExplicitDraft = false;
         state.conversationId = newCid;
         try { localStorage.setItem('agy_last_active_cid', newCid); } catch (_) {}
         const targetBuf = getOrCreateSessionBuffer(newCid);
@@ -5901,7 +5904,7 @@
         if (cfg.modes) state.modes = cfg.modes;
         if (cfg.efforts) state.efforts = cfg.efforts;
         if ('conversation_id' in cfg && cfg.conversation_id !== undefined) {
-          if (state.conversationId !== null || !cfg.conversation_id || cfg.force_switch) {
+          if (!state.isExplicitDraft || cfg.force_switch) {
             state.conversationId = cfg.conversation_id;
           }
         }
@@ -6110,18 +6113,14 @@
             if (msg.conversation_id && state.isInitializingDraft && (!state.conversationId || state.conversationId === msg.conversation_id)) {
               adoptDraftSessionId(msg.conversation_id);
             }
-            if (msg.force_switch && msg.conversation_id) {
-              initiateSessionSwitch(msg.conversation_id);
-              break;
-            }
             if (state.ignoreNextInitialHistory) {
               state.ignoreNextInitialHistory = false;
               if (msg.conversation_id !== state.conversationId) {
                 break;
               }
             }
-            if (state.conversationId === null && msg.conversation_id && !msg.force_switch) {
-              // Background session history update while drafting new session
+            if (state.isExplicitDraft && state.conversationId === null && !msg.force_switch) {
+              // Background session history update while user explicitly tapped new session
               const b = getOrCreateSessionBuffer(msg.conversation_id);
               if (msg.messages) b.messages = msg.messages;
               renderSessionDrawerList();
@@ -7596,6 +7595,7 @@
       // ---------------------------------------------------------------------
       function dispatchUserPrompt(text) {
         try {
+          state.isExplicitDraft = false;
           const trimmed = (text || '').trim();
           const attachments = state.pendingAttachments.slice();
           if (!trimmed && !attachments.length) return;
@@ -7789,6 +7789,7 @@
           renderAttachmentBar();
           autoResizePrompt();
           closeOverlays();
+          state.isExplicitDraft = true;
           state.conversationId = null;
           try { localStorage.removeItem('agy_last_active_cid'); } catch (_) {}
           if (window.AndroidApp && typeof window.AndroidApp.setActiveSession === 'function') {
