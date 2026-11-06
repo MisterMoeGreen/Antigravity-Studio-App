@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/MisterMoeGreen/Antigravity-Studio-App/releases/latest"><img src="https://img.shields.io/badge/Download-Latest_Release_APK-success?style=for-the-badge&logo=android" alt="Download APK" /></a>
+  <a href="https://github.com/MisterMoeGreen/Antigravity-Studio-App/releases/latest"><img src="badge-download.png" alt="Download APK" /></a>
 </p>
 
 ---
