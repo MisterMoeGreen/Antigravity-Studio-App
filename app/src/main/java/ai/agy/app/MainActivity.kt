@@ -268,17 +268,23 @@ class MainActivity : AppCompatActivity() {
             val port = AgyForegroundService.readyPortFlow.filterNotNull().first()
             val token = AgyForegroundService.authTokenFlow.filterNotNull().first()
             val healthUrl = "http://127.0.0.1:$port/health"
-            for (i in 1..100) {
+            var isReady = false
+            for (i in 1..250) { // allow up to 25 seconds for cold start on busy devices
                 try {
                     val conn = URL(healthUrl).openConnection() as HttpURLConnection
-                    conn.connectTimeout = 300
-                    conn.readTimeout = 300
-                    if (conn.responseCode == 200) break
+                    conn.connectTimeout = 400
+                    conn.readTimeout = 400
+                    if (conn.responseCode == 200) {
+                        isReady = true
+                        break
+                    }
                 } catch (_: Exception) {}
                 delay(100)
             }
             withContext(Dispatchers.Main) {
-                webView.loadUrl("http://127.0.0.1:$port/?auth=$token")
+                val currentPort = AgyForegroundService.readyPortFlow.value ?: port
+                val currentToken = AgyForegroundService.authTokenFlow.value ?: token
+                webView.loadUrl("http://127.0.0.1:$currentPort/?auth=$currentToken")
             }
         }
     }
@@ -306,6 +312,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     inner class AndroidAppInterface {
+        @JavascriptInterface
+        fun getAuthToken(): String {
+            return AgyForegroundService.authTokenFlow.value ?: ""
+        }
+
+        @JavascriptInterface
+        fun getBoundPort(): Int {
+            return AgyForegroundService.readyPortFlow.value ?: 8081
+        }
+
         @JavascriptInterface
         fun consumePendingDeepLink(): String? {
             val cid = AgyNotificationManager.pendingDeepLinkConversationId

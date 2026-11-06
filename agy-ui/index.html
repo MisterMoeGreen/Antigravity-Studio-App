@@ -5487,6 +5487,13 @@
       // ---------------------------------------------------------------------
       function getAuthToken() {
         try {
+          if (window.AndroidApp && typeof window.AndroidApp.getAuthToken === 'function') {
+            const nativeToken = window.AndroidApp.getAuthToken();
+            if (nativeToken) {
+              sessionStorage.setItem('agy_auth_token', nativeToken);
+              return nativeToken;
+            }
+          }
           const urlToken = new URLSearchParams(window.location.search).get('auth');
           if (urlToken) {
             sessionStorage.setItem('agy_auth_token', urlToken);
@@ -5511,9 +5518,18 @@
 
       function connectWebSocket() {
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        let host = location.host;
+        try {
+          if (window.AndroidApp && typeof window.AndroidApp.getBoundPort === 'function') {
+            const nativePort = window.AndroidApp.getBoundPort();
+            if (nativePort && Number(nativePort) > 0) {
+              host = `${location.hostname || '127.0.0.1'}:${nativePort}`;
+            }
+          }
+        } catch (_) {}
         const token = getAuthToken();
         const authParam = token ? `?auth=${encodeURIComponent(token)}` : '';
-        const wsUrl = `${proto}//${location.host}/ws${authParam}`;
+        const wsUrl = `${proto}//${host}/ws${authParam}`;
         const ws = new WebSocket(wsUrl);
         state.ws = ws;
 
@@ -5541,6 +5557,10 @@
           } catch (e) {
             console.error('WS parse error:', e);
           }
+        };
+
+        ws.onerror = (err) => {
+          console.warn('WebSocket connection error:', err);
         };
 
         ws.onclose = () => {

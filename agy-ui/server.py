@@ -60,6 +60,12 @@ APP_SETTINGS_FILE = GEMINI_DIR / "app_settings.json"
 
 TMP_DIR = Path(os.environ.get("TMPDIR", "/data/data/com.termux/files/usr/tmp"))
 AUTH_TOKEN_FILE = TMP_DIR / ".auth_token"
+PID_FILE = TMP_DIR / "server.pid"
+try:
+    PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
+except Exception:
+    pass
 AUTH_TOKEN = os.environ.get("AGY_AUTH_TOKEN")
 if not AUTH_TOKEN and AUTH_TOKEN_FILE.exists():
     try:
@@ -7691,104 +7697,53 @@ class AgyWebServer:
         logger.info("Client connected (%d active)", len(self.clients))
 
         try:
-            if not self.discovered_models:
-                self.discovered_models = await self.discover_models()
-            if not self.orchestrator.config.model:
-                d_model, d_mode, d_effort = self.orchestrator._active_view_defaults()
-                self.orchestrator.config.model = d_model
-                self.orchestrator.config.effort = d_effort
+            try:
+                if not self.discovered_models:
+                    self.discovered_models = await self.discover_models()
+                if not self.orchestrator.config.model:
+                    d_model, d_mode, d_effort = self.orchestrator._active_view_defaults()
+                    self.orchestrator.config.model = d_model
+                    self.orchestrator.config.effort = d_effort
 
-            sessions = self.get_all_sessions(limit=80)
-            active_cid = self.orchestrator.active_view_cid
+                sessions = self.get_all_sessions(limit=80)
+                active_cid = self.orchestrator.active_view_cid
 
-            if active_cid:
-                meta = self.storage.get_conversation_meta(active_cid)
-                if meta.get("workspaces"):
-                    ws_candidate = meta["workspaces"][0]
-                    if Path(ws_candidate).is_dir():
-                        self.orchestrator.config.workspace = ws_candidate
+                if active_cid:
+                    meta = self.storage.get_conversation_meta(active_cid)
+                    if meta.get("workspaces"):
+                        ws_candidate = meta["workspaces"][0]
+                        if Path(ws_candidate).is_dir():
+                            self.orchestrator.config.workspace = ws_candidate
 
-            branch = get_git_branch(self.orchestrator.config.workspace)
-            is_auth = is_oauth_token_valid()
+                branch = get_git_branch(self.orchestrator.config.workspace)
+                is_auth = is_oauth_token_valid()
 
-            await websocket.send(
-                json.dumps(
-                    {
-                        "type": "init_state",
-                        "is_authenticated": is_auth,
-                        "default_workspace": self.default_workspace,
-                        "config": {
-                            "conversation_id": active_cid,
-                            "model": self.orchestrator.config.model,
-                            "mode": self.orchestrator.config.mode,
-                            "effort": self.orchestrator.config.effort,
-                            "workspace": self.orchestrator.config.workspace,
-                            "git_branch": branch,
-                            "models": self.discovered_models,
-                            "modes": VALID_MODES,
-                            "efforts": VALID_EFFORTS,
-                        },
-                        "system_info": {
-                            "app_version": f"v{APP_VERSION}",
-                            "agy_version": f"v{get_agy_version()}",
-                            "engine_version": get_engine_status().get("version"),
-                            "device": get_android_hardware_telemetry().get("device", "Android Device"),
-                        },
-                        "engine": get_engine_status(),
-                        "sessions": sessions,
-                        "unread_sessions": list(self.orchestrator.unread_sessions),
-                        "active_background_tasks": [
-                            {
-                                "task_id": bg_id,
-                                "conversation_id": bg_info.get("conversation_id"),
-                                "summary": bg_info.get("summary"),
-                                "start_time": bg_info.get("start_time"),
-                            }
-                            for bg_id, bg_info in self.orchestrator.active_background_tasks.items()
-                        ],
-                        "is_running": self.orchestrator.is_running,
-                        "is_authenticating": self.orchestrator.is_authenticating,
-                    }
-                )
-            )
-
-            if not is_auth:
                 await websocket.send(
                     json.dumps(
                         {
-                            "type": "auth_required",
-                            "reason": "unauthenticated",
-                        }
-                    )
-                )
-
-            # Hydrate current conversation transcript if one is selected
-            if active_cid:
-                meta = self.storage.get_conversation_meta(active_cid)
-                raw_history = self.storage.load_transcript(active_cid)
-                ctx = self.orchestrator.get_or_create_context(active_cid)
-                history = self.prepare_session_history_messages(ctx, raw_history)
-                await websocket.send(
-                    json.dumps(
-                        {
-                            "type": "session_history",
-                            "conversation_id": active_cid,
-                            "force_switch": True,
-                            "title": meta.get("title") or ctx.title or "Conversation",
-                            "meta": meta,
-                            "workspace": ctx.workspace,
-                            "git_branch": branch,
-                            "messages": history,
-                            "is_running": ctx.is_running,
-                            "current_action": ctx.current_action,
-                            "active_turn": {
-                                "turn_id": ctx.active_snapshot.turn_id,
-                                "model": ctx.active_snapshot.model,
-                                "raw_markdown": ctx.active_snapshot.raw_markdown,
-                                "raw_thoughts": ctx.active_snapshot.raw_thoughts,
-                                "tool_calls": ctx.active_snapshot.tool_calls,
-                                "start_time": ctx.active_snapshot.start_time,
-                            } if (ctx.is_running and ctx.active_snapshot) else None,
+                            "type": "init_state",
+                            "is_authenticated": is_auth,
+                            "default_workspace": self.default_workspace,
+                            "config": {
+                                "conversation_id": active_cid,
+                                "model": self.orchestrator.config.model,
+                                "mode": self.orchestrator.config.mode,
+                                "effort": self.orchestrator.config.effort,
+                                "workspace": self.orchestrator.config.workspace,
+                                "git_branch": branch,
+                                "models": self.discovered_models,
+                                "modes": VALID_MODES,
+                                "efforts": VALID_EFFORTS,
+                            },
+                            "system_info": {
+                                "app_version": f"v{APP_VERSION}",
+                                "agy_version": f"v{get_agy_version()}",
+                                "engine_version": get_engine_status().get("version"),
+                                "device": get_android_hardware_telemetry().get("device", "Android Device"),
+                            },
+                            "engine": get_engine_status(),
+                            "sessions": sessions,
+                            "unread_sessions": list(self.orchestrator.unread_sessions),
                             "active_background_tasks": [
                                 {
                                     "task_id": bg_id,
@@ -7797,29 +7752,123 @@ class AgyWebServer:
                                     "start_time": bg_info.get("start_time"),
                                 }
                                 for bg_id, bg_info in self.orchestrator.active_background_tasks.items()
-                                if bg_info.get("conversation_id") == active_cid
                             ],
+                            "is_running": self.orchestrator.is_running,
+                            "is_authenticating": self.orchestrator.is_authenticating,
                         }
                     )
                 )
 
-            # Hydrate any active pending questions (M-14)
-            if self._pending_questions:
-                for qid, qentry in list(self._pending_questions.items()):
+                if not is_auth:
                     await websocket.send(
                         json.dumps(
                             {
-                                "type": "ask_question",
-                                "conversation_id": qentry.get("conversation_id"),
-                                "turn_id": qentry.get("turn_id"),
-                                "question_id": qid,
-                                "created_at": qentry.get("created_at", int(time.time())),
-                                "tool_action": qentry.get("tool_action", ""),
-                                "tool_summary": qentry.get("tool_summary", ""),
-                                "questions": qentry.get("questions", []),
+                                "type": "auth_required",
+                                "reason": "unauthenticated",
                             }
                         )
                     )
+
+                # Hydrate current conversation transcript if one is selected
+                if active_cid:
+                    try:
+                        meta = self.storage.get_conversation_meta(active_cid)
+                        raw_history = self.storage.load_transcript(active_cid)
+                        ctx = self.orchestrator.get_or_create_context(active_cid)
+                        history = self.prepare_session_history_messages(ctx, raw_history)
+                        await websocket.send(
+                            json.dumps(
+                                {
+                                    "type": "session_history",
+                                    "conversation_id": active_cid,
+                                    "force_switch": True,
+                                    "title": meta.get("title") or ctx.title or "Conversation",
+                                    "meta": meta,
+                                    "workspace": ctx.workspace,
+                                    "git_branch": branch,
+                                    "messages": history,
+                                    "is_running": ctx.is_running,
+                                    "current_action": ctx.current_action,
+                                    "active_turn": {
+                                        "turn_id": ctx.active_snapshot.turn_id,
+                                        "model": ctx.active_snapshot.model,
+                                        "raw_markdown": ctx.active_snapshot.raw_markdown,
+                                        "raw_thoughts": ctx.active_snapshot.raw_thoughts,
+                                        "tool_calls": ctx.active_snapshot.tool_calls,
+                                        "start_time": ctx.active_snapshot.start_time,
+                                    } if (ctx.is_running and ctx.active_snapshot) else None,
+                                    "active_background_tasks": [
+                                        {
+                                            "task_id": bg_id,
+                                            "conversation_id": bg_info.get("conversation_id"),
+                                            "summary": bg_info.get("summary"),
+                                            "start_time": bg_info.get("start_time"),
+                                        }
+                                        for bg_id, bg_info in self.orchestrator.active_background_tasks.items()
+                                        if bg_info.get("conversation_id") == active_cid
+                                    ],
+                                }
+                            )
+                        )
+                    except Exception as hist_exc:
+                        logger.warning("Failed to hydrate active transcript %s: %s", active_cid, hist_exc)
+
+                # Hydrate any active pending questions (M-14)
+                if self._pending_questions:
+                    for qid, qentry in list(self._pending_questions.items()):
+                        await websocket.send(
+                            json.dumps(
+                                {
+                                    "type": "ask_question",
+                                    "conversation_id": qentry.get("conversation_id"),
+                                    "turn_id": qentry.get("turn_id"),
+                                    "question_id": qid,
+                                    "created_at": qentry.get("created_at", int(time.time())),
+                                    "tool_action": qentry.get("tool_action", ""),
+                                    "tool_summary": qentry.get("tool_summary", ""),
+                                    "questions": qentry.get("questions", []),
+                                }
+                            )
+                        )
+            except websockets.ConnectionClosed:
+                raise
+            except Exception as init_exc:
+                logger.exception("Non-fatal error initializing client state: %s", init_exc)
+                try:
+                    await websocket.send(
+                        json.dumps(
+                            {
+                                "type": "init_state",
+                                "is_authenticated": is_oauth_token_valid(),
+                                "default_workspace": self.default_workspace,
+                                "config": {
+                                    "conversation_id": None,
+                                    "model": "gemini-2.5-flash",
+                                    "mode": "agent",
+                                    "effort": "high",
+                                    "workspace": self.default_workspace,
+                                    "git_branch": "main",
+                                    "models": ["gemini-2.5-pro", "gemini-2.5-flash"],
+                                    "modes": VALID_MODES,
+                                    "efforts": VALID_EFFORTS,
+                                },
+                                "system_info": {
+                                    "app_version": f"v{APP_VERSION}",
+                                    "agy_version": f"v{get_agy_version()}",
+                                    "engine_version": get_engine_status().get("version"),
+                                    "device": "Android Device",
+                                },
+                                "engine": get_engine_status(),
+                                "sessions": [],
+                                "unread_sessions": [],
+                                "active_background_tasks": [],
+                                "is_running": False,
+                                "is_authenticating": False,
+                            }
+                        )
+                    )
+                except Exception:
+                    pass
 
             async for raw_msg in websocket:
                 try:
@@ -7830,6 +7879,8 @@ class AgyWebServer:
 
         except websockets.ConnectionClosed:
             pass
+        except Exception as ws_err:
+            logger.exception("Unexpected exception in ws_handler: %s", ws_err)
         finally:
             self.clients.discard(websocket)
             logger.info("Client disconnected (%d active)", len(self.clients))
@@ -9946,6 +9997,11 @@ async def main() -> None:
             logger.info("Shutting down Antigravity Mobile UI server...")
             await app.orchestrator.abort_current_turn()
     finally:
+        try:
+            if PID_FILE.exists():
+                PID_FILE.unlink()
+        except Exception:
+            pass
         await app.stop_ipc_server()
 
 

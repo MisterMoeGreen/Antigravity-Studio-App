@@ -56,6 +56,8 @@ class AgyForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        _readyPortFlow.value = null
+        _authTokenFlow.value = null
         AgyNotificationManager.initChannels(this)
         acquireWakeLock()
         startStickyNotification(8081)
@@ -65,6 +67,7 @@ class AgyForegroundService : Service() {
             reconcileSymlinkFarmAndLock(this@AgyForegroundService)
             registerDnsWatcher()
             registerTelemetryBridge()
+            cleanupStaleDaemonProcesses()
 
             val port = pickAvailablePort(8081, listOf(8082, 8090, 8091))
             val token = java.util.UUID.randomUUID().toString().replace("-", "")
@@ -153,9 +156,7 @@ class AgyForegroundService : Service() {
         } catch (_: Exception) {}
 
         // Clean up any stale orphaned server processes before spawning
-        try {
-            Runtime.getRuntime().exec(arrayOf("killall", "server.py")).waitFor()
-        } catch (_: Exception) {}
+        cleanupStaleDaemonProcesses()
 
         val pb = ProcessBuilder(
             "$usr/bin/python3",
@@ -221,10 +222,51 @@ class AgyForegroundService : Service() {
         }
     }
 
+    private fun cleanupStaleDaemonProcesses() {
+        val root = "/data/data/$packageName/files"
+        val usr = "$root/usr"
+        val myPid = android.os.Process.myPid()
+        try {
+            val pidFile = File("$usr/tmp/server.pid")
+            if (pidFile.exists()) {
+                val oldPid = pidFile.readText().trim().toIntOrNull()
+                if (oldPid != null && oldPid > 0 && oldPid != myPid) {
+                    try {
+                        android.system.Os.kill(oldPid, 9)
+                    } catch (_: Exception) {}
+                }
+                pidFile.delete()
+            }
+            // Scan /proc for any leftover server.py instances belonging to this UID
+            val procDir = File("/proc")
+            procDir.listFiles()?.forEach { file ->
+                if (file.isDirectory && file.name.all { it.isDigit() }) {
+                    val pid = file.name.toIntOrNull() ?: return@forEach
+                    if (pid != myPid) {
+                        try {
+                            val cmdline = File(file, "cmdline").readText()
+                            if (cmdline.contains("server.py")) {
+                                android.system.Os.kill(pid, 9)
+                            }
+                        } catch (_: Exception) {}
+                    }
+                }
+            }
+            val pkillBin = File("$usr/bin/pkill")
+            if (pkillBin.exists()) {
+                Runtime.getRuntime().exec(arrayOf(pkillBin.absolutePath, "-9", "-f", "server.py")).waitFor()
+            }
+        } catch (_: Exception) {}
+    }
+
     private fun pickAvailablePort(preferred: Int, fallbacks: List<Int>): Int {
         for (port in listOf(preferred) + fallbacks) {
             try {
-                ServerSocket(port).use { return port }
+                ServerSocket().use { socket ->
+                    socket.reuseAddress = true
+                    socket.bind(java.net.InetSocketAddress("127.0.0.1", port))
+                    return port
+                }
             } catch (_: Exception) {}
         }
         return ServerSocket(0).use { it.localPort }
@@ -301,7 +343,7 @@ class AgyForegroundService : Service() {
             daemonProcess = null
         } catch (_: Exception) {}
         try {
-            Runtime.getRuntime().exec(arrayOf("killall", "-9", "server.py", "agy"))
+            cleanupStaleDaemonProcesses()
         } catch (_: Exception) {}
         networkCallback?.let {
             val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
