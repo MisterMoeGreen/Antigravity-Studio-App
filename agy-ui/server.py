@@ -4207,17 +4207,18 @@ class AgyProcessOrchestrator:
 
     async def close_acp_session(self, cid: str) -> None:
         """Closes and evicts a specific session from the agy acp daemon (ARGON-18-02)."""
+        acp_sid = self._acp_sessions.get(cid, cid)
         if not self.acp_proc or self.acp_proc.returncode is not None or not self._acp_initialized:
             self._acp_sessions.pop(cid, None)
-            self._acp_session_to_cid.pop(cid, None)
+            self._acp_session_to_cid.pop(acp_sid, None)
             return
         try:
-            await self.acp_call("session/close", {"sessionId": cid}, timeout=5.0)
+            await self.acp_call("session/close", {"sessionId": acp_sid}, timeout=5.0)
         except Exception as e:
             logger.debug("session/close during eviction for %s: %s", cid, e)
         finally:
             self._acp_sessions.pop(cid, None)
-            self._acp_session_to_cid.pop(cid, None)
+            self._acp_session_to_cid.pop(acp_sid, None)
 
     async def recycle_acp_daemon(self) -> None:
         """Terminates and restarts the agy acp daemon to purge in-memory conversation state (ARGON-18-02)."""
@@ -8929,13 +8930,10 @@ class AgyWebServer:
         if mtype == "delete_session":
             cid = str(data.get("conversation_id") or "").strip()
             if cid:
-                if self.orchestrator.acp_proc and self.orchestrator._acp_initialized:
-                    try:
-                        await self.orchestrator.acp_call("session/close", {"sessionId": cid}, timeout=5.0)
-                    except Exception:
-                        pass
-                self.orchestrator._acp_sessions.pop(cid, None)
-                self.orchestrator._acp_session_to_cid.pop(cid, None)
+                try:
+                    await self.orchestrator.close_acp_session(cid)
+                except Exception:
+                    pass
                 self.orchestrator._sessions.pop(cid, None)
                 is_active = (self.orchestrator.config.conversation_id == cid)
                 success = self.storage.delete_conversation(cid)
