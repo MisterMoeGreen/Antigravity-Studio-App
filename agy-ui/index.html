@@ -5324,6 +5324,7 @@
 
         // 2. Set new active conversation
         state.conversationId = newCid;
+        try { localStorage.setItem('agy_last_active_cid', newCid); } catch (_) {}
         const targetBuf = getOrCreateSessionBuffer(newCid);
 
         // 3. Clear unread state
@@ -5513,7 +5514,9 @@
         state.ws = ws;
 
         ws.onopen = () => {
-          setRuntimeStatus('idle', 'Ready');
+          if (!state.isRunning) {
+            setRuntimeStatus('idle', 'Ready');
+          }
           if (typeof fetchPendingQuestions === 'function') {
             fetchPendingQuestions();
           }
@@ -5954,6 +5957,17 @@
                 }
               }
             }
+            if (Array.isArray(msg.unread_sessions)) {
+              for (const uCid of msg.unread_sessions) {
+                if (uCid !== state.conversationId) {
+                  const b = getOrCreateSessionBuffer(uCid);
+                  b.unread = true;
+                }
+              }
+            }
+            if (Array.isArray(msg.active_background_tasks)) {
+              reconcileActiveBackgroundTasks(msg.active_background_tasks, null);
+            }
             renderSessionDrawerList();
             if (msg.system_info) {
               if (msg.system_info.app_version) {
@@ -5999,9 +6013,15 @@
             if (pendingCid) {
               state.ignoreNextInitialHistory = true;
               initiateSessionSwitch(pendingCid);
-            } else if (!state.conversationId) {
-              renderEmptyWelcome();
-              hideBootSplash();
+            } else if (!state.conversationId && (!msg.config || !msg.config.conversation_id)) {
+              let restoredCid = null;
+              try { restoredCid = localStorage.getItem('agy_last_active_cid'); } catch (_) {}
+              if (restoredCid && (state.sessions || []).some(s => s.conversation_id === restoredCid)) {
+                initiateSessionSwitch(restoredCid);
+              } else {
+                renderEmptyWelcome();
+                hideBootSplash();
+              }
             }
             break;
 
@@ -6051,6 +6071,14 @@
 
           case 'session_list':
             state.sessions = msg.sessions || [];
+            if (Array.isArray(msg.unread_sessions)) {
+              for (const uCid of msg.unread_sessions) {
+                if (uCid !== state.conversationId) {
+                  const b = getOrCreateSessionBuffer(uCid);
+                  b.unread = true;
+                }
+              }
+            }
             renderSessionDrawerList();
             if (state.conversationId) {
               const cur = state.sessions.find(x => x.conversation_id === state.conversationId);
@@ -6117,7 +6145,11 @@
             state.activeTurns.clear();
             renderFullHistory(msg.messages || []);
             renderSessionDrawerList();
-            updateBgTaskBar();
+            if (Array.isArray(msg.active_background_tasks)) {
+              reconcileActiveBackgroundTasks(msg.active_background_tasks, msg.conversation_id);
+            } else {
+              updateBgTaskBar();
+            }
             if (window.AndroidApp && typeof window.AndroidApp.setActiveSession === 'function') {
               window.AndroidApp.setActiveSession(msg.conversation_id);
             }
@@ -7373,6 +7405,30 @@
         if (!rawId) return '';
         const m = String(rawId).match(/task-\d+/);
         return m ? m[0] : String(rawId);
+      }
+
+      function reconcileActiveBackgroundTasks(taskList, targetCid) {
+        if (!Array.isArray(taskList)) return;
+        const activeIds = new Set(taskList.map(t => canonicalTaskId(t.task_id)));
+        for (const [tId, tObj] of activeBgTasks.entries()) {
+          const belongs = targetCid ? isDraftOrMatchesSession(tObj.cid) : true;
+          if (belongs && !activeIds.has(tId)) {
+            activeBgTasks.delete(tId);
+          }
+        }
+        for (const t of taskList) {
+          const tId = canonicalTaskId(t.task_id);
+          activeBgTasks.set(tId, {
+            taskId: tId,
+            cid: t.conversation_id || targetCid || state.conversationId,
+            summary: t.summary || 'Background Command',
+            startTime: (t.start_time ? t.start_time * 1000 : Date.now()),
+          });
+        }
+        updateBgTaskBar();
+        if (bgTaskActionSheet && bgTaskActionSheet.classList.contains('open')) {
+          renderBgTaskSheetList();
+        }
       }
 
       function handleBackgroundTaskStarted(msg) {

@@ -3931,6 +3931,7 @@ class AgyProcessOrchestrator:
         self._sessions: dict[str, SessionExecutionContext] = {}
         self._migrated_cids: dict[str, str] = {}
         self.active_view_cid: Optional[str] = None
+        self.unread_sessions: set[str] = set()
         self._global_auth_lock = asyncio.Lock()
         self._new_session_lock = asyncio.Lock()
         self._initializing_ctx: Optional[SessionExecutionContext] = None
@@ -4530,7 +4531,7 @@ class AgyProcessOrchestrator:
                                 or exit_code in (137, 143)
                             )
 
-                            if not is_running_in_spawned_turn and not is_user_stopped and exit_code == 0:
+                            if t_info and not is_running_in_spawned_turn and not is_user_stopped and exit_code == 0:
                                 emit_native_notif_event({
                                     "event": "task_completed",
                                     "conversation_id": cid,
@@ -5229,10 +5230,14 @@ class AgyProcessOrchestrator:
                         "status": "Thinking...",
                     }
                 )
+                if final_cid:
+                    self.active_view_cid = final_cid
+                    save_app_settings({"last_active_cid": final_cid})
                 await self.broadcast(
                     {
                         "type": "session_list",
                         "sessions": self.get_all_sessions(limit=80),
+                        "unread_sessions": list(self.unread_sessions),
                     }
                 )
 
@@ -5288,10 +5293,14 @@ class AgyProcessOrchestrator:
                     }
                 )
 
+                if final_cid:
+                    self.active_view_cid = final_cid
+                    save_app_settings({"last_active_cid": final_cid})
                 await self.broadcast(
                     {
                         "type": "session_list",
                         "sessions": self.get_all_sessions(limit=80),
+                        "unread_sessions": list(self.unread_sessions),
                     }
                 )
 
@@ -5357,10 +5366,14 @@ class AgyProcessOrchestrator:
                         await self.broadcast(
                             {"type": "status", "conversation_id": final_cid, "state": "idle", "detail": "Ready"}
                         )
+                if final_cid:
+                    self.active_view_cid = final_cid
+                    save_app_settings({"last_active_cid": final_cid})
                 await self.broadcast(
                     {
                         "type": "session_list",
                         "sessions": self.get_all_sessions(limit=80),
+                        "unread_sessions": list(self.unread_sessions),
                     }
                 )
                 self._gc_idle_sessions()
@@ -6649,8 +6662,13 @@ class AgyWebServer:
         self.orchestrator.on_auth_success_cb = self.refresh_models
         self.default_workspace = get_default_workspace()
 
-        # Open in clean draft session on cold start (matches terminal agy CLI behavior)
-        self.orchestrator.active_view_cid = None
+        # Restore last active session if valid on disk (ARGON-19-01)
+        saved_settings = load_app_settings()
+        last_cid = saved_settings.get("last_active_cid")
+        if last_cid and (BRAIN_DIR / str(last_cid)).is_dir() and (BRAIN_DIR / str(last_cid) / ".system_generated").is_dir():
+            self.orchestrator.active_view_cid = str(last_cid)
+        else:
+            self.orchestrator.active_view_cid = None
         self.orchestrator.config.workspace = self.default_workspace
         self.discovered_models: list[dict[str, Any]] = []
         self._cached_quotas: Optional[list[dict[str, str]]] = None
@@ -7708,6 +7726,16 @@ class AgyWebServer:
                         },
                         "engine": get_engine_status(),
                         "sessions": sessions,
+                        "unread_sessions": list(self.orchestrator.unread_sessions),
+                        "active_background_tasks": [
+                            {
+                                "task_id": bg_id,
+                                "conversation_id": bg_info.get("conversation_id"),
+                                "summary": bg_info.get("summary"),
+                                "start_time": bg_info.get("start_time"),
+                            }
+                            for bg_id, bg_info in self.orchestrator.active_background_tasks.items()
+                        ],
                         "is_running": self.orchestrator.is_running,
                         "is_authenticating": self.orchestrator.is_authenticating,
                     }
@@ -7750,6 +7778,16 @@ class AgyWebServer:
                                 "tool_calls": ctx.active_snapshot.tool_calls,
                                 "start_time": ctx.active_snapshot.start_time,
                             } if (ctx.is_running and ctx.active_snapshot) else None,
+                            "active_background_tasks": [
+                                {
+                                    "task_id": bg_id,
+                                    "conversation_id": bg_info.get("conversation_id"),
+                                    "summary": bg_info.get("summary"),
+                                    "start_time": bg_info.get("start_time"),
+                                }
+                                for bg_id, bg_info in self.orchestrator.active_background_tasks.items()
+                                if bg_info.get("conversation_id") == active_cid
+                            ],
                         }
                     )
                 )
@@ -8706,7 +8744,11 @@ class AgyWebServer:
             query = str(data.get("query") or "")
             sessions = self.get_all_sessions(search_query=query, limit=100)
             await websocket.send(
-                json.dumps({"type": "session_list", "sessions": sessions})
+                json.dumps({
+                    "type": "session_list",
+                    "sessions": sessions,
+                    "unread_sessions": list(self.orchestrator.unread_sessions),
+                })
             )
             return
 
@@ -8717,6 +8759,8 @@ class AgyWebServer:
             if cid in self.orchestrator._migrated_cids:
                 cid = self.orchestrator._migrated_cids[cid]
             self.orchestrator.active_view_cid = cid
+            self.orchestrator.unread_sessions.discard(cid)
+            save_app_settings({"last_active_cid": cid})
             meta = self.storage.get_conversation_meta(cid)
             ws = self.default_workspace
             if meta.get("workspaces"):
@@ -8747,6 +8791,16 @@ class AgyWebServer:
                         "tool_calls": ctx.active_snapshot.tool_calls,
                         "start_time": ctx.active_snapshot.start_time,
                     } if (ctx.is_running and ctx.active_snapshot) else None,
+                    "active_background_tasks": [
+                        {
+                            "task_id": bg_id,
+                            "conversation_id": bg_info.get("conversation_id"),
+                            "summary": bg_info.get("summary"),
+                            "start_time": bg_info.get("start_time"),
+                        }
+                        for bg_id, bg_info in self.orchestrator.active_background_tasks.items()
+                        if bg_info.get("conversation_id") == cid
+                    ],
                 }
             )
 
