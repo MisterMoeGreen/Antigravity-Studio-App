@@ -5087,6 +5087,7 @@
           autoResizePrompt();
           closeOverlays();
           state.conversationId = null;
+          try { localStorage.removeItem('agy_last_active_cid'); } catch (_) {}
           if (window.AndroidApp && typeof window.AndroidApp.setActiveSession === 'function') {
             window.AndroidApp.setActiveSession(null);
           }
@@ -6018,6 +6019,8 @@
               try { restoredCid = localStorage.getItem('agy_last_active_cid'); } catch (_) {}
               if (restoredCid && (state.sessions || []).some(s => s.conversation_id === restoredCid)) {
                 initiateSessionSwitch(restoredCid);
+              } else if (state.sessions && state.sessions.length > 0 && state.sessions[0].conversation_id) {
+                initiateSessionSwitch(state.sessions[0].conversation_id);
               } else {
                 renderEmptyWelcome();
                 hideBootSplash();
@@ -7787,6 +7790,7 @@
           autoResizePrompt();
           closeOverlays();
           state.conversationId = null;
+          try { localStorage.removeItem('agy_last_active_cid'); } catch (_) {}
           if (window.AndroidApp && typeof window.AndroidApp.setActiveSession === 'function') {
             window.AndroidApp.setActiveSession(null);
           }

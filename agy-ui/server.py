@@ -167,8 +167,10 @@ def load_app_settings() -> dict[str, Any]:
 
 def save_app_settings(settings: dict[str, Any]) -> None:
     try:
+        cur = load_app_settings()
+        cur.update(settings)
         APP_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        APP_SETTINGS_FILE.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+        APP_SETTINGS_FILE.write_text(json.dumps(cur, indent=2), encoding="utf-8")
     except Exception as exc:
         logger.warning("Failed saving app_settings.json: %s", exc)
 
@@ -6668,7 +6670,14 @@ class AgyWebServer:
         if last_cid and (BRAIN_DIR / str(last_cid)).is_dir() and (BRAIN_DIR / str(last_cid) / ".system_generated").is_dir():
             self.orchestrator.active_view_cid = str(last_cid)
         else:
-            self.orchestrator.active_view_cid = None
+            recent = self.storage.list_conversations(limit=1)
+            if recent and recent[0].get("conversation_id"):
+                fallback_cid = str(recent[0]["conversation_id"])
+                self.orchestrator.active_view_cid = fallback_cid
+                save_app_settings({"last_active_cid": fallback_cid})
+            else:
+                self.orchestrator.active_view_cid = None
+                save_app_settings({"last_active_cid": None})
         self.orchestrator.config.workspace = self.default_workspace
         self.discovered_models: list[dict[str, Any]] = []
         self._cached_quotas: Optional[list[dict[str, str]]] = None
@@ -8841,6 +8850,7 @@ class AgyWebServer:
             use_effort = req_effort or def_effort
 
             self.orchestrator.active_view_cid = None
+            save_app_settings({"last_active_cid": None})
             self.orchestrator.draft_context = SessionExecutionContext(
                 conversation_id="",
                 workspace=self.default_workspace,
