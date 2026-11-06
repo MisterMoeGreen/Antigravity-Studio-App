@@ -60,6 +60,13 @@ A touch-first control panel for managing your development environment:
 * **Packages** — Visual package manager for the built-in Alpine subsystem
 * **Encrypted Backup & Restore** — Password-protected configuration export/import (AES-256-GCM + scrypt) to migrate keys, skills, MCPs, and packages across devices
 
+### ⚡ Persistent Agent Client Protocol (ACP) Daemon
+Powered by Google's native **Agent Client Protocol** (`agy acp`), Antigravity Studio operates a long-lived, high-speed JSON-RPC 2.0 daemon:
+* **Zero Turn Cold-Start Latency**: In-memory token cache reuse across conversation turns eliminates process restart delays.
+* **Real-Time Streaming**: Live streaming of agent thoughts (`agent_thought`), tokens (`agent_token`), and tool executions (`tool_call`).
+* **Non-Destructive Turn Interruption**: Stop agent turns cleanly via `session/cancel` notifications without terminating engine processes.
+* **Background Task Telemetry**: Dedicated mobile status bar and bottom-sheet manager to track and selectively stop active background jobs.
+
 ### 🔋 Runs in the Background
 Lock your screen or switch apps — the agent keeps working:
 * Foreground service with persistent notification keeps long-running tasks alive
@@ -106,7 +113,7 @@ flowchart TD
 
     Activity <-->|HTTP / WebSocket on 127.0.0.1:8081| ServerPy
     Service -->|Spawns with LD_PRELOAD| ServerPy
-    ServerPy -->|Executes Subprocesses| UsrBin
+    ServerPy <-->|Persistent agy acp (JSON-RPC 2.0 Stdio)| UsrBin
     UsrBin -->|agy| AgyLauncher
     AgyLauncher -->|Dispatches via libglibc_ld.so| AgyEngine
     AgyEngine -->|run_command| Shim
@@ -130,8 +137,9 @@ flowchart TD
 
 ### Under the Hood
 
-Running real compilers and JIT runtimes on Android is hard — the OS blocks dynamic code execution by design. Antigravity Studio solves this with three native components:
+Running real compilers, JIT runtimes, and persistent AI agents on Android is hard — the OS blocks dynamic code execution by design and Android's low-memory killer aggressively reclaims resources. Antigravity Studio solves this with four core components:
 
+* **Persistent Agent Client Protocol (ACP)** (`agy acp`): Rather than re-spawning batch CLI processes (`agy -p`) on every turn, the backend orchestrates a long-running `agy acp` daemon communicating over bidirectional JSON-RPC 2.0 stdio streams. This preserves in-memory token cache reuse across conversation turns, streams agent thoughts and tool calls in real time, enables non-destructive turn cancellation (`session/cancel`), and provides background task telemetry without process thrashing.
 * **Anonymous ELF Loader** (`libproot_loader.so`): Loads binaries into anonymous memory pages that bypass Android's SELinux execution barriers entirely.
 * **W^X-Aware PRoot Engine** (`libproot.so`): A user-space virtualization layer that intercepts system calls via `ptrace`, translating paths and enforcing safe execution without kernel modifications.
 * **Bionic Shim** (`libagy_shim.so`): An `LD_PRELOAD` hook that rewrites shebangs (`#!/bin/sh`, `#!/usr/bin/env python3`) to point to the bundled toolchain, since Android lacks standard Linux paths.
@@ -209,6 +217,7 @@ AgyStudio/
 │   ├── 1.1.0/                            # v1.1.0 System Prompts, Dynamic DNS & Telemetry specs
 │   ├── v1.2.0/                           # v1.2.0 Interactive Touch Questions & Decision Modals specs
 │   ├── v1.3.0/                           # v1.3.0 W^X PRoot Subsystem, Anonymous Loader & Package UI specs
+│   ├── 1.8.0/                            # v1.8.0 Persistent ACP Daemon, Event Streaming & Telemetry specs
 │   ├── OVERVIEW_AND_IMPLEMENTATION_GUIDE.md # Master verification gates & acceptance tests
 │   └── IMPLEMENTATION_LOG.md             # Execution audit log across all phases
 ├── build.gradle.kts                      # Root project Gradle configuration
