@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/MisterMoeGreen/Antigravity-Studio-App/releases/latest"><img src="https://img.shields.io/badge/Download-Latest%20Release%20APK-success?style=for-the-badge&logo=android" alt="Download APK" /></a>
+  <a href="https://github.com/MisterMoeGreen/Antigravity-Studio-App/releases/latest"><img src="https://img.shields.io/badge/Download-Latest_Release_APK-success?style=for-the-badge&logo=android" alt="Download APK" /></a>
 </p>
 
 ---
@@ -111,28 +111,28 @@ flowchart TD
         WebAssets["usr/share/agy-ui/index.html (SPA UI + Modals)"]
     end
 
-    Activity <-->|HTTP / WebSocket on 127.0.0.1:8081| ServerPy
-    Service -->|Spawns with LD_PRELOAD| ServerPy
-    ServerPy <-->|Persistent agy acp (JSON-RPC 2.0 Stdio)| UsrBin
-    UsrBin -->|agy| AgyLauncher
-    AgyLauncher -->|Dispatches via libglibc_ld.so| AgyEngine
-    AgyEngine -->|run_command| Shim
-    Shim -->|Redirects to| UsrBin
+    Activity <-->|"HTTP / WebSocket on 127.0.0.1:8081"| ServerPy
+    Service -->|"Spawns with LD_PRELOAD"| ServerPy
+    ServerPy <-->|"Persistent agy acp (JSON-RPC 2.0 Stdio)"| UsrBin
+    UsrBin -->|"agy"| AgyLauncher
+    AgyLauncher -->|"Dispatches via libglibc_ld.so"| AgyEngine
+    AgyEngine -->|"run_command"| Shim
+    Shim -->|"Redirects to"| UsrBin
 
-    UsrBin -->|Host Tools| HostTools
-    UsrBin -->|Multicall Bridge| Bridge
-    Bridge -->|Spawns via| PRoot
-    PRoot -->|Loads Binaries via| AnonLoader
-    AnonLoader -->|Executes in Container| UsrRootfs
+    UsrBin -->|"Host Tools"| HostTools
+    UsrBin -->|"Multicall Bridge"| Bridge
+    Bridge -->|"Spawns via"| PRoot
+    PRoot -->|"Loads Binaries via"| AnonLoader
+    AnonLoader -->|"Executes in Container"| UsrRootfs
 
-    AgyEngine -->|Invokes Decision| AskLauncher
-    AskLauncher -->|Executes| AskBridge
-    AskBridge -->|Dispatches JSON| ServerPy
-    ServerPy -->|Pushes Bottom Sheet| WebAssets
-    WebAssets -->|Touch Feedback Response| ServerPy
-    ServerPy -->|Returns Answer| AskBridge
+    AgyEngine -->|"Invokes Decision"| AskLauncher
+    AskLauncher -->|"Executes"| AskBridge
+    AskBridge -->|"Dispatches JSON"| ServerPy
+    ServerPy -->|"Pushes Bottom Sheet"| WebAssets
+    WebAssets -->|"Touch Feedback Response"| ServerPy
+    ServerPy -->|"Returns Answer"| AskBridge
 
-    Bootstrapper -->|Unpacks usr-data.tar.zst & rootfs.tar.zst| Sandbox
+    Bootstrapper -->|"Unpacks usr-data.tar.zst & rootfs.tar.zst"| Sandbox
 ```
 
 ### Under the Hood
