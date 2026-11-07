@@ -3217,6 +3217,171 @@
       display: inline-block;
     }
 
+    /* Direct Chat Terminal Mode (Module 05) */
+    .config-pill.terminal-toggle.active {
+      background: rgba(16, 185, 129, 0.15) !important;
+      border-color: rgba(16, 185, 129, 0.6) !important;
+      color: #10B981 !important;
+    }
+    .config-pill.terminal-toggle.active svg {
+      color: #10B981 !important;
+    }
+    .msg-row.user.terminal-prompt-row .user-bubble.terminal-user-bubble {
+      background: #0F172A;
+      border: 1px solid #334155;
+      color: #38BDF8;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .terminal-prompt-badge {
+      color: #10B981;
+      font-weight: 700;
+    }
+    .terminal-card {
+      background: #0F172A;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+    }
+    .terminal-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      background: rgba(15, 23, 42, 0.8);
+      border-bottom: 1px solid #1E293B;
+      font-size: 12px;
+    }
+    .terminal-card-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #94A3B8;
+      font-family: ui-monospace, monospace;
+      font-weight: 600;
+    }
+    .terminal-card-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .terminal-card-status.running {
+      color: #38BDF8;
+    }
+    .terminal-card-status.success {
+      color: #10B981;
+    }
+    .terminal-card-status.error {
+      color: #EF4444;
+    }
+    .terminal-output-viewport {
+      margin: 0;
+      padding: 12px 14px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      color: #E2E8F0;
+      max-height: 380px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      background: #090D16;
+    }
+    .terminal-card-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 14px;
+      background: rgba(15, 23, 42, 0.9);
+      border-top: 1px solid #1E293B;
+      font-size: 11px;
+      color: #64748B;
+    }
+    .btn-copy-terminal {
+      background: transparent;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      color: #94A3B8;
+      padding: 4px 8px;
+      font-size: 11px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .btn-copy-terminal:active {
+      background: #1E293B;
+    }
+    .terminal-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 10.5px;
+      font-weight: 600;
+      font-family: ui-monospace, monospace;
+    }
+    .terminal-badge.success {
+      background: rgba(16, 185, 129, 0.15);
+      color: #10B981;
+      border: 1px solid rgba(16, 185, 129, 0.4);
+    }
+    .terminal-badge.error {
+      background: rgba(239, 68, 68, 0.15);
+      color: #EF4444;
+      border: 1px solid rgba(239, 68, 68, 0.4);
+    }
+
+    /* General Settings Toggle Switch (Module 03) */
+    .toggle-switch {
+      position: relative;
+      display: inline-block;
+      width: 44px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+    .toggle-switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      transition: .2s;
+      border-radius: 24px;
+    }
+    .toggle-slider:before {
+      position: absolute;
+      content: "";
+      height: 16px;
+      width: 16px;
+      left: 3px;
+      bottom: 3px;
+      background-color: var(--text-tertiary);
+      transition: .2s;
+      border-radius: 50%;
+    }
+    .toggle-switch input:checked + .toggle-slider {
+      background-color: var(--accent-primary);
+      border-color: var(--accent-primary);
+    }
+    .toggle-switch input:checked + .toggle-slider:before {
+      transform: translateX(20px);
+      background-color: #fff;
+    }
+
   </style>
 </head>
 <body>
@@ -3280,6 +3445,15 @@
             <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
           </svg>
           <span id="labelUpload">Attach</span>
+        </button>
+        <!-- Direct Terminal Mode Toggle Pill (Module 05, AC-TERM-01) -->
+        <button class="config-pill terminal-toggle" id="pillTerminal" type="button" title="Toggle direct terminal command mode">
+          <span class="pill-icon">
+            <svg class="fa-icon" viewBox="0 0 512 512" aria-hidden="true" focusable="false">
+              <path fill="currentColor" d="M24 32C10.7 32 0 42.7 0 56L0 456c0 13.3 10.7 24 24 24l464 0c13.3 0 24-10.7 24-24l0-400c0-13.3-10.7-24-24-24L24 32zM128 152c-4.4 0-8.6 1.8-11.7 4.9s-4.9 7.3-4.9 11.7l0 16c0 4.4 1.8 8.6 4.9 11.7s7.3 4.9 11.7 4.9l48 0c4.4 0 8.6-1.8 11.7-4.9s4.9-7.3 4.9-11.7l0-16c0-4.4-1.8-8.6-4.9-11.7s-7.3-4.9-11.7-4.9l-48 0zm-3.3 124.7l64-64c6.2-6.2 16.4-6.2 22.6 0s6.2 16.4 0 22.6L158.6 288l52.7 52.7c6.2 6.2 6.2 16.4 0 22.6s-16.4 6.2-22.6 0l-64-64c-6.2-6.2-6.2-16.4 0-22.6zm131.3 67.3l96 0c8.8 0 16 7.2 16 16s-7.2 16-16 16l-96 0c-8.8 0-16-7.2-16-16s7.2-16 16-16z"/>
+            </svg>
+          </span>
+          <span id="labelTerminal">Terminal</span>
         </button>
         <button class="config-pill accent" id="pillSlash">
           <span>/ Commands</span>
@@ -3842,6 +4016,20 @@
             <svg class="settings-menu-chevron fa-icon" viewBox="0 0 320 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg>
           </div>
 
+          <!-- General Settings (Module 03, AC-DEV-01) -->
+          <div class="settings-menu-item" data-target="viewGeneralSettings">
+            <div class="settings-menu-icon">
+              <svg class="fa-icon" viewBox="0 0 512 512" aria-hidden="true" focusable="false">
+                <path fill="currentColor" d="M0 416c0-17.7 14.3-32 32-32l54.7 0c12.3-28.3 40.5-48 73.3-48s61 19.7 73.3 48L480 384c17.7 0 32 14.3 32 32s-14.3 32-32 32l-246.7 0c-12.3 28.3-40.5 48-73.3 48s-61-19.7-73.3-48L32 448c-17.7 0-32-14.3-32-32zm192 0a32 32 0 1 0 -64 0 32 32 0 1 0 64 0zM320 256c0-17.7 14.3-32 32-32l128 0c17.7 0 32 14.3 32 32s-14.3 32-32 32l-128 0c-17.7 0-32-14.3-32-32zm-128 0c0-17.7 14.3-32 32-32l54.7 0c12.3-28.3 40.5-48 73.3-48s61 19.7 73.3 48L32 288c-17.7 0-32-14.3-32-32s14.3-32 32-32l246.7 0c12.3-28.3 40.5-48 73.3-48s61 19.7 73.3 48L192 256zm64 0a32 32 0 1 0 -64 0 32 32 0 1 0 64 0zM0 96C0 78.3 14.3 64 32 64l246.7 0c12.3-28.3 40.5-48 73.3-48s61 19.7 73.3 48L480 96c17.7 0 32 14.3 32 32s-14.3 32-32 32l-54.7 0c-12.3 28.3-40.5 48-73.3 48s-61-19.7-73.3-48L32 128C14.3 128 0 113.7 0 96zm352 32a32 32 0 1 0 0-64 32 32 0 1 0 0 64z"/>
+              </svg>
+            </div>
+            <div class="settings-menu-info">
+              <div class="settings-menu-title">General Settings</div>
+              <div class="settings-menu-desc">Preferences, device APIs & hardware access</div>
+            </div>
+            <svg class="settings-menu-chevron fa-icon" viewBox="0 0 320 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg>
+          </div>
+
           <!-- Export & Import (v1.6.3) -->
           <div class="settings-menu-item" data-target="viewExportImport">
             <div class="settings-menu-icon">
@@ -4264,6 +4452,101 @@
         </div>
       </div>
     </div>
+
+    <!-- View: General Settings (Module 03, AC-DEV-01) -->
+    <div class="settings-subview" id="viewGeneralSettings">
+      <div class="subview-header">
+        <button class="icon-btn subview-back-btn" data-back="viewGeneralSettings" title="Back to menu">
+          <svg class="fa-icon" viewBox="0 0 448 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M9.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.2 288 416 288c17.7 0 32-14.3 32-32s-14.3-32-32-32l-306.7 0L214.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg>
+        </button>
+        <div class="subview-title">General Settings</div>
+        <button class="icon-btn" id="btnCloseGeneralSettings" title="Close Settings">
+          <svg class="fa-icon" viewBox="0 0 384 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M342.6 150.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L192 210.7 86.6 105.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L146.7 256 41.4 361.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192 301.3 297.4 406.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L237.3 256 342.6 150.6z"/></svg>
+        </button>
+      </div>
+      <div class="subview-body" style="padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));">
+        <div class="settings-info-banner">
+          Configure general application preferences and device hardware capabilities available to the agent runtime.
+        </div>
+
+        <div class="settings-card" style="padding:14px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:12px;display:flex;flex-direction:column;gap:12px;">
+          <div style="font-size:12px;font-weight:700;color:var(--text-tertiary);letter-spacing:0.05em;text-transform:uppercase;">
+            Agent Device Capabilities
+          </div>
+
+          <!-- Master Switch (AC-DEV-02) -->
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:12px;background:var(--bg-card);border-radius:10px;border:1px solid var(--border-subtle);">
+            <div>
+              <div style="font-size:14px;font-weight:600;color:var(--text-primary);">Master Device API Bridge</div>
+              <div style="font-size:12px;color:var(--text-secondary);margin-top:2px;">Allow the agent to interact with device hardware.</div>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="toggleDeviceMaster" />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
+          <!-- Sub-toggles container (AC-DEV-02..09) -->
+          <div id="deviceSubTogglesContainer" style="display:flex;flex-direction:column;gap:8px;transition:opacity 0.2s;">
+            <label class="touch-checkbox-row device-subtoggle-row">
+              <input type="checkbox" id="toggleDeviceBattery" class="form-checkbox" />
+              <div class="checkbox-text">
+                <span class="checkbox-label">Battery & Device Info</span>
+                <span class="checkbox-desc">Query level, charging status & battery temperature</span>
+              </div>
+            </label>
+
+            <label class="touch-checkbox-row device-subtoggle-row">
+              <input type="checkbox" id="toggleDeviceNotify" class="form-checkbox" />
+              <div class="checkbox-text">
+                <span class="checkbox-label">Notifications & Vibrate</span>
+                <span class="checkbox-desc">Post status notifications & trigger haptic feedback</span>
+              </div>
+            </label>
+
+            <label class="touch-checkbox-row device-subtoggle-row">
+              <input type="checkbox" id="toggleDeviceClipboard" class="form-checkbox" />
+              <div class="checkbox-text">
+                <span class="checkbox-label">System Clipboard</span>
+                <span class="checkbox-desc">Read and write device clipboard text</span>
+              </div>
+            </label>
+
+            <label class="touch-checkbox-row device-subtoggle-row">
+              <input type="checkbox" id="toggleDeviceLocation" class="form-checkbox" />
+              <div class="checkbox-text">
+                <span class="checkbox-label">Geolocation</span>
+                <span class="checkbox-desc">Query GPS coordinates (prompts OS permission)</span>
+              </div>
+            </label>
+
+            <label class="touch-checkbox-row device-subtoggle-row">
+              <input type="checkbox" id="toggleDeviceCamera" class="form-checkbox" />
+              <div class="checkbox-text">
+                <span class="checkbox-label">Camera Capture</span>
+                <span class="checkbox-desc">Take workspace photos (prompts OS permission)</span>
+              </div>
+            </label>
+
+            <label class="touch-checkbox-row device-subtoggle-row">
+              <input type="checkbox" id="toggleDeviceTts" class="form-checkbox" />
+              <div class="checkbox-text">
+                <span class="checkbox-label">Text-to-Speech (TTS)</span>
+                <span class="checkbox-desc">Audio speech synthesis announcements</span>
+              </div>
+            </label>
+
+            <label class="touch-checkbox-row device-subtoggle-row">
+              <input type="checkbox" id="toggleDeviceShare" class="form-checkbox" />
+              <div class="checkbox-text">
+                <span class="checkbox-label">System Share & URL Open</span>
+                <span class="checkbox-desc">Open verified web URLs in browser</span>
+              </div>
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Modal: Generate SSH Key -->
@@ -4661,6 +4944,8 @@
         pendingDeepLinkCid: null,
         ignoreNextInitialHistory: false,
         isExplicitDraft: false,
+        terminalMode: false,
+        activeTerminalCommandId: null,
       };
 
       const SLASH_COMMANDS = [
@@ -4684,6 +4969,8 @@
       const promptInput = document.getElementById('promptInput');
       const btnSend = document.getElementById('btnSend');
       const btnUpload = document.getElementById('btnUpload');
+      const pillTerminal = document.getElementById('pillTerminal');
+      const labelTerminal = document.getElementById('labelTerminal');
       const labelUpload = document.getElementById('labelUpload');
       const filePickerInput = document.getElementById('filePickerInput');
       const attachmentPreviewBar = document.getElementById('attachmentPreviewBar');
@@ -5259,7 +5546,12 @@
         btnSend.title = 'Send prompt';
         if (promptInput) {
           promptInput.disabled = false;
-          promptInput.placeholder = 'Ask Antigravity or type / for commands...';
+          if (state.terminalMode) {
+            const wsShort = state.workspace ? state.workspace.replace(/^.*[\\\/]/, '') : 'workspace';
+            promptInput.placeholder = `$ Run terminal command in ~/${wsShort}...`;
+          } else {
+            promptInput.placeholder = 'Ask Antigravity or type / for commands...';
+          }
         }
         if (btnUpload) {
           btnUpload.style.pointerEvents = '';
@@ -6758,6 +7050,57 @@
           case 'open_external_url':
             openExternalUrl(msg.url);
             break;
+
+          /* Direct Terminal Execution Events (Module 05, AC-TERM-05..09) */
+          case 'terminal_output': {
+            const cardEl = document.getElementById(`term-card-${msg.command_id}`);
+            if (cardEl) {
+              const codeEl = cardEl.querySelector('.terminal-output-viewport code');
+              const preEl = cardEl.querySelector('.terminal-output-viewport');
+              if (codeEl && preEl) {
+                const wasNearBottom = (preEl.scrollHeight - preEl.scrollTop - preEl.clientHeight) < 40;
+                codeEl.textContent += msg.delta;
+                if (wasNearBottom) {
+                  preEl.scrollTop = preEl.scrollHeight;
+                }
+              }
+              jumpToBottom(true);
+            }
+            break;
+          }
+
+          case 'terminal_complete': {
+            const cardEl = document.getElementById(`term-card-${msg.command_id}`);
+            if (cardEl) {
+              const statusEl = cardEl.querySelector('.terminal-card-status');
+              const timingEl = cardEl.querySelector('.terminal-card-timing');
+              const isSuccess = (msg.exit_code === 0);
+              if (statusEl) {
+                statusEl.className = `terminal-card-status ${isSuccess ? 'success' : 'error'}`;
+                statusEl.innerHTML = `<span class="terminal-badge ${isSuccess ? 'success' : 'error'}">${isSuccess ? '✓ Exit 0' : `✗ Exit ${msg.exit_code}`}</span>`;
+              }
+              if (timingEl) {
+                timingEl.textContent = `${msg.duration_ms || 0}ms`;
+              }
+            }
+            if (state.activeTerminalCommandId === msg.command_id) {
+              state.activeTerminalCommandId = null;
+              resetSendButtonToIdle();
+              if (state.terminalMode) {
+                const wsShort = state.workspace ? state.workspace.replace(/^.*[\\\/]/, '') : 'workspace';
+                promptInput.placeholder = `$ Run terminal command in ~/${wsShort}...`;
+              }
+            }
+            if (msg.workspace) {
+              updateWorkspaceStatusBar(msg.workspace);
+            }
+            break;
+          }
+
+          /* Native Device API Settings (Module 03, AC-DEV-01..09) */
+          case 'device_settings':
+            updateDeviceSettingsUI(msg.settings);
+            break;
         }
       }
 
@@ -6815,6 +7158,8 @@
         for (const m of messages) {
           if (m.role === 'user') {
             appendUserBubble(m.content, [], m.step_index);
+          } else if (m.role === 'terminal') {
+            renderStoredTerminalCard(m);
           } else {
             const tid = m.id || ('hist-' + Math.random().toString(36).slice(2, 8));
             const card = ensureAssistantTurnCard(tid, state.model, false);
@@ -7357,6 +7702,23 @@
             btnStop.disabled = true;
             btnStop.textContent = 'Stopping...';
             btnStop.style.opacity = '0.7';
+            activeBgTasks.delete(t.taskId);
+            activeBgTasks.delete(canonicalTaskId(t.taskId));
+            const remaining = getTasksForCurrentSession();
+            if (remaining.length === 0) {
+              if (bgTaskTimer) {
+                clearInterval(bgTaskTimer);
+                bgTaskTimer = null;
+              }
+              closeBgTaskActionSheet();
+              if (bgTaskStatusBar) {
+                bgTaskStatusBar.style.display = 'none';
+                bgTaskStatusBar.classList.remove('completed');
+              }
+            } else {
+              updateBgTaskBar();
+              renderBgTaskSheetList();
+            }
             sendWs({
               type: 'stop_background_task',
               task_id: t.taskId,
@@ -7481,6 +7843,32 @@
         if (bgTaskActionSheet && bgTaskActionSheet.classList.contains('open')) {
           renderBgTaskSheetList();
         }
+
+        const isCancelled = Boolean(
+          msg.cancelled ||
+          msg.status === 'cancelled' ||
+          msg.exit_code === 137 ||
+          msg.exit_code === 143 ||
+          (msg.output_snippet && /cancelled|canceled|stopped|terminated/i.test(msg.output_snippet))
+        );
+
+        if (isCancelled) {
+          if (remainingForCur.length === 0) {
+            if (bgTaskTimer) {
+              clearInterval(bgTaskTimer);
+              bgTaskTimer = null;
+            }
+            closeBgTaskActionSheet();
+            if (bgTaskStatusBar) {
+              bgTaskStatusBar.style.display = 'none';
+              bgTaskStatusBar.classList.remove('completed');
+            }
+          } else {
+            updateBgTaskBar();
+          }
+          return;
+        }
+
         if (remainingForCur.length > 0) {
           updateBgTaskBar();
         } else if (isCurrent) {
@@ -7504,7 +7892,7 @@
                 bgTaskStatusBar.style.display = 'none';
                 bgTaskStatusBar.classList.remove('completed');
               }
-            }, 5000);
+            }, 3000);
           }
         } else {
           updateBgTaskBar();
@@ -7672,6 +8060,21 @@
       }
 
       function handleSendOrStop() {
+        if (state.activeTerminalCommandId) {
+          sendWs({
+            type: 'abort_terminal_command',
+            command_id: state.activeTerminalCommandId,
+            conversation_id: state.conversationId,
+          });
+          state.activeTerminalCommandId = null;
+          resetSendButtonToIdle();
+          if (state.terminalMode) {
+            const wsShort = state.workspace ? state.workspace.replace(/^.*[\\\/]/, '') : 'workspace';
+            promptInput.placeholder = `$ Run terminal command in ~/${wsShort}...`;
+          }
+          return;
+        }
+
         if (state.isRunning) {
           sendWs({ type: 'abort_generation', conversation_id: state.conversationId });
           stopLiveProgress();
@@ -7698,14 +8101,169 @@
           return;
         }
 
+        /* Direct Chat Terminal Execution (Module 05, AC-TERM-03..05) */
+        if (state.terminalMode || val.startsWith('!')) {
+          const cmd = val.startsWith('!') ? val.slice(1).trim() : val;
+          if (cmd) {
+            executeTerminalCommand(cmd);
+          }
+          return;
+        }
+
         dispatchUserPrompt(val);
+      }
+
+      function toggleTerminalMode(enable) {
+        state.terminalMode = Boolean(enable);
+        const pill = document.getElementById('pillTerminal');
+        if (pill) {
+          pill.classList.toggle('active', state.terminalMode);
+        }
+        if (state.terminalMode) {
+          const wsShort = state.workspace ? state.workspace.replace(/^.*[\\\/]/, '') : 'workspace';
+          promptInput.placeholder = `$ Run terminal command in ~/${wsShort}...`;
+        } else {
+          promptInput.placeholder = 'Ask Antigravity or type / for commands...';
+        }
+      }
+
+      function executeTerminalCommand(cmd) {
+        if (!cmd) return;
+        const cmdId = 'term-' + Math.random().toString(16).slice(2, 10);
+        state.activeTerminalCommandId = cmdId;
+        promptInput.value = '';
+        promptInput.style.height = 'auto';
+
+        const pRow = document.createElement('div');
+        pRow.className = 'msg-row user terminal-prompt-row';
+        pRow.innerHTML = `
+          <div class="user-bubble terminal-user-bubble">
+            <span class="terminal-prompt-badge">$</span>
+            <span class="terminal-prompt-text">${escapeHtml(cmd)}</span>
+          </div>
+        `;
+        chatViewport.appendChild(pRow);
+
+        const cardRow = document.createElement('div');
+        cardRow.className = 'msg-row assistant terminal-card-row';
+        cardRow.id = `term-card-${cmdId}`;
+        cardRow.innerHTML = `
+          <div class="assistant-card terminal-card">
+            <div class="terminal-card-header">
+              <div class="terminal-card-title">
+                ${faIcon('terminal', '', 'width:13px;height:13px;')}
+                <span>Terminal: ${escapeHtml(cmd)}</span>
+              </div>
+              <div class="terminal-card-status running">
+                <span class="status-indicator"></span>
+                <span class="status-label">Running...</span>
+              </div>
+            </div>
+            <pre class="terminal-output-viewport"><code></code></pre>
+            <div class="terminal-card-footer">
+              <button class="btn-copy-terminal" title="Copy output">
+                ${faIcon('copy', '', 'width:11px;height:11px;')}
+                <span>Copy Output</span>
+              </button>
+              <span class="terminal-card-timing">Running...</span>
+            </div>
+          </div>
+        `;
+        const copyBtn = cardRow.querySelector('.btn-copy-terminal');
+        if (copyBtn) {
+          copyBtn.addEventListener('click', () => {
+            const codeEl = cardRow.querySelector('.terminal-output-viewport code');
+            if (codeEl) {
+              copyTextToClipboard(codeEl.textContent);
+              showToast('Terminal output copied');
+            }
+          });
+        }
+        chatViewport.appendChild(cardRow);
+        jumpToBottom(true);
+
+        btnSend.classList.add('stop');
+        btnSend.innerHTML = ICON_STOP_HTML;
+        btnSend.title = 'Stop terminal command';
+
+        sendWs({
+          type: 'terminal_command',
+          command: cmd,
+          command_id: cmdId,
+          conversation_id: state.conversationId,
+          workspace: state.workspace,
+        });
+      }
+
+      function renderStoredTerminalCard(m) {
+        const pRow = document.createElement('div');
+        pRow.className = 'msg-row user terminal-prompt-row';
+        pRow.innerHTML = `
+          <div class="user-bubble terminal-user-bubble">
+            <span class="terminal-prompt-badge">$</span>
+            <span class="terminal-prompt-text">${escapeHtml(m.command || '')}</span>
+          </div>
+        `;
+        chatViewport.appendChild(pRow);
+
+        const isSuccess = (m.exit_code === 0);
+        const cardRow = document.createElement('div');
+        cardRow.className = 'msg-row assistant terminal-card-row';
+        cardRow.innerHTML = `
+          <div class="assistant-card terminal-card">
+            <div class="terminal-card-header">
+              <div class="terminal-card-title">
+                ${faIcon('terminal', '', 'width:13px;height:13px;')}
+                <span>Terminal: ${escapeHtml(m.command || '')}</span>
+              </div>
+              <div class="terminal-card-status ${isSuccess ? 'success' : 'error'}">
+                <span class="terminal-badge ${isSuccess ? 'success' : 'error'}">
+                  ${isSuccess ? '✓ Exit 0' : `✗ Exit ${m.exit_code}`}
+                </span>
+              </div>
+            </div>
+            <pre class="terminal-output-viewport"><code>${escapeHtml(m.output || m.content || '')}</code></pre>
+            <div class="terminal-card-footer">
+              <button class="btn-copy-terminal" title="Copy output">
+                ${faIcon('copy', '', 'width:11px;height:11px;')}
+                <span>Copy Output</span>
+              </button>
+              <span class="terminal-card-timing">${m.duration_ms || 0}ms</span>
+            </div>
+          </div>
+        `;
+        const copyBtn = cardRow.querySelector('.btn-copy-terminal');
+        if (copyBtn) {
+          copyBtn.addEventListener('click', () => {
+            copyTextToClipboard(m.output || m.content || '');
+            showToast('Terminal output copied');
+          });
+        }
+        chatViewport.appendChild(cardRow);
       }
 
       btnSend.addEventListener('click', handleSendOrStop);
 
+      if (pillTerminal) {
+        pillTerminal.addEventListener('click', () => {
+          toggleTerminalMode(!state.terminalMode);
+        });
+      }
+
       promptInput.addEventListener('input', () => {
         promptInput.style.height = 'auto';
         promptInput.style.height = Math.min(promptInput.scrollHeight, 130) + 'px';
+
+        /* Exclamation Auto-clearing trigger (AC-TERM-03) */
+        if (promptInput.value === '!') {
+          promptInput.value = '';
+          toggleTerminalMode(true);
+          return;
+        }
+        if (promptInput.value.startsWith('!') && !state.terminalMode) {
+          promptInput.value = promptInput.value.slice(1);
+          toggleTerminalMode(true);
+        }
 
         if (promptInput.value === '/') {
           openSlashSheet();
@@ -7713,6 +8271,16 @@
       });
 
       promptInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Backspace' && state.terminalMode && promptInput.value === '') {
+          e.preventDefault();
+          toggleTerminalMode(false);
+          return;
+        }
+        if (e.key === 'Escape' && state.terminalMode) {
+          e.preventDefault();
+          toggleTerminalMode(false);
+          return;
+        }
         if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
           handleSendOrStop();
@@ -8517,7 +9085,7 @@
       const btnCloseSettingsHub = document.getElementById('btnCloseSettingsHub');
 
       let currentSettingsView = 'viewSettingsMenu';
-      const settingsViews = ['viewSettingsMenu', 'viewPrompts', 'viewSSH', 'viewApiKeys', 'viewSkills', 'viewMCP', 'viewPackages', 'viewUpdates', 'viewExportImport'];
+      const settingsViews = ['viewSettingsMenu', 'viewPrompts', 'viewSSH', 'viewApiKeys', 'viewSkills', 'viewMCP', 'viewPackages', 'viewUpdates', 'viewExportImport', 'viewGeneralSettings'];
 
       function openSettingsHub() {
         if (!settingsHub) return;
@@ -8586,8 +9154,90 @@
           sendWs({ type: 'get_packages' });
         } else if (targetId === 'viewUpdates') {
           initUpdatesView();
+        } else if (targetId === 'viewGeneralSettings') {
+          loadDeviceSettings();
         }
       }
+
+      function loadDeviceSettings() {
+        if (window.AndroidApp && typeof window.AndroidApp.getDeviceApiSettings === 'function') {
+          try {
+            const raw = window.AndroidApp.getDeviceApiSettings();
+            const prefs = JSON.parse(raw);
+            updateDeviceSettingsUI(prefs);
+            return;
+          } catch (e) {
+            console.warn('Failed parsing getDeviceApiSettings:', e);
+          }
+        }
+        sendWs({ type: 'get_device_settings' });
+      }
+
+      function updateDeviceSettingsUI(prefs) {
+        if (!prefs) return;
+        const master = document.getElementById('toggleDeviceMaster');
+        const cont = document.getElementById('deviceSubTogglesContainer');
+        const battery = document.getElementById('toggleDeviceBattery');
+        const notify = document.getElementById('toggleDeviceNotify');
+        const clipboard = document.getElementById('toggleDeviceClipboard');
+        const location = document.getElementById('toggleDeviceLocation');
+        const camera = document.getElementById('toggleDeviceCamera');
+        const tts = document.getElementById('toggleDeviceTts');
+        const share = document.getElementById('toggleDeviceShare');
+
+        const masterEnabled = !!prefs.device_api_enabled;
+        if (master) master.checked = masterEnabled;
+        if (battery) battery.checked = !!prefs.device_api_battery;
+        if (notify) notify.checked = !!prefs.device_api_notify;
+        if (clipboard) clipboard.checked = !!prefs.device_api_clipboard;
+        if (location) location.checked = !!prefs.device_api_location;
+        if (camera) camera.checked = !!prefs.device_api_camera;
+        if (tts) tts.checked = !!prefs.device_api_tts;
+        if (share) share.checked = !!prefs.device_api_share;
+
+        if (cont) {
+          cont.style.opacity = masterEnabled ? '1' : '0.4';
+          cont.style.pointerEvents = masterEnabled ? 'auto' : 'none';
+        }
+      }
+
+      function initDeviceSettingsListeners() {
+        const toggleMap = [
+          { id: 'toggleDeviceMaster', key: 'device_api_enabled', isMaster: true },
+          { id: 'toggleDeviceBattery', key: 'device_api_battery' },
+          { id: 'toggleDeviceNotify', key: 'device_api_notify' },
+          { id: 'toggleDeviceClipboard', key: 'device_api_clipboard' },
+          { id: 'toggleDeviceLocation', key: 'device_api_location' },
+          { id: 'toggleDeviceCamera', key: 'device_api_camera' },
+          { id: 'toggleDeviceTts', key: 'device_api_tts' },
+          { id: 'toggleDeviceShare', key: 'device_api_share' },
+        ];
+
+        toggleMap.forEach(item => {
+          const el = document.getElementById(item.id);
+          if (!el) return;
+          el.addEventListener('change', () => {
+            const enabled = el.checked;
+            if (item.isMaster) {
+              const cont = document.getElementById('deviceSubTogglesContainer');
+              if (cont) {
+                cont.style.opacity = enabled ? '1' : '0.4';
+                cont.style.pointerEvents = enabled ? 'auto' : 'none';
+              }
+            }
+            if (window.AndroidApp && typeof window.AndroidApp.setDeviceApiToggle === 'function') {
+              window.AndroidApp.setDeviceApiToggle(item.key, enabled);
+            }
+            sendWs({ type: 'set_device_toggle', key: item.key, enabled: enabled });
+          });
+        });
+
+        const btnCloseGeneralSettings = document.getElementById('btnCloseGeneralSettings');
+        if (btnCloseGeneralSettings) {
+          btnCloseGeneralSettings.addEventListener('click', closeSettingsHub);
+        }
+      }
+      initDeviceSettingsListeners();
 
       function goBackSettingsView(viewId) {
         const el = document.getElementById(viewId);
@@ -8894,6 +9544,13 @@
           `;
 
           card.querySelector('[data-action="copy"]').addEventListener('click', () => {
+            if (window.AndroidApp && typeof window.AndroidApp.copyVaultKeyToClipboard === 'function') {
+              const copied = window.AndroidApp.copyVaultKeyToClipboard(k.name);
+              if (copied) {
+                showToast(`Copied ${k.name} to clipboard`);
+                return;
+              }
+            }
             sendWs({ type: 'get_api_key_raw', name: k.name });
           });
 

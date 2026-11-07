@@ -3,9 +3,13 @@ package ai.agy.app
 import android.app.*
 import android.content.*
 import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.drawable.BitmapDrawable
 import android.net.*
 import android.os.*
 import android.util.Log
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -59,6 +63,8 @@ class AgyForegroundService : Service() {
         _readyPortFlow.value = null
         _authTokenFlow.value = null
         AgyNotificationManager.initChannels(this)
+        DeviceApiBridge.init(this)
+        KeystoreVault.migrateLegacyApiKeysIfPresent(this)
         acquireWakeLock()
         startStickyNotification(8081)
 
@@ -86,6 +92,20 @@ class AgyForegroundService : Service() {
         }
     }
 
+    private fun getLauncherLargeIconBitmap(): Bitmap? {
+        val drawable = ContextCompat.getDrawable(this, R.mipmap.ic_launcher) ?: return null
+        if (drawable is BitmapDrawable && drawable.bitmap != null) {
+            return drawable.bitmap
+        }
+        val width = if (drawable.intrinsicWidth > 0) drawable.intrinsicWidth else 192
+        val height = if (drawable.intrinsicHeight > 0) drawable.intrinsicHeight else 192
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        drawable.setBounds(0, 0, canvas.width, canvas.height)
+        drawable.draw(canvas)
+        return bitmap
+    }
+
     private fun startStickyNotification(port: Int) {
         val nm = getSystemService(NotificationManager::class.java)
         val channel = NotificationChannel(
@@ -97,8 +117,10 @@ class AgyForegroundService : Service() {
 
         val pendingIntent = PendingIntent.getActivity(
             this, 0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
         val stopIntent = Intent(this, AgyForegroundService::class.java).apply {
@@ -117,15 +139,21 @@ class AgyForegroundService : Service() {
             stopPendingIntent
         ).build()
 
-        val notification = Notification.Builder(this, CHANNEL_ID)
+        val largeBmp = getLauncherLargeIconBitmap()
+        val notifBuilder = Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("Antigravity Studio Running")
             .setContentText("Local AI coding agent active on port :$port")
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(R.drawable.ic_stat_antigravity)
+            .setColor(ContextCompat.getColor(this, R.color.brand_primary))
             .setContentIntent(pendingIntent)
             .addAction(stopAction)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .build()
+
+        if (largeBmp != null) {
+            notifBuilder.setLargeIcon(android.graphics.drawable.Icon.createWithBitmap(largeBmp))
+        }
+        val notification = notifBuilder.build()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
@@ -177,6 +205,7 @@ class AgyForegroundService : Service() {
         env["AGY_WEB_PORT"] = port.toString()
         env["AGY_WEB_HOST"] = "127.0.0.1"
         env["AGY_AUTH_TOKEN"] = token
+        env["AGY_INTERNAL_VAULT_TOKEN"] = token
         env["GODEBUG"] = "netdns=cgo"
         env["LD_LIBRARY_PATH"] = "$usr/lib:$nativeDir"
         env["LD_PRELOAD"] = "$usr/lib/libagy_shim.so"

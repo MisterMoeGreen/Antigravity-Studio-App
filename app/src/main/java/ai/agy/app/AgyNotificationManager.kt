@@ -361,7 +361,8 @@ object AgyNotificationManager {
         val stopPendingIntent = PendingIntent.getBroadcast(context, stopReqCode, stopIntent, pendingFlags)
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID_PROGRESS)
-            .setSmallIcon(R.drawable.ic_stat_agy)
+            .setSmallIcon(R.drawable.ic_stat_antigravity)
+            .setColor(ContextCompat.getColor(context, R.color.brand_primary))
             .setContentTitle("$displayTitle • Running")
             .setContentText(contentLine)
             .setStyle(
@@ -468,7 +469,8 @@ object AgyNotificationManager {
         }
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID_COMPLETION)
-            .setSmallIcon(R.drawable.ic_stat_agy)
+            .setSmallIcon(R.drawable.ic_stat_antigravity)
+            .setColor(ContextCompat.getColor(context, R.color.brand_primary))
             .setContentTitle(displayTitle)
             .setContentText("$statusHeading • $bodyText")
             .setStyle(

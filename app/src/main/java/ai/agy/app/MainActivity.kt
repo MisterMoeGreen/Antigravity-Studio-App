@@ -88,6 +88,29 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private val locationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { perms ->
+        val granted = perms.values.any { it }
+        if (!granted) {
+            DeviceApiBridge.setToggle(this, DeviceApiBridge.PREF_PERM_LOCATION, false)
+            runOnUiThread {
+                webView.evaluateJavascript("window.onDeviceSettingsUpdated && window.onDeviceSettingsUpdated();", null)
+            }
+        }
+    }
+
+    private val cameraPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (!isGranted) {
+            DeviceApiBridge.setToggle(this, DeviceApiBridge.PREF_PERM_CAMERA, false)
+            runOnUiThread {
+                webView.evaluateJavascript("window.onDeviceSettingsUpdated && window.onDeviceSettingsUpdated();", null)
+            }
+        }
+    }
+
     private fun refreshForegroundNotification() {
         val serviceIntent = Intent(this, AgyForegroundService::class.java).apply {
             action = AgyForegroundService.ACTION_UPDATE_NOTIFICATION
@@ -461,6 +484,105 @@ class MainActivity : AppCompatActivity() {
             } catch (_: Exception) {
                 false
             }
+        }
+
+        @JavascriptInterface
+        fun copyVaultKeyToClipboard(keyName: String): Boolean {
+            val secretValue = KeystoreVault.getDecryptedKey(this@MainActivity, keyName) ?: return false
+            runOnUiThread {
+                try {
+                    val clipboard = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                    val clip = android.content.ClipData.newPlainText("API Key", secretValue)
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                        clip.description.extras = android.os.PersistableBundle().apply {
+                            putBoolean(android.content.ClipDescription.EXTRA_IS_SENSITIVE, true)
+                        }
+                    } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                        clip.description.extras = android.os.PersistableBundle().apply {
+                            putBoolean("android.content.extra.IS_SENSITIVE", true)
+                        }
+                    }
+                    clipboard?.setPrimaryClip(clip)
+                } catch (_: Exception) {}
+            }
+            return true
+        }
+
+        @JavascriptInterface
+        fun saveVaultKey(name: String, value: String, description: String): Boolean {
+            return try {
+                KeystoreVault.saveKey(this@MainActivity, name, value, description)
+                true
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+        @JavascriptInterface
+        fun deleteVaultKey(name: String): Boolean {
+            return KeystoreVault.deleteKey(this@MainActivity, name)
+        }
+
+        @JavascriptInterface
+        fun getVaultKeysMasked(): String {
+            val list = KeystoreVault.listKeysMasked(this@MainActivity)
+            val arr = org.json.JSONArray()
+            for (k in list) {
+                val obj = org.json.JSONObject().apply {
+                    put("name", k.name)
+                    put("masked_value", k.masked)
+                    put("description", k.description)
+                    put("created_at", k.createdAt)
+                }
+                arr.put(obj)
+            }
+            return arr.toString()
+        }
+
+        @JavascriptInterface
+        fun getDeviceApiSettings(): String {
+            return DeviceApiBridge.getSettingsJson(this@MainActivity)
+        }
+
+        @JavascriptInterface
+        fun setDeviceApiToggle(key: String, enabled: Boolean): Boolean {
+            val res = DeviceApiBridge.setToggle(this@MainActivity, key, enabled)
+            if (enabled) {
+                when (key) {
+                    DeviceApiBridge.PREF_PERM_LOCATION -> {
+                        if (checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                            runOnUiThread {
+                                locationPermissionLauncher.launch(arrayOf(
+                                    android.Manifest.permission.ACCESS_FINE_LOCATION,
+                                    android.Manifest.permission.ACCESS_COARSE_LOCATION
+                                ))
+                            }
+                        }
+                    }
+                    DeviceApiBridge.PREF_PERM_CAMERA -> {
+                        if (checkSelfPermission(android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                            runOnUiThread {
+                                cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
+                            }
+                        }
+                    }
+                    DeviceApiBridge.PREF_PERM_NOTIFICATIONS -> {
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                                runOnUiThread {
+                                    notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return res
+        }
+
+        @JavascriptInterface
+        fun executeDeviceApi(payloadStr: String): String {
+            return DeviceApiBridge.executeAction(this@MainActivity, payloadStr).toString()
         }
 
         @JavascriptInterface

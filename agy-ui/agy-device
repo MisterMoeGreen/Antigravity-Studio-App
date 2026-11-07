@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""
+Antigravity Native Device API CLI Bridge (agy-device)
+Interfaces with ai.agy.app hardware and OS capabilities via device_api.sock
+"""
+
+import argparse
+import json
+import os
+import socket
+import sys
+from pathlib import Path
+
+SOCKET_CANDIDATES = [
+    Path(os.environ.get("HOME", "/data/data/ai.agy.app/files/home")) / ".gemini" / "antigravity-cli" / "device_api.sock",
+    Path.home() / ".gemini" / "antigravity-cli" / "device_api.sock",
+    Path("/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/device_api.sock"),
+    Path("/data/data/com.termux/files/home/.gemini/antigravity-cli/device_api.sock"),
+]
+
+
+def find_device_socket() -> Path:
+    for sock in SOCKET_CANDIDATES:
+        if sock.exists():
+            return sock
+    return SOCKET_CANDIDATES[0]
+
+
+def send_device_command(payload: dict) -> dict:
+    sock_path = find_device_socket()
+    if not sock_path.exists():
+        sys.stderr.write(f"Error: Device API socket not found at {sock_path}.\n")
+        sys.stderr.write("Ensure Antigravity Studio is running and Device APIs are enabled in General Settings.\n")
+        sys.exit(1)
+
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        s.settimeout(15.0)
+        s.connect(str(sock_path))
+        msg = json.dumps(payload) + "\n"
+        s.sendall(msg.encode("utf-8"))
+
+        data = b""
+        while True:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+            if b"\n" in data:
+                break
+        if not data:
+            sys.stderr.write("Error: Empty response from device API bridge.\n")
+            sys.exit(1)
+
+        line = data.decode("utf-8").strip()
+        return json.loads(line)
+    except Exception as exc:
+        sys.stderr.write(f"Error communicating with device API: {exc}\n")
+        sys.exit(1)
+    finally:
+        s.close()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Antigravity Studio Device Hardware CLI")
+    subparsers = parser.add_subparsers(dest="subcommand", help="Available subcommands")
+
+    # battery
+    subparsers.add_parser("battery", help="Query battery level and charging state")
+
+    # notify
+    notify_p = subparsers.add_parser("notify", help="Post an Android system notification")
+    notify_p.add_argument("--title", "-t", required=True, help="Notification title")
+    notify_p.add_argument("--body", "-b", required=True, help="Notification message")
+    notify_p.add_argument("--channel", "-c", default="agy_device_channel", help="Notification channel ID")
+
+    # vibrate
+    vib_p = subparsers.add_parser("vibrate", help="Trigger haptic vibration")
+    vib_p.add_argument("--duration", "-d", type=int, default=300, help="Duration in milliseconds (50-5000)")
+
+    # clipboard
+    clip_p = subparsers.add_parser("clipboard", help="Read or modify system clipboard")
+    clip_sub = clip_p.add_subparsers(dest="clip_action", help="get or set")
+    clip_sub.add_parser("get", help="Read text from system clipboard")
+    set_p = clip_sub.add_parser("set", help="Copy text to system clipboard")
+    set_p.add_argument("text", help="Text to copy")
+
+    # location
+    subparsers.add_parser("location", help="Query device GPS coordinates")
+
+    # tts
+    tts_p = subparsers.add_parser("tts", help="Speak text via Text-to-Speech")
+    tts_p.add_argument("text", help="Text to speak")
+    tts_p.add_argument("--pitch", type=float, default=1.0, help="Voice pitch (0.5 - 2.0)")
+    tts_p.add_argument("--rate", type=float, default=1.0, help="Speech rate (0.5 - 2.0)")
+
+    # photo
+    photo_p = subparsers.add_parser("photo", help="Capture photo from camera")
+    photo_p.add_argument("--dest", "-d", required=True, help="Destination file path inside workspace")
+    photo_p.add_argument("--camera", choices=["front", "back"], default="back", help="Camera lens")
+
+    # open
+    open_p = subparsers.add_parser("open", help="Open HTTP/HTTPS URL in browser")
+    open_p.add_argument("url", help="HTTP or HTTPS URL to launch")
+
+    args = parser.parse_args()
+    if not args.subcommand:
+        parser.print_help()
+        sys.exit(1)
+
+    if args.subcommand == "battery":
+        payload = {"action": "battery_status"}
+    elif args.subcommand == "notify":
+        payload = {"action": "send_notification", "title": args.title, "body": args.body, "channelId": args.channel}
+    elif args.subcommand == "vibrate":
+        payload = {"action": "vibrate", "duration_ms": args.duration}
+    elif args.subcommand == "clipboard":
+        if args.clip_action == "set":
+            payload = {"action": "clipboard_set", "text": args.text}
+        else:
+            payload = {"action": "clipboard_get"}
+    elif args.subcommand == "location":
+        payload = {"action": "get_location"}
+    elif args.subcommand == "tts":
+        payload = {"action": "tts_speak", "text": args.text, "pitch": args.pitch, "rate": args.rate}
+    elif args.subcommand == "photo":
+        payload = {"action": "take_photo", "dest_path": args.dest, "camera": args.camera}
+    elif args.subcommand == "open":
+        payload = {"action": "open_url", "url": args.url}
+    else:
+        sys.stderr.write(f"Unknown subcommand: {args.subcommand}\n")
+        sys.exit(1)
+
+    resp = send_device_command(payload)
+    if resp.get("status") == "error":
+        sys.stderr.write(f"Error ({resp.get('code', 'DEVICE_ERROR')}): {resp.get('message', 'Action failed')}\n")
+        sys.exit(1)
+
+    data = resp.get("data")
+    if data:
+        if isinstance(data, dict):
+            print(json.dumps(data, indent=2))
+        else:
+            print(data)
+    else:
+        print("Success.")
+
+
+if __name__ == "__main__":
+    main()

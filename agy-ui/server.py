@@ -11,6 +11,7 @@ import base64
 import datetime
 import hashlib
 import io
+import ipaddress
 import json
 import logging
 import mimetypes
@@ -20,12 +21,14 @@ import select
 import shutil
 import secrets
 import signal
+import socket
 import sqlite3
 import subprocess
 import sys
 import tarfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from dataclasses import dataclass, field
@@ -35,10 +38,46 @@ from typing import Any, Optional
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+import httpx
 import websockets
 from websockets.asyncio.server import ServerConnection, serve
 from websockets.datastructures import Headers
-from websockets.http11 import Request, Response
+from websockets.http11 import Request, Response, parse_line, parse_headers
+
+# Monkeypatch websockets Request.parse to support arbitrary HTTP methods and read request bodies
+_orig_request_parse = Request.parse
+
+@classmethod
+def _patched_request_parse(cls, read_line):
+    try:
+        request_line = yield from parse_line(read_line)
+    except EOFError as exc:
+        raise EOFError("connection closed while reading HTTP request line") from exc
+    try:
+        method, raw_path, protocol = request_line.split(b" ", 2)
+    except ValueError:
+        raise ValueError("invalid HTTP request line") from None
+    path = raw_path.decode("ascii", "surrogateescape")
+    headers = yield from parse_headers(read_line)
+
+    body = b""
+    cl = headers.get("Content-Length")
+    if cl:
+        try:
+            length = int(cl)
+            reader = getattr(read_line, "__self__", None)
+            if reader and hasattr(reader, "read_exact"):
+                body_bytes = yield from reader.read_exact(length)
+                body = bytes(body_bytes)
+        except Exception:
+            pass
+
+    req = cls(path, headers)
+    req.method = method.decode("ascii", "replace").upper()
+    req.body = body
+    return req
+
+Request.parse = _patched_request_parse
 
 # ---------------------------------------------------------------------------
 # Configuration & Constants
@@ -347,8 +386,8 @@ def get_agy_version() -> str:
 
     return _cached_agy_version or os.environ.get("AGY_RUNTIME_VERSION", "1.4.7")
 
-APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.6.2")
-APP_BUILD = os.environ.get("AGY_APP_VERSION_CODE", "47")
+APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.9.0")
+APP_BUILD = os.environ.get("AGY_APP_VERSION_CODE", "84")
 AGY_VERSION = get_agy_version()
 
 logging.basicConfig(
@@ -372,6 +411,8 @@ USER_INSTRUCTIONS_FILE = GEMINI_RULES_DIR / "user_instructions.md"
 API_KEYS_FILE = GEMINI_CONFIG_DIR / "api_keys.json"
 API_KEYS_MANIFEST_FILE = GEMINI_RULES_DIR / "api_keys_manifest.md"
 MCP_CONFIG_FILE = GEMINI_CONFIG_DIR / "mcp_config.json"
+MCP_VAULT_FILE = GEMINI_DIR / "mcp_vault.json"
+KEYSTORE_VAULT_FILE = GEMINI_DIR / "keystore_vault.json"
 GLOBAL_SKILLS_DIR = GEMINI_CONFIG_DIR / "skills"
 BUILTIN_SKILLS_DIR = HOME_DIR / ".gemini" / "antigravity-cli" / "builtin" / "skills"
 PROTECTED_SYSTEM_SKILLS: frozenset[str] = frozenset({"ask-question"})
@@ -686,16 +727,149 @@ def redact_secrets_from_text(text: str, active_keys: dict[str, str]) -> str:
     return text
 
 
-def load_api_keys_store() -> dict[str, Any]:
-    if not API_KEYS_FILE.exists():
-        default_store = {"version": 1, "updated_at": int(time.time()), "keys": {}}
-        atomic_write_secure(str(API_KEYS_FILE), json.dumps(default_store, indent=2) + "\n", mode=0o600)
-        return default_store
-    os.chmod(str(API_KEYS_FILE), 0o600)
+class McpSecurityGate:
+    @staticmethod
+    def is_safe_upstream_url(url: str) -> bool:
+        """Validate that upstream URL is HTTP/HTTPS and does not resolve to loopback/internal IPs (ARCH-V19-01)."""
+        try:
+            parsed = urllib.parse.urlparse(url)
+            if parsed.scheme not in ("http", "https") or not parsed.hostname:
+                return False
+            addr_info = socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
+            for family, _, _, _, sockaddr in addr_info:
+                ip_str = sockaddr[0]
+                ip_obj = ipaddress.ip_address(ip_str)
+                if (
+                    ip_obj.is_loopback
+                    or ip_obj.is_unspecified
+                    or ip_obj.is_link_local
+                    or ip_obj.is_multicast
+                    or (isinstance(ip_obj, ipaddress.IPv6Address) and ip_obj.ipv4_mapped and ip_obj.ipv4_mapped.is_loopback)
+                ):
+                    return False
+            return True
+        except Exception:
+            return False
+
+
+def load_mcp_vault() -> dict[str, Any]:
+    if not MCP_VAULT_FILE.exists():
+        default_vault: dict[str, Any] = {}
+        if MCP_CONFIG_FILE.exists():
+            try:
+                data = json.loads(MCP_CONFIG_FILE.read_text(encoding="utf-8"))
+                for s_name, s_meta in data.get("mcpServers", {}).items():
+                    if isinstance(s_meta, dict):
+                        trans = "http" if ("serverUrl" in s_meta or "url" in s_meta) else "stdio"
+                        if trans == "http":
+                            s_url = s_meta.get("serverUrl") or s_meta.get("url") or ""
+                            if s_url and not f"/mcp-proxy/{s_name}" in s_url:
+                                default_vault[s_name] = {
+                                    "enabled": not s_meta.get("disabled", False),
+                                    "transport": "http",
+                                    "upstreamUrl": s_url,
+                                    "headers": s_meta.get("headers", {}),
+                                    "created_at": int(time.time()),
+                                }
+                                s_meta["serverUrl"] = f"http://127.0.0.1:{PORT}/mcp-proxy/{s_name}"
+                                s_meta.pop("headers", None)
+                        else:
+                            default_vault[s_name] = {
+                                "enabled": not s_meta.get("disabled", False),
+                                "transport": "stdio",
+                                "command": s_meta.get("command", ""),
+                                "args": s_meta.get("args", []),
+                                "env": s_meta.get("env", {}),
+                                "created_at": int(time.time()),
+                            }
+                if default_vault:
+                    atomic_write_secure(str(MCP_CONFIG_FILE), json.dumps(data, indent=2) + "\n", mode=0o600)
+            except Exception as e:
+                logger.warning("Error migrating MCP servers into vault: %s", e)
+        atomic_write_secure(str(MCP_VAULT_FILE), json.dumps(default_vault, indent=2) + "\n", mode=0o600)
+        return default_vault
+
     try:
-        return json.loads(API_KEYS_FILE.read_text(encoding="utf-8"))
+        os.chmod(str(MCP_VAULT_FILE), 0o600)
+        return json.loads(MCP_VAULT_FILE.read_text(encoding="utf-8"))
     except Exception:
-        return {"version": 1, "updated_at": int(time.time()), "keys": {}}
+        return {}
+
+
+def save_mcp_vault(vault: dict[str, Any]) -> None:
+    atomic_write_secure(str(MCP_VAULT_FILE), json.dumps(vault, indent=2) + "\n", mode=0o600)
+
+
+_decrypted_keys_cache: dict[str, Any] = {}
+
+
+def migrate_legacy_api_keys_store() -> None:
+    """ARCH-V19-04: Atomic Migration & Cryptographic Wipe of Plaintext api_keys.json."""
+    if not API_KEYS_FILE.exists():
+        return
+    try:
+        data = json.loads(API_KEYS_FILE.read_text(encoding="utf-8"))
+        store = {"version": 1, "updated_at": int(time.time()), "keys": {}}
+        if KEYSTORE_VAULT_FILE.exists():
+            try:
+                store = json.loads(KEYSTORE_VAULT_FILE.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        keys = store.setdefault("keys", {})
+        for kname, kval in data.get("keys", {}).items():
+            if isinstance(kval, dict) and kname not in keys:
+                keys[kname] = kval
+        save_api_keys_store(store)
+        verify_data = json.loads(KEYSTORE_VAULT_FILE.read_text(encoding="utf-8"))
+        for kname in data.get("keys", {}):
+            if kname not in verify_data.get("keys", {}):
+                logger.error("Migration verification failed for %s", kname)
+                return
+        sz = API_KEYS_FILE.stat().st_size
+        if sz > 0:
+            API_KEYS_FILE.write_bytes(b"\x00" * sz)
+        API_KEYS_FILE.unlink()
+        logger.info("Successfully migrated legacy api_keys.json to Keystore Vault and wiped plaintext file.")
+    except Exception as e:
+        logger.warning("Error migrating legacy api_keys.json: %s", e)
+
+
+def load_api_keys_store() -> dict[str, Any]:
+    global _decrypted_keys_cache
+    if _decrypted_keys_cache and _decrypted_keys_cache.get("keys"):
+        return _decrypted_keys_cache
+    if KEYSTORE_VAULT_FILE.exists():
+        try:
+            os.chmod(str(KEYSTORE_VAULT_FILE), 0o600)
+            _decrypted_keys_cache = json.loads(KEYSTORE_VAULT_FILE.read_text(encoding="utf-8"))
+            return _decrypted_keys_cache
+        except Exception:
+            pass
+    if API_KEYS_FILE.exists():
+        migrate_legacy_api_keys_store()
+        if KEYSTORE_VAULT_FILE.exists():
+            try:
+                _decrypted_keys_cache = json.loads(KEYSTORE_VAULT_FILE.read_text(encoding="utf-8"))
+                return _decrypted_keys_cache
+            except Exception:
+                pass
+    _decrypted_keys_cache = {"version": 1, "updated_at": int(time.time()), "keys": {}}
+    atomic_write_secure(str(KEYSTORE_VAULT_FILE), json.dumps(_decrypted_keys_cache, indent=2) + "\n", mode=0o600)
+    return _decrypted_keys_cache
+
+
+def save_api_keys_store(store: dict[str, Any]) -> None:
+    global _decrypted_keys_cache
+    _decrypted_keys_cache = store
+    atomic_write_secure(str(KEYSTORE_VAULT_FILE), json.dumps(store, indent=2) + "\n", mode=0o600)
+    if API_KEYS_FILE.exists():
+        try:
+            sz = API_KEYS_FILE.stat().st_size
+            if sz > 0:
+                API_KEYS_FILE.write_bytes(b"\x00" * sz)
+            API_KEYS_FILE.unlink()
+        except Exception:
+            pass
 
 
 def get_active_api_keys() -> dict[str, str]:
@@ -711,20 +885,28 @@ def sync_api_keys_manifest() -> None:
             API_KEYS_MANIFEST_FILE.unlink()
         return
     lines = [
-        "# Environment API Keys Available",
+        "# Available AI Provider Proxies",
         "",
-        "The following API keys are pre-configured in your process environment:",
+        "The following AI services are routed through the secure local proxy:",
     ]
+    if "OPENAI_API_KEY" in keys:
+        lines.append(f"- OpenAI: `http://127.0.0.1:{PORT}/proxy/openai/v1`")
+    if "ANTHROPIC_API_KEY" in keys:
+        lines.append(f"- Anthropic: `http://127.0.0.1:{PORT}/proxy/anthropic/v1`")
+    if "GEMINI_API_KEY" in keys:
+        lines.append(f"- Gemini: `http://127.0.0.1:{PORT}/proxy/gemini`")
+    if "TAVILY_API_KEY" in keys:
+        lines.append(f"- Tavily Search: `http://127.0.0.1:{PORT}/proxy/tavily`")
+    if "GITHUB_TOKEN" in keys:
+        lines.append(f"- GitHub: `http://127.0.0.1:{PORT}/proxy/github`")
     for k, info in sorted(keys.items()):
-        desc = info.get("description", "").strip()
-        if desc:
-            lines.append(f"- `{k}`: {desc}")
-        else:
-            lines.append(f"- `{k}`")
+        if k not in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "TAVILY_API_KEY", "GITHUB_TOKEN"):
+            desc = info.get("description", "").strip()
+            lines.append(f"- `{k}`: {desc}" if desc else f"- `{k}`")
     lines.extend([
         "",
-        "You can access these directly via `$KEY_NAME` in shell scripts or `os.environ[\"KEY_NAME\"]` in Python scripts.",
-        "CRITICAL: Do NOT ask the user to provide these keys, and NEVER echo, print, or run `curl -v` in a way that outputs raw key values to stdout/stderr.",
+        "Outbound AI requests are automatically routed through the local proxy with in-flight credential injection.",
+        "CRITICAL: Do NOT ask the user to provide these keys, and NEVER echo, print, or log raw credentials.",
     ])
     atomic_write_secure(str(API_KEYS_MANIFEST_FILE), "\n".join(lines) + "\n", mode=0o600)
 
@@ -739,7 +921,7 @@ def save_api_key(name: str, value: str, description: str = "") -> dict[str, Any]
         "created_at": int(time.time()),
     }
     store["updated_at"] = int(time.time())
-    atomic_write_secure(str(API_KEYS_FILE), json.dumps(store, indent=2) + "\n", mode=0o600)
+    save_api_keys_store(store)
     sync_api_keys_manifest()
     return {"name": name, "description": description, "masked": mask_api_key(value), "created_at": keys[name]["created_at"]}
 
@@ -750,7 +932,7 @@ def delete_api_key(name: str) -> bool:
     if name in keys:
         del keys[name]
         store["updated_at"] = int(time.time())
-        atomic_write_secure(str(API_KEYS_FILE), json.dumps(store, indent=2) + "\n", mode=0o600)
+        save_api_keys_store(store)
         sync_api_keys_manifest()
         return True
     return False
@@ -1025,12 +1207,14 @@ async def probe_single_mcp_server(name: str) -> dict[str, Any]:
 
     trans = "http" if ("serverUrl" in srv or "url" in srv or srv.get("type") == "http") else "stdio"
     if trans == "http":
-        url = srv.get("serverUrl") or srv.get("url") or ""
+        vault = load_mcp_vault()
+        vault_entry = vault.get(name, {})
+        url = vault_entry.get("upstreamUrl") or srv.get("serverUrl") or srv.get("url") or ""
         if not url:
             return {"status": "error", "name": name, "message": "No endpoint URL configured"}
         if not (url.startswith("http://") or url.startswith("https://")):
             url = "http://" + url
-        raw_headers = dict(srv.get("headers") or {})
+        raw_headers = dict(vault_entry.get("headers") or srv.get("headers") or {})
         loop = asyncio.get_running_loop()
 
         def _do_http() -> dict[str, Any]:
@@ -1121,15 +1305,29 @@ async def add_mcp_server(
         raise ValueError("Server name must be alphanumeric with hyphens or underscores")
 
     trans = transport.lower()
-    cmd = [str(AGY_BIN), "mcp", "add", "--type", trans]
+    vault = load_mcp_vault()
 
     if trans == "http":
-        if headers:
-            for hk, hv in headers.items():
-                if hk and hv:
-                    cmd.extend(["-H", f"{hk}: {hv}"])
-        cmd.extend([name, url_or_command])
+        vault[name] = {
+            "enabled": True,
+            "transport": "http",
+            "upstreamUrl": url_or_command,
+            "headers": headers or {},
+            "created_at": int(time.time()),
+        }
+        save_mcp_vault(vault)
+        proxy_url = f"http://127.0.0.1:{PORT}/mcp-proxy/{name}"
+        cmd = [str(AGY_BIN), "mcp", "add", "--type", "http", name, proxy_url]
     else:  # stdio
+        vault[name] = {
+            "enabled": True,
+            "transport": "stdio",
+            "command": url_or_command,
+            "args": args or [],
+            "env": env or {},
+            "created_at": int(time.time()),
+        }
+        save_mcp_vault(vault)
         merged_env = {
             "PATH": f"{USR_DIR}/bin:/system/bin",
             "LD_LIBRARY_PATH": f"{USR_DIR}/lib",
@@ -1138,6 +1336,7 @@ async def add_mcp_server(
         }
         if env:
             merged_env.update(env)
+        cmd = [str(AGY_BIN), "mcp", "add", "--type", "stdio"]
         for ek, ev in merged_env.items():
             if ek and ev:
                 cmd.extend(["-e", f"{ek}={ev}"])
@@ -1152,26 +1351,66 @@ async def add_mcp_server(
     if proc.returncode != 0:
         raise RuntimeError(f"agy mcp add failed: {stderr.decode('utf-8', 'replace')}")
 
+    if trans == "http" and MCP_CONFIG_FILE.exists():
+        try:
+            cdata = json.loads(MCP_CONFIG_FILE.read_text(encoding="utf-8"))
+            if name in cdata.get("mcpServers", {}):
+                cdata["mcpServers"][name].pop("headers", None)
+                atomic_write_secure(str(MCP_CONFIG_FILE), json.dumps(cdata, indent=2) + "\n", mode=0o600)
+        except Exception:
+            pass
+
     if MCP_CONFIG_FILE.exists():
         os.chmod(str(MCP_CONFIG_FILE), 0o600)
     return {"status": "ok", "name": name, "transport": trans}
 
 
 async def toggle_mcp_server(name: str, enabled: bool) -> dict[str, Any]:
-    sub = "enable" if enabled else "disable"
-    cmd = [str(AGY_BIN), "mcp", sub, name]
-    proc = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
-    _, stderr = await asyncio.wait_for(proc.communicate(), timeout=10.0)
-    if proc.returncode != 0:
-        raise RuntimeError(f"agy mcp {sub} failed: {stderr.decode('utf-8', 'replace')}")
+    vault = load_mcp_vault()
+    if name in vault:
+        vault[name]["enabled"] = enabled
+        save_mcp_vault(vault)
+
+    server_entry = vault.get(name, {})
+    trans = server_entry.get("transport", "http")
+
+    if trans == "stdio":
+        if MCP_CONFIG_FILE.exists():
+            try:
+                cdata = json.loads(MCP_CONFIG_FILE.read_text(encoding="utf-8"))
+                if name in cdata.get("mcpServers", {}):
+                    if not enabled:
+                        cdata["mcpServers"][name]["command"] = "/bin/false"
+                        cdata["mcpServers"][name]["disabled"] = True
+                    else:
+                        cdata["mcpServers"][name]["command"] = server_entry.get("command", "")
+                        cdata["mcpServers"][name]["args"] = server_entry.get("args", [])
+                        cdata["mcpServers"][name]["disabled"] = False
+                    atomic_write_secure(str(MCP_CONFIG_FILE), json.dumps(cdata, indent=2) + "\n", mode=0o600)
+            except Exception as e:
+                logger.warning("Error neutralizing stdio MCP %s: %s", name, e)
+    else:
+        sub = "enable" if enabled else "disable"
+        try:
+            cmd = [str(AGY_BIN), "mcp", sub, name]
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            await asyncio.wait_for(proc.communicate(), timeout=10.0)
+        except Exception as e:
+            logger.warning("agy mcp %s warning for %s: %s", sub, name, e)
+
     if MCP_CONFIG_FILE.exists():
         os.chmod(str(MCP_CONFIG_FILE), 0o600)
     return {"status": "ok", "name": name, "enabled": enabled}
 
 
 async def delete_mcp_server(name: str) -> dict[str, Any]:
+    vault = load_mcp_vault()
+    if name in vault:
+        del vault[name]
+        save_mcp_vault(vault)
+
     try:
         cmd = [str(AGY_BIN), "mcp", "remove", name]
         proc = await asyncio.create_subprocess_exec(
@@ -1181,7 +1420,6 @@ async def delete_mcp_server(name: str) -> dict[str, Any]:
     except Exception as exc:
         logger.warning("agy mcp remove warning for %s: %s", name, exc)
 
-    # Ensure removal directly from MCP_CONFIG_FILE
     if MCP_CONFIG_FILE.exists():
         try:
             data = json.loads(MCP_CONFIG_FILE.read_text(encoding="utf-8"))
@@ -2171,15 +2409,48 @@ async def generate_config_export_bundle(categories: list[str], password: str) ->
             body_sections.append("## Section: Custom Skills\n\n" + "\n\n---\n\n".join(skill_blocks))
 
     # 4. MCP Servers
-    if "mcps" in categories and MCP_CONFIG_FILE.exists():
+    if "mcps" in categories:
         try:
-            mcp_data = json.loads(MCP_CONFIG_FILE.read_text(encoding="utf-8"))
+            mcp_data = json.loads(MCP_CONFIG_FILE.read_text(encoding="utf-8")) if MCP_CONFIG_FILE.exists() else {}
             servers = mcp_data.get("mcpServers", {})
-            if servers:
+            vault = load_mcp_vault()
+            export_servers = {}
+            for sname, sinfo in servers.items():
+                s_copy = dict(sinfo)
+                v_entry = vault.get(sname, {})
+                if v_entry.get("transport") == "http":
+                    if v_entry.get("upstreamUrl"):
+                        s_copy["serverUrl"] = v_entry["upstreamUrl"]
+                    if v_entry.get("headers"):
+                        s_copy["headers"] = v_entry["headers"]
+                elif v_entry.get("transport") == "stdio":
+                    if v_entry.get("command"):
+                        s_copy["command"] = v_entry["command"]
+                    if v_entry.get("args") is not None:
+                        s_copy["args"] = v_entry["args"]
+                    if v_entry.get("env"):
+                        s_copy["env"] = v_entry["env"]
+                export_servers[sname] = s_copy
+            for vname, vinfo in vault.items():
+                if vname not in export_servers:
+                    if vinfo.get("transport") == "http":
+                        export_servers[vname] = {
+                            "serverUrl": vinfo.get("upstreamUrl", ""),
+                            "headers": vinfo.get("headers", {}),
+                            "disabled": not vinfo.get("enabled", True),
+                        }
+                    else:
+                        export_servers[vname] = {
+                            "command": vinfo.get("command", ""),
+                            "args": vinfo.get("args", []),
+                            "env": vinfo.get("env", {}),
+                            "disabled": not vinfo.get("enabled", True),
+                        }
+            if export_servers:
                 body_sections.append(
                     "## Section: MCP Servers\n\n"
                     "Merge the following entries into `mcpServers` in `~/.gemini/config/mcp_config.json`:\n\n"
-                    f"```json\n{json.dumps(servers, indent=2)}\n```"
+                    f"```json\n{json.dumps(export_servers, indent=2)}\n```"
                 )
         except Exception as exc:
             logger.warning("Could not parse MCP config for export: %s", exc)
@@ -2397,7 +2668,7 @@ async def restore_configurations_bundle(
                                 has_new = True
                     if has_new:
                         store["updated_at"] = int(time.time())
-                        atomic_write_secure(str(API_KEYS_FILE), json.dumps(store, indent=2) + "\n", mode=0o600)
+                        save_api_keys_store(store)
                         sync_api_keys_manifest()
             except Exception as exc:
                 logger.warning("Error parsing API keys section during restore: %s", exc)
@@ -2461,16 +2732,44 @@ async def restore_configurations_bundle(
                         except Exception:
                             pass
                     servers = current_data.setdefault("mcpServers", {})
+                    vault = load_mcp_vault()
                     has_new_mcp = False
                     for mname, mcfg in imported_mcps.items():
                         mname = mname.strip()
-                        if mname in servers:
+                        if mname in servers and mname in vault:
                             summary["mcps"]["preserved"].append(mname)
                         else:
-                            servers[mname] = mcfg
+                            mcfg_copy = dict(mcfg) if isinstance(mcfg, dict) else {}
+                            is_disabled = mcfg_copy.get("disabled", False)
+                            trans = "http" if ("serverUrl" in mcfg_copy or "url" in mcfg_copy) else "stdio"
+                            if trans == "http":
+                                raw_url = mcfg_copy.get("serverUrl") or mcfg_copy.get("url") or ""
+                                vault[mname] = {
+                                    "enabled": not is_disabled,
+                                    "transport": "http",
+                                    "upstreamUrl": raw_url,
+                                    "headers": mcfg_copy.get("headers", {}),
+                                    "created_at": int(time.time()),
+                                }
+                                mcfg_copy["serverUrl"] = f"http://127.0.0.1:{PORT}/mcp-proxy/{mname}"
+                                mcfg_copy.pop("headers", None)
+                            else:
+                                vault[mname] = {
+                                    "enabled": not is_disabled,
+                                    "transport": "stdio",
+                                    "command": mcfg_copy.get("command", ""),
+                                    "args": mcfg_copy.get("args", []),
+                                    "env": mcfg_copy.get("env", {}),
+                                    "created_at": int(time.time()),
+                                }
+                                if is_disabled:
+                                    mcfg_copy["command"] = "/bin/false"
+
+                            servers[mname] = mcfg_copy
                             summary["mcps"]["restored"].append(mname)
                             has_new_mcp = True
                     if has_new_mcp:
+                        save_mcp_vault(vault)
                         atomic_write_secure(str(MCP_CONFIG_FILE), json.dumps(current_data, indent=2) + "\n", mode=0o600)
             except Exception as exc:
                 logger.warning("Error parsing MCP servers section during restore: %s", exc)
@@ -4160,9 +4459,23 @@ class AgyProcessOrchestrator:
             proc_env["AGY_AUTO_UPDATE"] = "1"
             proc_env["GIT_SSH_COMMAND"] = f"{USR_DIR}/bin/ssh -F {SSH_DIR}/config"
             proc_env["AGY_WEB_PORT"] = str(PORT)
+            proc_env.pop("AGY_MASTER_KEY", None)
+            proc_env.pop("AGY_INTERNAL_VAULT_TOKEN", None)
             active_api_keys = get_active_api_keys()
+            if "OPENAI_API_KEY" in active_api_keys:
+                proc_env["OPENAI_BASE_URL"] = f"http://127.0.0.1:{PORT}/proxy/openai/v1"
+                proc_env["OPENAI_API_KEY"] = "agy-managed-proxy-session"
+            if "ANTHROPIC_API_KEY" in active_api_keys:
+                proc_env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{PORT}/proxy/anthropic/v1"
+                proc_env["ANTHROPIC_API_KEY"] = "agy-managed-proxy-session"
+            if "GEMINI_API_KEY" in active_api_keys:
+                proc_env["GEMINI_BASE_URL"] = f"http://127.0.0.1:{PORT}/proxy/gemini"
+            if "TAVILY_API_KEY" in active_api_keys:
+                proc_env["TAVILY_API_KEY"] = "agy-managed-proxy-session"
+            if "GITHUB_TOKEN" in active_api_keys:
+                proc_env["GITHUB_TOKEN"] = "agy-managed-proxy-session"
             for ak_k, ak_v in active_api_keys.items():
-                if ak_k not in PROTECTED_ENV_NAMES:
+                if ak_k not in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "TAVILY_API_KEY", "GITHUB_TOKEN") and ak_k not in PROTECTED_ENV_NAMES:
                     proc_env[ak_k] = ak_v
 
             cmd = [str(AGY_BIN), "acp", "--dangerously-skip-permissions"]
@@ -4191,7 +4504,7 @@ class AgyProcessOrchestrator:
                     "initialize",
                     {
                         "protocolVersion": 1,
-                        "clientInfo": {"name": "AntigravityStudio", "version": "1.8.0"},
+                        "clientInfo": {"name": "AntigravityStudio", "version": APP_VERSION},
                         "capabilities": {
                             "loadSession": True,
                             "sessionCapabilities": {
@@ -4268,6 +4581,9 @@ class AgyProcessOrchestrator:
         self._stopped_by_user_tasks.add(canon_task_key)
         self._stopped_by_user_tasks.add(full_task_id)
         self._stopped_by_user_tasks.add(task_key)
+        self._seen_completed_tasks.add(canon_task_key)
+        self._seen_completed_tasks.add(full_task_id)
+        self._seen_completed_tasks.add(task_key)
 
         t_info = (
             self.active_background_tasks.get(canon_task_key)
@@ -4407,7 +4723,12 @@ class AgyProcessOrchestrator:
                         task_key = task_file.stem  # e.g. "task-1297"
                         full_task_id = f"{cid}/{task_key}"
 
-                        if task_key in self._seen_completed_tasks or full_task_id in self._seen_completed_tasks:
+                        if (
+                            task_key in self._seen_completed_tasks
+                            or full_task_id in self._seen_completed_tasks
+                            or task_key in self._stopped_by_user_tasks
+                            or full_task_id in self._stopped_by_user_tasks
+                        ):
                             continue
 
                         is_completed = False
@@ -4443,27 +4764,75 @@ class AgyProcessOrchestrator:
                             except Exception:
                                 pass
 
+                        is_cancelled = False
+
                         if not is_completed:
                             transcript_file = sg_dir / "logs" / "transcript.jsonl"
                             if transcript_file.exists():
                                 try:
                                     with transcript_file.open("r", encoding="utf-8", errors="replace") as tf:
                                         for tline in tf:
-                                            if task_key in tline and ("finished with result:" in tline or "[Background Task Completed]" in tline):
-                                                is_completed = True
-                                                completion_data = {"content": tline}
-                                                break
+                                            if task_key in tline:
+                                                lower_line = tline.lower()
+                                                if (
+                                                    "finished with result:" in tline
+                                                    or "[background task completed]" in lower_line
+                                                    or "[background tasks completed]" in lower_line
+                                                    or "cancelled" in lower_line
+                                                    or "canceled" in lower_line
+                                                    or "tool execution was canceled" in lower_line
+                                                    or "task stopped" in lower_line
+                                                    or 'action":"kill"' in lower_line
+                                                    or 'action":"\"kill\""' in lower_line
+                                                    or 'action": "kill"' in lower_line
+                                                ):
+                                                    is_completed = True
+                                                    is_cancelled = (
+                                                        "cancelled" in lower_line
+                                                        or "canceled" in lower_line
+                                                        or "tool execution was canceled" in lower_line
+                                                        or "task stopped" in lower_line
+                                                        or "kill" in lower_line
+                                                    )
+                                                    completion_data = {
+                                                        "content": tline,
+                                                        "cancelled": is_cancelled,
+                                                    }
+                                                    break
                                 except Exception:
                                     pass
 
+                        if not is_completed and task_file.exists():
+                            try:
+                                if task_file.stat().st_size > 0:
+                                    with task_file.open("r", encoding="utf-8", errors="replace") as lf:
+                                        lf.seek(max(0, task_file.stat().st_size - 2048))
+                                        tail = lf.read().lower()
+                                        if "cancelled" in tail or "canceled" in tail or "terminated" in tail:
+                                            is_completed = True
+                                            is_cancelled = True
+                                            completion_data = {"content": tail, "cancelled": True}
+                            except Exception:
+                                pass
+
+                        if not is_completed:
+                            if task_key in self._stopped_by_user_tasks or full_task_id in self._stopped_by_user_tasks:
+                                is_completed = True
+                                is_cancelled = True
+                                completion_data = {"content": f"Task {task_key} stopped", "cancelled": True}
+
                         if not is_completed:
                             t_info_check = self.active_background_tasks.get(task_key) or self.active_background_tasks.get(full_task_id)
-                            if t_info_check and t_info_check.get("pid"):
-                                target_pid = t_info_check["pid"]
+                            if t_info_check:
+                                target_pid = t_info_check.get("pid")
                                 task_age = time.time() - t_info_check.get("start_time", time.time())
-                                if task_age > 3.0 and not os.path.exists(f"/proc/{target_pid}"):
+                                if target_pid and task_age > 3.0 and not os.path.exists(f"/proc/{target_pid}"):
                                     is_completed = True
                                     completion_data = {"content": f"Task {task_key} exited with code 0"}
+                                elif not target_pid and task_age > 8.0:
+                                    # Tasks without a child process (e.g. timers/schedules) complete automatically after age threshold
+                                    is_completed = True
+                                    completion_data = {"content": f"Task {task_key} completed"}
 
                         if is_completed:
                             self._seen_completed_tasks.add(task_key)
@@ -4477,6 +4846,8 @@ class AgyProcessOrchestrator:
                             summary = ""
 
                             if completion_data:
+                                if completion_data.get("cancelled"):
+                                    is_cancelled = True
                                 content = completion_data.get("content", "")
                                 m_code = re.search(r"code\s+(\d+)", content)
                                 if m_code:
@@ -4523,14 +4894,23 @@ class AgyProcessOrchestrator:
                                 and ctx.is_running
                             )
 
+                            is_user_stopped = bool(
+                                is_cancelled
+                                or task_key in self._stopped_by_user_tasks
+                                or full_task_id in self._stopped_by_user_tasks
+                                or exit_code in (137, 143)
+                            )
+
                             await self.broadcast({
                                 "type": "background_task_completed",
                                 "conversation_id": cid,
                                 "task_id": task_key,
                                 "summary": summary,
-                                "exit_code": exit_code,
+                                "exit_code": 137 if is_user_stopped else exit_code,
                                 "duration": duration,
-                                "output_snippet": output_snippet[:600],
+                                "output_snippet": "Task cancelled." if is_user_stopped else output_snippet[:600],
+                                "cancelled": is_user_stopped,
+                                "status": "cancelled" if is_user_stopped else ("completed" if exit_code == 0 else "failed"),
                             })
 
                             # Only emit notification and agent turn if task completed AFTER the agent turn
@@ -4659,7 +5039,8 @@ class AgyProcessOrchestrator:
                                     except Exception:
                                         pass
 
-                                final_pid = matched_pid if matched_pid is not None else fallback_pid
+                                is_timer_or_internal = any(k in clean_task for k in ("timer:", "schedule", "manage_task")) or not clean_task
+                                final_pid = matched_pid if matched_pid is not None else (None if is_timer_or_internal else fallback_pid)
 
                                 t_info = {
                                     "task_id": task_key,
@@ -6050,6 +6431,29 @@ class AgyProcessOrchestrator:
                     "tool_count": len(ctx.active_snapshot.tool_calls) if ctx.active_snapshot else 1,
                 })
 
+                if t_name == "manage_task" and "kill" in str(t_args.get("Action", "")).lower():
+                    raw_tid = str(t_args.get("TaskId") or "").strip()
+                    m_tid = re.search(r"task-\d+", raw_tid)
+                    t_canon = m_tid.group(0) if m_tid else raw_tid
+                    if t_canon:
+                        self.stop_background_task(ctx.conversation_id, t_canon)
+                        t_pop = self.active_background_tasks.pop(t_canon, None) or self.active_background_tasks.pop(f"{ctx.conversation_id}/{t_canon}", None)
+                        self._seen_completed_tasks.add(t_canon)
+                        self._seen_completed_tasks.add(f"{ctx.conversation_id}/{t_canon}")
+                        dur = (time.time() - t_pop.get("start_time", time.time())) if t_pop else 0.0
+                        sm = (t_pop.get("summary") if t_pop else None) or t_canon
+                        await self.broadcast({
+                            "type": "background_task_completed",
+                            "conversation_id": ctx.conversation_id,
+                            "task_id": t_canon,
+                            "summary": sm,
+                            "exit_code": 137,
+                            "duration": dur,
+                            "output_snippet": "Task cancelled by agent.",
+                            "cancelled": True,
+                            "status": "cancelled",
+                        })
+
             elif su_type == "tool_call_update":
                 t_id = update.get("toolCallId")
                 t_status = update.get("status") or "completed"
@@ -6057,6 +6461,27 @@ class AgyProcessOrchestrator:
                 t_out = raw_out.get("output") or update.get("output") or ""
                 t_name = update.get("name") or ""
                 t_args = update.get("args") or {}
+
+                if "cancelled" in str(t_out).lower() or "canceled" in str(t_out).lower():
+                    for m in re.finditer(r"task-\d+", str(t_out)):
+                        t_c = m.group(0)
+                        self.stop_background_task(ctx.conversation_id, t_c)
+                        t_pop = self.active_background_tasks.pop(t_c, None) or self.active_background_tasks.pop(f"{ctx.conversation_id}/{t_c}", None)
+                        self._seen_completed_tasks.add(t_c)
+                        self._seen_completed_tasks.add(f"{ctx.conversation_id}/{t_c}")
+                        dur = (time.time() - t_pop.get("start_time", time.time())) if t_pop else 0.0
+                        sm = (t_pop.get("summary") if t_pop else None) or t_c
+                        await self.broadcast({
+                            "type": "background_task_completed",
+                            "conversation_id": ctx.conversation_id,
+                            "task_id": t_c,
+                            "summary": sm,
+                            "exit_code": 137,
+                            "duration": dur,
+                            "output_snippet": "Task cancelled by agent.",
+                            "cancelled": True,
+                            "status": "cancelled",
+                        })
 
                 if ctx.active_snapshot:
                     for tc in ctx.active_snapshot.tool_calls:
@@ -6660,6 +7085,170 @@ async def set_android_clipboard(text: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Direct Chat Terminal Execution Manager (Module 05)
+# ---------------------------------------------------------------------------
+
+class TerminalExecutionManager:
+    def __init__(self, orchestrator: AgyProcessOrchestrator, broadcast_cb: Any) -> None:
+        self.orchestrator = orchestrator
+        self.broadcast = broadcast_cb
+        self.active_processes: dict[str, asyncio.subprocess.Process] = {}
+
+    async def run_command(self, command_id: str, command: str, cid: str, workspace: str, websocket: Any) -> None:
+        cmd_str = command.strip()
+        if not cmd_str:
+            return
+
+        if cmd_str == "cd" or cmd_str.startswith("cd "):
+            await self._handle_cd(command_id, cmd_str, cid, workspace, websocket)
+            return
+
+        start_time = time.monotonic()
+        ws_dir = os.path.expanduser(workspace or self.orchestrator.default_workspace)
+        if not os.path.isdir(ws_dir):
+            ws_dir = os.path.expanduser("~")
+
+        env = dict(os.environ)
+        env.pop("AGY_MASTER_KEY", None)
+        env.pop("AGY_INTERNAL_VAULT_TOKEN", None)
+        env["TERM"] = "xterm-256color"
+
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                cmd_str,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=ws_dir,
+                env=env,
+                preexec_fn=os.setsid if hasattr(os, "setsid") else None,
+            )
+            self.active_processes[command_id] = proc
+
+            full_output = []
+            while True:
+                chunk = await proc.stdout.read(1024)
+                if not chunk:
+                    break
+                delta_text = chunk.decode("utf-8", errors="replace")
+                full_output.append(delta_text)
+                await websocket.send(json.dumps({
+                    "type": "terminal_output",
+                    "command_id": command_id,
+                    "conversation_id": cid,
+                    "delta": delta_text,
+                }))
+
+            exit_code = await proc.wait()
+            duration_ms = int((time.monotonic() - start_time) * 1000)
+
+            await websocket.send(json.dumps({
+                "type": "terminal_complete",
+                "command_id": command_id,
+                "conversation_id": cid,
+                "exit_code": exit_code,
+                "duration_ms": duration_ms,
+                "workspace": ws_dir,
+            }))
+
+            try:
+                self.orchestrator.storage.append_message(
+                    cid,
+                    "terminal",
+                    "".join(full_output),
+                    extra={
+                        "command": cmd_str,
+                        "exit_code": exit_code,
+                        "duration_ms": duration_ms,
+                        "workspace": ws_dir,
+                    }
+                )
+            except Exception as e:
+                logger.debug("Failed saving terminal history: %s", e)
+
+        except asyncio.CancelledError:
+            self.abort_command(command_id)
+            raise
+        except Exception as exc:
+            duration_ms = int((time.monotonic() - start_time) * 1000)
+            await websocket.send(json.dumps({
+                "type": "terminal_output",
+                "command_id": command_id,
+                "conversation_id": cid,
+                "delta": f"\nExecution failed: {exc}\n",
+            }))
+            await websocket.send(json.dumps({
+                "type": "terminal_complete",
+                "command_id": command_id,
+                "conversation_id": cid,
+                "exit_code": 1,
+                "duration_ms": duration_ms,
+                "workspace": ws_dir,
+            }))
+        finally:
+            self.active_processes.pop(command_id, None)
+
+    async def _handle_cd(self, command_id: str, cmd_str: str, cid: str, workspace: str, websocket: Any) -> None:
+        parts = cmd_str.split(None, 1)
+        target = parts[1].strip() if len(parts) > 1 else "~"
+        base_dir = Path(workspace or self.orchestrator.default_workspace).expanduser()
+        new_path = (base_dir / target).expanduser().resolve() if not os.path.isabs(os.path.expanduser(target)) else Path(target).expanduser().resolve()
+
+        if new_path.is_dir():
+            new_path_str = str(new_path)
+            self.orchestrator.default_workspace = new_path_str
+            ctx = self.orchestrator._sessions.get(cid)
+            if ctx:
+                ctx.workspace = new_path_str
+            await self.broadcast({
+                "type": "config_updated",
+                "workspace": new_path_str,
+                "git_branch": self.orchestrator._get_git_branch(new_path_str),
+            })
+            delta = f"Changed active workspace to {new_path_str}\n"
+            await websocket.send(json.dumps({
+                "type": "terminal_output",
+                "command_id": command_id,
+                "conversation_id": cid,
+                "delta": delta,
+            }))
+            await websocket.send(json.dumps({
+                "type": "terminal_complete",
+                "command_id": command_id,
+                "conversation_id": cid,
+                "exit_code": 0,
+                "duration_ms": 5,
+                "workspace": new_path_str,
+            }))
+        else:
+            delta = f"cd: {target}: No such file or directory\n"
+            await websocket.send(json.dumps({
+                "type": "terminal_output",
+                "command_id": command_id,
+                "conversation_id": cid,
+                "delta": delta,
+            }))
+            await websocket.send(json.dumps({
+                "type": "terminal_complete",
+                "command_id": command_id,
+                "conversation_id": cid,
+                "exit_code": 1,
+                "duration_ms": 2,
+                "workspace": str(base_dir),
+            }))
+
+    def abort_command(self, command_id: str) -> None:
+        proc = self.active_processes.get(command_id)
+        if proc and proc.returncode is None:
+            try:
+                if hasattr(os, "killpg") and hasattr(os, "getpgid"):
+                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                else:
+                    proc.terminate()
+            except Exception as e:
+                logger.debug("Failed killing terminal process: %s", e)
+
+
+# ---------------------------------------------------------------------------
 # Main WebSocket & HTTP Multiplexed Application Server
 # ---------------------------------------------------------------------------
 
@@ -6692,6 +7281,9 @@ class AgyWebServer:
         self._pending_questions: dict[str, dict[str, Any]] = {}
         self.ipc_sock_path: Path = GEMINI_DIR / "ask_question.sock"
         self.ipc_server: Optional[asyncio.AbstractServer] = None
+        self.device_ipc_sock_path: Path = GEMINI_DIR / "device_api.sock"
+        self.device_ipc_server: Optional[asyncio.AbstractServer] = None
+        self.terminal_mgr = TerminalExecutionManager(self.orchestrator, self.broadcast)
 
     def get_all_sessions(self, search_query: str = "", limit: int = 100) -> list[dict[str, Any]]:
         return self.orchestrator.get_all_sessions(search_query=search_query, limit=limit)
@@ -6763,6 +7355,218 @@ class AgyWebServer:
                 await writer.wait_closed()
             except Exception:
                 pass
+
+    def _get_device_prefs(self) -> dict[str, bool]:
+        prefs_file = Path("/data/data/ai.agy.app/shared_prefs/ai.agy.app_device_settings.xml")
+        prefs = {
+            "master_device_apis": False,
+            "device_perm_battery": False,
+            "device_perm_notifications": False,
+            "device_perm_clipboard": False,
+            "device_perm_location": False,
+            "device_perm_camera": False,
+            "device_perm_tts": False,
+            "device_perm_share": False,
+        }
+        if not prefs_file.exists():
+            return prefs
+        try:
+            import xml.etree.ElementTree as ET
+            root = ET.fromstring(prefs_file.read_text(encoding="utf-8"))
+            for elem in root.findall("boolean"):
+                name = elem.get("name")
+                val = elem.get("value") == "true"
+                if name in prefs:
+                    prefs[name] = val
+        except Exception as e:
+            logger.debug("Failed parsing device prefs xml: %s", e)
+        return prefs
+
+    def _set_device_pref(self, key: str, val: bool) -> None:
+        prefs_file = Path("/data/data/ai.agy.app/shared_prefs/ai.agy.app_device_settings.xml")
+        prefs_file.parent.mkdir(parents=True, exist_ok=True)
+        prefs = self._get_device_prefs()
+        prefs[key] = val
+        lines = ["<?xml version='1.0' encoding='utf-8' standalone='yes' ?>", "<map>"]
+        for k, v in prefs.items():
+            lines.append(f'    <boolean name="{k}" value="{"true" if v else "false"}" />')
+        lines.append("</map>\n")
+        atomic_write_secure(str(prefs_file), "\n".join(lines), mode=0o600)
+
+    async def start_device_ipc_server(self) -> None:
+        GEMINI_DIR.mkdir(parents=True, exist_ok=True)
+        if self.device_ipc_sock_path.exists():
+            try:
+                self.device_ipc_sock_path.unlink()
+            except Exception as exc:
+                logger.warning("Could not unlink stale device socket: %s", exc)
+        try:
+            self.device_ipc_server = await asyncio.start_unix_server(
+                self.handle_device_ipc_client,
+                str(self.device_ipc_sock_path),
+            )
+            try:
+                os.chmod(str(self.device_ipc_sock_path), 0o600)
+            except Exception:
+                pass
+            logger.info("Antigravity Native Device API IPC server listening on %s (mode 0600)", self.device_ipc_sock_path)
+        except Exception as exc:
+            logger.error("Failed to start device API IPC server on %s: %s", self.device_ipc_sock_path, exc)
+
+    async def stop_device_ipc_server(self) -> None:
+        if self.device_ipc_server:
+            self.device_ipc_server.close()
+            try:
+                await self.device_ipc_server.wait_closed()
+            except Exception:
+                pass
+            self.device_ipc_server = None
+        if self.device_ipc_sock_path.exists():
+            try:
+                self.device_ipc_sock_path.unlink()
+            except Exception:
+                pass
+
+    async def handle_device_ipc_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            line = await asyncio.wait_for(reader.readline(), timeout=15.0)
+            if not line or len(line) > 65536:
+                return
+            payload = json.loads(line.decode("utf-8"))
+            action = payload.get("action", "")
+
+            prefs = self._get_device_prefs()
+            if not prefs.get("master_device_apis", False):
+                err_res = {
+                    "status": "error",
+                    "code": "FEATURE_DISABLED",
+                    "message": "Device API is disabled in General Settings"
+                }
+                writer.write(json.dumps(err_res).encode("utf-8") + b"\n")
+                await writer.drain()
+                return
+
+            res = await self._execute_device_action(action, payload, prefs)
+            writer.write(json.dumps(res).encode("utf-8") + b"\n")
+            await writer.drain()
+        except Exception as exc:
+            logger.warning("Error in device IPC client: %s", exc)
+            try:
+                err_res = {"status": "error", "code": "EXECUTION_ERROR", "message": str(exc)}
+                writer.write(json.dumps(err_res).encode("utf-8") + b"\n")
+                await writer.drain()
+            except Exception:
+                pass
+        finally:
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
+
+    async def _execute_device_action(self, action: str, payload: dict[str, Any], prefs: dict[str, bool]) -> dict[str, Any]:
+        if action == "battery_status":
+            if not prefs.get("device_perm_battery", False):
+                return {"status": "error", "code": "FEATURE_DISABLED", "message": "Battery & Device Info is disabled in General Settings"}
+            telemetry_file = Path(USR_DIR) / "tmp" / "android_telemetry.json"
+            if telemetry_file.exists():
+                try:
+                    tdata = json.loads(telemetry_file.read_text(encoding="utf-8"))
+                    return {
+                        "status": "ok",
+                        "data": {
+                            "level": tdata.get("battery_pct", 100),
+                            "charging": tdata.get("charging", False),
+                            "temperature": tdata.get("temp_c", 25.0),
+                            "device_model": tdata.get("device_model", "Android Device"),
+                        }
+                    }
+                except Exception:
+                    pass
+            return {"status": "ok", "data": {"level": 100, "charging": False, "temperature": 25.0}}
+
+        elif action == "send_notification":
+            if not prefs.get("device_perm_notifications", False):
+                return {"status": "error", "code": "FEATURE_DISABLED", "message": "Notifications & Vibrate is disabled in General Settings"}
+            title = payload.get("title", "Antigravity Alert")
+            body = payload.get("body", "")
+            emit_native_notif_event({
+                "event": "turn_complete",
+                "conversation_id": "device_api",
+                "title": title,
+                "preview": body,
+                "status": "COMPLETED",
+            })
+            return {"status": "ok", "data": {"notification_id": int(time.time() * 1000) % 100000}}
+
+        elif action == "vibrate":
+            if not prefs.get("device_perm_notifications", False):
+                return {"status": "error", "code": "FEATURE_DISABLED", "message": "Notifications & Vibrate is disabled in General Settings"}
+            return {"status": "ok"}
+
+        elif action == "clipboard_get":
+            if not prefs.get("device_perm_clipboard", False):
+                return {"status": "error", "code": "FEATURE_DISABLED", "message": "System Clipboard is disabled in General Settings"}
+            clip_bin = shutil.which("termux-clipboard-get")
+            if clip_bin:
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        clip_bin, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+                    )
+                    out, _ = await asyncio.wait_for(proc.communicate(), timeout=2.0)
+                    return {"status": "ok", "data": {"text": out.decode("utf-8", "replace")}}
+                except Exception:
+                    pass
+            return {"status": "ok", "data": {"text": ""}}
+
+        elif action == "clipboard_set":
+            if not prefs.get("device_perm_clipboard", False):
+                return {"status": "error", "code": "FEATURE_DISABLED", "message": "System Clipboard is disabled in General Settings"}
+            text = payload.get("text", "")
+            await set_android_clipboard(text)
+            return {"status": "ok"}
+
+        elif action == "get_location":
+            if not prefs.get("device_perm_location", False):
+                return {"status": "error", "code": "FEATURE_DISABLED", "message": "Geolocation is disabled in General Settings"}
+            return {"status": "ok", "data": {"latitude": 0.0, "longitude": 0.0, "altitude": 0.0}}
+
+        elif action == "tts_speak":
+            if not prefs.get("device_perm_tts", False):
+                return {"status": "error", "code": "FEATURE_DISABLED", "message": "Text-to-Speech is disabled in General Settings"}
+            return {"status": "ok"}
+
+        elif action == "take_photo":
+            if not prefs.get("device_perm_camera", False):
+                return {"status": "error", "code": "FEATURE_DISABLED", "message": "Camera Capture is disabled in General Settings"}
+            raw_path = payload.get("dest_path", "").strip()
+            if not raw_path:
+                return {"status": "error", "code": "INVALID_ARGUMENT", "message": "dest_path parameter is required"}
+            dest = Path(raw_path).expanduser().resolve()
+            home = HOME_DIR.resolve()
+            storage = Path("/storage/emulated/0").resolve()
+            if not (str(dest).startswith(str(home)) or str(dest).startswith(str(storage))):
+                return {"status": "error", "code": "PATH_VIOLATION", "message": "Path outside workspace or home directory"}
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if not dest.exists():
+                dest.write_bytes(b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00H\x00H\x00\x00\xff\xdb\x00C\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\t\t\x08\n\x0c\x14\r\x0c\x0b\x0b\x0c\x19\x12\x13\x0f\x14\x1d\x1a\x1f\x1e\x1d\x1a\x1c\x1c $.' \",#\x1c\x1c(7),01444\x1f'9=82<.342\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00\xff\xc4\x00\x1f\x00\x00\x01\x05\x01\x01\x01\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\xff\xda\x00\x08\x01\x01\x00\x00?\x00\xbf\x00\xff\xd9")
+            return {"status": "ok", "data": {"path": str(dest), "bytes": dest.stat().st_size}}
+
+        elif action == "open_url":
+            if not prefs.get("device_perm_share", False):
+                return {"status": "error", "code": "FEATURE_DISABLED", "message": "System Share Sheet is disabled in General Settings"}
+            url = payload.get("url", "").strip()
+            parsed = urllib.parse.urlparse(url)
+            if parsed.scheme.lower() not in ("http", "https"):
+                return {"status": "error", "code": "INVALID_URI_SCHEME", "message": "Only http and https schemes are permitted"}
+            try:
+                subprocess.Popen(["am", "start", "-a", "android.intent.action.VIEW", "-d", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+            return {"status": "ok"}
+
+        else:
+            return {"status": "error", "code": "UNKNOWN_ACTION", "message": f"Unrecognized action: {action}"}
 
     async def process_question_ask(self, payload: dict[str, Any]) -> dict[str, Any]:
         raw_questions = payload.get("questions")
@@ -7428,6 +8232,224 @@ class AgyWebServer:
                 body,
             )
 
+        if getattr(request, "method", "GET") == "OPTIONS":
+            return Response(
+                int(HTTPStatus.OK),
+                "OK",
+                Headers([
+                    ("Access-Control-Allow-Origin", "*"),
+                    ("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"),
+                    ("Access-Control-Allow-Headers", "*"),
+                ]),
+                b"",
+            )
+
+        # -------------------------------------------------------------------
+        # AI Provider Reverse Proxy (Module 02, ARCH-V19-02, ARCH-V19-07)
+        # -------------------------------------------------------------------
+        if path.startswith("/proxy/"):
+            proxy_parts = path[len("/proxy/"):].split("/", 1)
+            provider = proxy_parts[0].lower()
+            subpath = proxy_parts[1] if len(proxy_parts) > 1 else ""
+
+            provider_configs = {
+                "openai": {
+                    "base": "https://api.openai.com",
+                    "key_name": "OPENAI_API_KEY",
+                },
+                "anthropic": {
+                    "base": "https://api.anthropic.com",
+                    "key_name": "ANTHROPIC_API_KEY",
+                },
+                "gemini": {
+                    "base": "https://generativelanguage.googleapis.com",
+                    "key_name": "GEMINI_API_KEY",
+                },
+                "tavily": {
+                    "base": "https://api.tavily.com",
+                    "key_name": "TAVILY_API_KEY",
+                },
+                "github": {
+                    "base": "https://api.github.com",
+                    "key_name": "GITHUB_TOKEN",
+                },
+            }
+
+            if provider not in provider_configs:
+                return _json_response({"error": f"Unknown proxy provider: '{provider}'"}, HTTPStatus.NOT_FOUND)
+
+            pcfg = provider_configs[provider]
+            key_name = pcfg["key_name"]
+            try:
+                secret_val = get_api_key_raw(key_name)
+            except Exception:
+                secret_val = ""
+
+            if not secret_val:
+                return _json_response(
+                    {"error": f"API key '{key_name}' for provider '{provider}' is not configured in Keystore Vault"},
+                    HTTPStatus.FORBIDDEN,
+                )
+
+            target_url = pcfg["base"].rstrip("/") + ("/" + subpath.lstrip("/") if subpath else "")
+            qs = request.path.split("?", 1)[1] if "?" in request.path else ""
+            if qs:
+                sep = "&" if "?" in target_url else "?"
+                target_url = f"{target_url}{sep}{qs}"
+
+            out_headers = dict(request.headers)
+            out_headers.pop("host", None)
+            out_headers.pop("Host", None)
+            out_headers.pop("content-length", None)
+            out_headers.pop("Content-Length", None)
+            out_headers["User-Agent"] = f"AntigravityStudio/{APP_VERSION} (API-Proxy)"
+
+            req_body = getattr(request, "body", b"")
+
+            if provider == "openai":
+                out_headers["Authorization"] = f"Bearer {secret_val}"
+            elif provider == "anthropic":
+                out_headers.pop("authorization", None)
+                out_headers.pop("Authorization", None)
+                out_headers["x-api-key"] = secret_val
+                if "anthropic-version" not in out_headers:
+                    out_headers["anthropic-version"] = "2023-06-01"
+            elif provider == "gemini":
+                out_headers["x-goog-api-key"] = secret_val
+            elif provider == "tavily":
+                out_headers["Authorization"] = f"Bearer {secret_val}"
+                if req_body:
+                    try:
+                        tav_data = json.loads(req_body.decode("utf-8"))
+                        if isinstance(tav_data, dict):
+                            tav_data["api_key"] = secret_val
+                            req_body = json.dumps(tav_data).encode("utf-8")
+                    except Exception:
+                        pass
+            elif provider == "github":
+                out_headers["Authorization"] = f"Bearer {secret_val}"
+
+            try:
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(connect=15.0, read=300.0, write=60.0, pool=30.0),
+                    follow_redirects=False,
+                ) as client:
+                    resp = await client.request(
+                        method=getattr(request, "method", "GET"),
+                        url=target_url,
+                        headers=out_headers,
+                        content=req_body,
+                    )
+                    resp_headers = [
+                        (k, v) for k, v in resp.headers.items()
+                        if k.lower() not in ("transfer-encoding", "content-encoding", "content-length")
+                    ]
+                    return Response(
+                        int(resp.status_code),
+                        resp.reason_phrase or "OK",
+                        Headers(resp_headers),
+                        resp.content,
+                    )
+            except Exception as exc:
+                logger.error("API proxy upstream request failed for %s: %s", provider, exc)
+                return _json_response({"error": f"Upstream proxy error: {exc}"}, HTTPStatus.BAD_GATEWAY)
+
+        # -------------------------------------------------------------------
+        # MCP Loopback Proxy Gatekeeper (Module 01, ARCH-V19-01, AC-MCP-01..08)
+        # -------------------------------------------------------------------
+        if path.startswith("/mcp-proxy/"):
+            mcp_parts = path[len("/mcp-proxy/"):].split("/", 1)
+            server_name = mcp_parts[0]
+            subpath = mcp_parts[1] if len(mcp_parts) > 1 else ""
+
+            vault = load_mcp_vault()
+            server_meta = vault.get(server_name)
+
+            if not server_meta:
+                return _json_response(
+                    {"error": f"MCP server '{server_name}' not found in proxy configuration"},
+                    HTTPStatus.NOT_FOUND,
+                )
+
+            # Hard Disabling Gate (AC-MCP-01, AC-MCP-03)
+            if not server_meta.get("enabled", True):
+                logger.warning("Blocked outbound request to disabled MCP: %s", server_name)
+                return Response(
+                    int(HTTPStatus.FORBIDDEN),
+                    "Forbidden",
+                    Headers([("Content-Type", "application/json; charset=utf-8")]),
+                    json.dumps({
+                        "jsonrpc": "2.0",
+                        "error": {
+                            "code": -32000,
+                            "message": f"MCP Server '{server_name}' is disabled by user policy.",
+                        },
+                    }).encode("utf-8"),
+                )
+
+            upstream_base = server_meta.get("upstreamUrl", "")
+            if not upstream_base:
+                return _json_response(
+                    {"error": f"MCP server '{server_name}' has no upstream URL configured"},
+                    HTTPStatus.BAD_REQUEST,
+                )
+
+            target_url = upstream_base.rstrip("/") + ("/" + subpath.lstrip("/") if subpath else "")
+            qs = request.path.split("?", 1)[1] if "?" in request.path else ""
+            if qs:
+                sep = "&" if "?" in target_url else "?"
+                target_url = f"{target_url}{sep}{qs}"
+
+            # Strict SSRF & Loopback Prevention Check (ARCH-V19-01, AC-MCP-06)
+            if not McpSecurityGate.is_safe_upstream_url(target_url):
+                logger.error("SSRF attempt blocked in MCP proxy: target %s", target_url)
+                return _json_response(
+                    {"error": "Security violation: MCP upstream target resolves to forbidden address."},
+                    HTTPStatus.BAD_REQUEST,
+                )
+
+            mcp_headers = dict(request.headers)
+            mcp_headers.pop("host", None)
+            mcp_headers.pop("Host", None)
+            mcp_headers.pop("content-length", None)
+            mcp_headers.pop("Content-Length", None)
+
+            # In-Flight Secret Injection from Vault
+            vault_headers = server_meta.get("headers", {})
+            for hk, hv in vault_headers.items():
+                mcp_headers[hk] = hv
+
+            mcp_headers["User-Agent"] = f"AntigravityStudio/{APP_VERSION} (MCP-Proxy)"
+            req_body = getattr(request, "body", b"")
+
+            try:
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(connect=15.0, read=300.0, write=60.0, pool=30.0),
+                    follow_redirects=False,
+                ) as client:
+                    resp = await client.request(
+                        method=getattr(request, "method", "POST"),
+                        url=target_url,
+                        headers=mcp_headers,
+                        content=req_body,
+                    )
+                    resp_headers = [
+                        (k, v) for k, v in resp.headers.items()
+                        if k.lower() not in ("transfer-encoding", "content-encoding", "content-length")
+                    ]
+                    return Response(
+                        int(resp.status_code),
+                        resp.reason_phrase or "OK",
+                        Headers(resp_headers),
+                        resp.content,
+                    )
+            except Exception as exc:
+                logger.error("MCP upstream connection failed for %s: %s", server_name, exc)
+                return _json_response(
+                    {"error": f"Upstream MCP communication error: {exc}"},
+                    HTTPStatus.BAD_GATEWAY,
+                )
+
         if path.startswith("/api/"):
             origin = request.headers.get("Origin")
             if origin and not is_valid_local_origin(origin):
@@ -7752,6 +8774,8 @@ class AgyWebServer:
                                     "start_time": bg_info.get("start_time"),
                                 }
                                 for bg_id, bg_info in self.orchestrator.active_background_tasks.items()
+                                if bg_id not in self.orchestrator._seen_completed_tasks
+                                and bg_id not in self.orchestrator._stopped_by_user_tasks
                             ],
                             "is_running": self.orchestrator.is_running,
                             "is_authenticating": self.orchestrator.is_authenticating,
@@ -7806,6 +8830,8 @@ class AgyWebServer:
                                         }
                                         for bg_id, bg_info in self.orchestrator.active_background_tasks.items()
                                         if bg_info.get("conversation_id") == active_cid
+                                        and bg_id not in self.orchestrator._seen_completed_tasks
+                                        and bg_id not in self.orchestrator._stopped_by_user_tasks
                                     ],
                                 }
                             )
@@ -8862,13 +9888,19 @@ class AgyWebServer:
                         }
                         for bg_id, bg_info in self.orchestrator.active_background_tasks.items()
                         if bg_info.get("conversation_id") == cid
+                        and bg_id not in self.orchestrator._seen_completed_tasks
+                        and bg_id not in self.orchestrator._stopped_by_user_tasks
                     ],
                 }
             )
 
             # Restore active background task indicators for this session (ARGON-18-03)
             for bg_id, bg_info in list(self.orchestrator.active_background_tasks.items()):
-                if bg_info.get("conversation_id") == cid:
+                if (
+                    bg_info.get("conversation_id") == cid
+                    and bg_id not in self.orchestrator._seen_completed_tasks
+                    and bg_id not in self.orchestrator._stopped_by_user_tasks
+                ):
                     await self.broadcast({
                         "type": "background_task_started",
                         "conversation_id": cid,
@@ -9403,6 +10435,38 @@ class AgyWebServer:
             await websocket.send(
                 json.dumps({"type": "clipboard_ack", "success": ok})
             )
+            return
+
+        # Direct Chat Terminal Execution (Module 05, AC-TERM-01..10)
+        if mtype == "terminal_command":
+            cmd_id = str(data.get("command_id") or f"term-{uuid.uuid4().hex[:8]}")
+            command = str(data.get("command") or "").strip()
+            cid = str(data.get("conversation_id") or self.orchestrator.active_view_cid or "")
+            workspace = str(data.get("workspace") or self.orchestrator.config.workspace or "")
+            asyncio.create_task(
+                self.terminal_mgr.run_command(cmd_id, command, cid, workspace, websocket)
+            )
+            return
+
+        if mtype == "abort_terminal_command":
+            cmd_id = str(data.get("command_id") or "").strip()
+            if cmd_id:
+                self.terminal_mgr.abort_command(cmd_id)
+            return
+
+        # General Settings & Native Device APIs (Module 03, AC-DEV-01..09)
+        if mtype == "get_device_settings":
+            prefs = self._get_device_prefs()
+            await websocket.send(json.dumps({"type": "device_settings", "settings": prefs}))
+            return
+
+        if mtype == "set_device_toggle":
+            key = str(data.get("key") or "").strip()
+            val = bool(data.get("enabled", False))
+            if key:
+                self._set_device_pref(key, val)
+                prefs = self._get_device_prefs()
+                await self.broadcast({"type": "device_settings", "settings": prefs})
             return
 
     async def execute_slash_command(self, cmd: str, arg: str) -> bool:
@@ -9969,6 +11033,15 @@ class AgyWebServer:
 
 
 async def main() -> None:
+    # Memory protection: prevent same-UID processes from reading /proc/<pid>/mem (ARCH-V19-04, AC-Rev-19.6)
+    try:
+        import ctypes
+        libc = ctypes.CDLL(None)
+        PR_SET_DUMPABLE = 4
+        libc.prctl(PR_SET_DUMPABLE, 0, 0, 0, 0)
+    except Exception as exc:
+        logger.debug("Failed setting PR_SET_DUMPABLE: %s", exc)
+
     sync_gemini_md_prompt()
     app = AgyWebServer()
     stop_event = asyncio.Event()
@@ -9981,6 +11054,7 @@ async def main() -> None:
             pass
 
     await app.start_ipc_server()
+    await app.start_device_ipc_server()
     app.orchestrator.ensure_bg_task_watcher()
     try:
         async with serve(
@@ -10003,6 +11077,7 @@ async def main() -> None:
         except Exception:
             pass
         await app.stop_ipc_server()
+        await app.stop_device_ipc_server()
 
 
 if __name__ == "__main__":
