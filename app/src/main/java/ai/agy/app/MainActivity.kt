@@ -546,9 +546,20 @@ class MainActivity : AppCompatActivity() {
 
         @JavascriptInterface
         fun setDeviceApiToggle(key: String, enabled: Boolean): Boolean {
-            val res = DeviceApiBridge.setToggle(this@MainActivity, key, enabled)
+            val canonicalKey = when (key) {
+                "device_api_enabled" -> DeviceApiBridge.PREF_MASTER_DEVICE_APIS
+                "device_api_battery" -> DeviceApiBridge.PREF_PERM_BATTERY
+                "device_api_notify" -> DeviceApiBridge.PREF_PERM_NOTIFICATIONS
+                "device_api_clipboard" -> DeviceApiBridge.PREF_PERM_CLIPBOARD
+                "device_api_location" -> DeviceApiBridge.PREF_PERM_LOCATION
+                "device_api_camera" -> DeviceApiBridge.PREF_PERM_CAMERA
+                "device_api_tts" -> DeviceApiBridge.PREF_PERM_TTS
+                "device_api_share" -> DeviceApiBridge.PREF_PERM_SHARE
+                else -> key
+            }
+            val res = DeviceApiBridge.setToggle(this@MainActivity, canonicalKey, enabled)
             if (enabled) {
-                when (key) {
+                when (canonicalKey) {
                     DeviceApiBridge.PREF_PERM_LOCATION -> {
                         if (checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                             runOnUiThread {

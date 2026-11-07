@@ -86,22 +86,52 @@ object DeviceApiBridge {
     }
 
     fun setToggle(context: Context, key: String, enabled: Boolean): Boolean {
-        getPrefs(context).edit().putBoolean(key, enabled).apply()
+        val canonicalKey = when (key) {
+            "device_api_enabled" -> PREF_MASTER_DEVICE_APIS
+            "device_api_battery" -> PREF_PERM_BATTERY
+            "device_api_notify" -> PREF_PERM_NOTIFICATIONS
+            "device_api_clipboard" -> PREF_PERM_CLIPBOARD
+            "device_api_location" -> PREF_PERM_LOCATION
+            "device_api_camera" -> PREF_PERM_CAMERA
+            "device_api_tts" -> PREF_PERM_TTS
+            "device_api_share" -> PREF_PERM_SHARE
+            else -> key
+        }
+        getPrefs(context).edit().putBoolean(canonicalKey, enabled).apply()
         // Synchronize to telemetry/bridge status if needed
         return true
     }
 
     fun getSettingsJson(context: Context): String {
         val prefs = getPrefs(context)
+        val master = prefs.getBoolean(PREF_MASTER_DEVICE_APIS, false)
+        val battery = prefs.getBoolean(PREF_PERM_BATTERY, false)
+        val notifications = prefs.getBoolean(PREF_PERM_NOTIFICATIONS, false)
+        val clipboard = prefs.getBoolean(PREF_PERM_CLIPBOARD, false)
+        val location = prefs.getBoolean(PREF_PERM_LOCATION, false)
+        val camera = prefs.getBoolean(PREF_PERM_CAMERA, false)
+        val tts = prefs.getBoolean(PREF_PERM_TTS, false)
+        val share = prefs.getBoolean(PREF_PERM_SHARE, false)
+
         val json = JSONObject().apply {
-            put(PREF_MASTER_DEVICE_APIS, prefs.getBoolean(PREF_MASTER_DEVICE_APIS, false))
-            put(PREF_PERM_BATTERY, prefs.getBoolean(PREF_PERM_BATTERY, false))
-            put(PREF_PERM_NOTIFICATIONS, prefs.getBoolean(PREF_PERM_NOTIFICATIONS, false))
-            put(PREF_PERM_CLIPBOARD, prefs.getBoolean(PREF_PERM_CLIPBOARD, false))
-            put(PREF_PERM_LOCATION, prefs.getBoolean(PREF_PERM_LOCATION, false))
-            put(PREF_PERM_CAMERA, prefs.getBoolean(PREF_PERM_CAMERA, false))
-            put(PREF_PERM_TTS, prefs.getBoolean(PREF_PERM_TTS, false))
-            put(PREF_PERM_SHARE, prefs.getBoolean(PREF_PERM_SHARE, false))
+            put(PREF_MASTER_DEVICE_APIS, master)
+            put(PREF_PERM_BATTERY, battery)
+            put(PREF_PERM_NOTIFICATIONS, notifications)
+            put(PREF_PERM_CLIPBOARD, clipboard)
+            put(PREF_PERM_LOCATION, location)
+            put(PREF_PERM_CAMERA, camera)
+            put(PREF_PERM_TTS, tts)
+            put(PREF_PERM_SHARE, share)
+
+            // Backwards compatibility aliases
+            put("device_api_enabled", master)
+            put("device_api_battery", battery)
+            put("device_api_notify", notifications)
+            put("device_api_clipboard", clipboard)
+            put("device_api_location", location)
+            put("device_api_camera", camera)
+            put("device_api_tts", tts)
+            put("device_api_share", share)
         }
         return json.toString()
     }

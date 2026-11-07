@@ -3349,12 +3349,23 @@
       display: inline-block;
       width: 44px;
       height: 24px;
+      min-width: 44px;
+      min-height: 24px;
       flex-shrink: 0;
+      cursor: pointer;
+      touch-action: manipulation;
     }
     .toggle-switch input {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
       opacity: 0;
-      width: 0;
-      height: 0;
+      margin: 0;
+      cursor: pointer;
+      z-index: 2;
+      touch-action: manipulation;
     }
     .toggle-slider {
       position: absolute;
@@ -3364,6 +3375,7 @@
       border: 1px solid var(--border-subtle);
       transition: .2s;
       border-radius: 24px;
+      pointer-events: none;
     }
     .toggle-slider:before {
       position: absolute;
@@ -3458,7 +3470,7 @@
           </span>
           <span id="labelTerminal">Terminal</span>
         </button>
-        <button class="config-pill accent" id="pillSlash">
+        <button class="config-pill" id="pillSlash">
           <span>/ Commands</span>
         </button>
         <button class="config-pill" id="pillModel" title="Select model and reasoning effort">
@@ -4478,16 +4490,16 @@
           </div>
 
           <!-- Master Switch (AC-DEV-02) -->
-          <div style="display:flex;align-items:center;justify-content:space-between;padding:12px;background:var(--bg-card);border-radius:10px;border:1px solid var(--border-subtle);">
-            <div>
+          <label class="touch-toggle-row" style="display:flex;align-items:center;justify-content:space-between;padding:12px;background:var(--bg-card);border-radius:10px;border:1px solid var(--border-subtle);cursor:pointer;touch-action:manipulation;min-height:54px;">
+            <div style="flex:1;padding-right:12px;">
               <div style="font-size:14px;font-weight:600;color:var(--text-primary);">Master Device API Bridge</div>
               <div style="font-size:12px;color:var(--text-secondary);margin-top:2px;">Allow the agent to interact with device hardware.</div>
             </div>
-            <label class="toggle-switch">
+            <span class="toggle-switch">
               <input type="checkbox" id="toggleDeviceMaster" />
               <span class="toggle-slider"></span>
-            </label>
-          </div>
+            </span>
+          </label>
 
           <!-- Sub-toggles container (AC-DEV-02..09) -->
           <div id="deviceSubTogglesContainer" style="display:flex;flex-direction:column;gap:8px;transition:opacity 0.2s;">
@@ -9201,15 +9213,15 @@
         const tts = document.getElementById('toggleDeviceTts');
         const share = document.getElementById('toggleDeviceShare');
 
-        const masterEnabled = !!prefs.device_api_enabled;
+        const masterEnabled = !!(prefs.master_device_apis !== undefined ? prefs.master_device_apis : prefs.device_api_enabled);
         if (master) master.checked = masterEnabled;
-        if (battery) battery.checked = !!prefs.device_api_battery;
-        if (notify) notify.checked = !!prefs.device_api_notify;
-        if (clipboard) clipboard.checked = !!prefs.device_api_clipboard;
-        if (location) location.checked = !!prefs.device_api_location;
-        if (camera) camera.checked = !!prefs.device_api_camera;
-        if (tts) tts.checked = !!prefs.device_api_tts;
-        if (share) share.checked = !!prefs.device_api_share;
+        if (battery) battery.checked = !!(prefs.device_perm_battery !== undefined ? prefs.device_perm_battery : prefs.device_api_battery);
+        if (notify) notify.checked = !!(prefs.device_perm_notifications !== undefined ? prefs.device_perm_notifications : prefs.device_api_notify);
+        if (clipboard) clipboard.checked = !!(prefs.device_perm_clipboard !== undefined ? prefs.device_perm_clipboard : prefs.device_api_clipboard);
+        if (location) location.checked = !!(prefs.device_perm_location !== undefined ? prefs.device_perm_location : prefs.device_api_location);
+        if (camera) camera.checked = !!(prefs.device_perm_camera !== undefined ? prefs.device_perm_camera : prefs.device_api_camera);
+        if (tts) tts.checked = !!(prefs.device_perm_tts !== undefined ? prefs.device_perm_tts : prefs.device_api_tts);
+        if (share) share.checked = !!(prefs.device_perm_share !== undefined ? prefs.device_perm_share : prefs.device_api_share);
 
         if (cont) {
           cont.style.opacity = masterEnabled ? '1' : '0.4';
@@ -9219,14 +9231,14 @@
 
       function initDeviceSettingsListeners() {
         const toggleMap = [
-          { id: 'toggleDeviceMaster', key: 'device_api_enabled', isMaster: true },
-          { id: 'toggleDeviceBattery', key: 'device_api_battery' },
-          { id: 'toggleDeviceNotify', key: 'device_api_notify' },
-          { id: 'toggleDeviceClipboard', key: 'device_api_clipboard' },
-          { id: 'toggleDeviceLocation', key: 'device_api_location' },
-          { id: 'toggleDeviceCamera', key: 'device_api_camera' },
-          { id: 'toggleDeviceTts', key: 'device_api_tts' },
-          { id: 'toggleDeviceShare', key: 'device_api_share' },
+          { id: 'toggleDeviceMaster', key: 'master_device_apis', alias: 'device_api_enabled', isMaster: true },
+          { id: 'toggleDeviceBattery', key: 'device_perm_battery', alias: 'device_api_battery' },
+          { id: 'toggleDeviceNotify', key: 'device_perm_notifications', alias: 'device_api_notify' },
+          { id: 'toggleDeviceClipboard', key: 'device_perm_clipboard', alias: 'device_api_clipboard' },
+          { id: 'toggleDeviceLocation', key: 'device_perm_location', alias: 'device_api_location' },
+          { id: 'toggleDeviceCamera', key: 'device_perm_camera', alias: 'device_api_camera' },
+          { id: 'toggleDeviceTts', key: 'device_perm_tts', alias: 'device_api_tts' },
+          { id: 'toggleDeviceShare', key: 'device_perm_share', alias: 'device_api_share' },
         ];
 
         toggleMap.forEach(item => {
@@ -9243,6 +9255,9 @@
             }
             if (window.AndroidApp && typeof window.AndroidApp.setDeviceApiToggle === 'function') {
               window.AndroidApp.setDeviceApiToggle(item.key, enabled);
+              if (item.alias) {
+                window.AndroidApp.setDeviceApiToggle(item.alias, enabled);
+              }
             }
             sendWs({ type: 'set_device_toggle', key: item.key, enabled: enabled });
           });

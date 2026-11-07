@@ -7789,27 +7789,66 @@ class AgyWebServer:
             "device_perm_tts": False,
             "device_perm_share": False,
         }
-        if not prefs_file.exists():
-            return prefs
-        try:
-            import xml.etree.ElementTree as ET
-            root = ET.fromstring(prefs_file.read_text(encoding="utf-8"))
-            for elem in root.findall("boolean"):
-                name = elem.get("name")
-                val = elem.get("value") == "true"
-                if name in prefs:
-                    prefs[name] = val
-        except Exception as e:
-            logger.debug("Failed parsing device prefs xml: %s", e)
+        alias_map = {
+            "device_api_enabled": "master_device_apis",
+            "device_api_battery": "device_perm_battery",
+            "device_api_notify": "device_perm_notifications",
+            "device_api_clipboard": "device_perm_clipboard",
+            "device_api_location": "device_perm_location",
+            "device_api_camera": "device_perm_camera",
+            "device_api_tts": "device_perm_tts",
+            "device_api_share": "device_perm_share",
+        }
+        if prefs_file.exists():
+            try:
+                import xml.etree.ElementTree as ET
+                root = ET.fromstring(prefs_file.read_text(encoding="utf-8"))
+                for elem in root.findall("boolean"):
+                    name = elem.get("name")
+                    val = elem.get("value") == "true"
+                    if name in prefs:
+                        prefs[name] = val
+                    elif name in alias_map:
+                        prefs[alias_map[name]] = val
+            except Exception as e:
+                logger.debug("Failed parsing device prefs xml: %s", e)
+        # Mirror canonical state to aliases for backwards compatibility
+        for alias_k, canonical_k in alias_map.items():
+            prefs[alias_k] = prefs.get(canonical_k, False)
         return prefs
 
     def _set_device_pref(self, key: str, val: bool) -> None:
         prefs_file = Path("/data/data/ai.agy.app/shared_prefs/ai.agy.app_device_settings.xml")
         prefs_file.parent.mkdir(parents=True, exist_ok=True)
+        alias_map = {
+            "device_api_enabled": "master_device_apis",
+            "device_api_battery": "device_perm_battery",
+            "device_api_notify": "device_perm_notifications",
+            "device_api_clipboard": "device_perm_clipboard",
+            "device_api_location": "device_perm_location",
+            "device_api_camera": "device_perm_camera",
+            "device_api_tts": "device_perm_tts",
+            "device_api_share": "device_perm_share",
+        }
+        canonical_key = alias_map.get(key, key)
         prefs = self._get_device_prefs()
-        prefs[key] = val
+        prefs[canonical_key] = val
+        for alias_k, c_k in alias_map.items():
+            prefs[alias_k] = prefs.get(c_k, False)
+
+        canonical_keys = [
+            "master_device_apis",
+            "device_perm_battery",
+            "device_perm_notifications",
+            "device_perm_clipboard",
+            "device_perm_location",
+            "device_perm_camera",
+            "device_perm_tts",
+            "device_perm_share",
+        ]
         lines = ["<?xml version='1.0' encoding='utf-8' standalone='yes' ?>", "<map>"]
-        for k, v in prefs.items():
+        for k in canonical_keys:
+            v = prefs.get(k, False)
             lines.append(f'    <boolean name="{k}" value="{"true" if v else "false"}" />')
         lines.append("</map>\n")
         atomic_write_secure(str(prefs_file), "\n".join(lines), mode=0o600)
