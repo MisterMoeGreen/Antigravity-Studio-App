@@ -4584,32 +4584,6 @@ class AgyProcessOrchestrator:
                                     "preview": output_snippet[:200] if output_snippet else f"Exit code {exit_code} ({int(duration)}s)",
                                     "exit_code": exit_code,
                                 })
-
-                                notice_prompt = (
-                                    f"<SYSTEM_MESSAGE>\n"
-                                    f"[Background Task Completed]\n"
-                                    f"Task: {summary} ({task_key})\n"
-                                    f"Exit Code: {exit_code}\n"
-                                    f"Duration: {int(duration)}s\n"
-                                    f"Command Output:\n"
-                                    f"{output_snippet[:600] if output_snippet else '(No output)'}\n\n"
-                                    f"STRICT INSTRUCTIONS:\n"
-                                    f"- Summarize ONLY this single finished task: '{summary}' ({task_key}).\n"
-                                    f"- Respond with exactly ONE short sentence (e.g. \"Task '{summary}' ({task_key}) completed in {int(duration)}s.\").\n"
-                                    f"- ABSOLUTELY DO NOT list, summarize, review, or mention any other background jobs or tasks.\n"
-                                    f"- DO NOT restart, re-run, or spawn new background tasks.\n"
-                                    f"</SYSTEM_MESSAGE>"
-                                )
-
-                                async def _safe_execute_completion(prompt_text: str, target_cid: str) -> None:
-                                    for _ in range(40):
-                                        target_ctx = self.get_or_create_context(target_cid)
-                                        if target_ctx and not target_ctx.is_running and not target_ctx.turn_lock.locked():
-                                            await self.execute_turn(prompt_text, conversation_id=target_cid)
-                                            return
-                                        await asyncio.sleep(0.5)
-
-                                asyncio.create_task(_safe_execute_completion(notice_prompt, cid))
                         else:
                             if task_key not in self.active_background_tasks and full_task_id not in self.active_background_tasks:
                                 try:
