@@ -4464,6 +4464,7 @@ class AgyProcessOrchestrator:
         self._acp_stderr_task: Optional[asyncio.Task] = None
 
         # Background Task Telemetry (ARGON-18-03)
+        self.server_start_time: float = time.time()
         self.active_background_tasks: dict[str, dict[str, Any]] = {}
         self._pending_task_completions: dict[str, list[dict[str, Any]]] = defaultdict(list)
         self._pending_task_timers: dict[str, asyncio.Task] = {}
@@ -4855,17 +4856,41 @@ class AgyProcessOrchestrator:
 
     async def _bg_task_watcher_loop(self) -> None:
         """Monitors brain/<cid>/.system_generated/tasks and messages for background tasks (ARGON-18-03)."""
+        completed_tasks_file = CACHE_DIR / "completed_tasks.json"
         try:
+            if completed_tasks_file.exists():
+                try:
+                    persisted_tasks = json.loads(completed_tasks_file.read_text(encoding="utf-8"))
+                    if isinstance(persisted_tasks, list):
+                        self._seen_completed_tasks.update(persisted_tasks)
+                except Exception:
+                    pass
+
             if BRAIN_DIR.exists():
+                # Mark all existing message files as seen
                 for mfile in BRAIN_DIR.glob("*/.system_generated/messages/*.json"):
                     self._seen_bg_message_files.add(mfile.name)
                     cid_parent = mfile.parent.parent.parent.name
                     try:
                         content = mfile.read_text(encoding="utf-8", errors="replace")
                         for m in re.finditer(r"task-(\d+)", content):
-                            self._seen_completed_tasks.add(f"{cid_parent}/task-{m.group(1)}")
+                            t_num = f"task-{m.group(1)}"
+                            self._seen_completed_tasks.add(t_num)
+                            self._seen_completed_tasks.add(f"{cid_parent}/{t_num}")
                     except Exception:
                         pass
+
+                # Mark all existing historical task logs as seen so old tasks NEVER trigger notifications or turns
+                for tfile in BRAIN_DIR.glob("*/.system_generated/tasks/task-*.log"):
+                    cid_parent = tfile.parent.parent.parent.name
+                    t_stem = tfile.stem
+                    self._seen_completed_tasks.add(t_stem)
+                    self._seen_completed_tasks.add(f"{cid_parent}/{t_stem}")
+
+                try:
+                    atomic_write_secure(str(completed_tasks_file), json.dumps(list(self._seen_completed_tasks)) + "\n", mode=0o600)
+                except Exception:
+                    pass
         except Exception as e:
             logger.debug("Failed initial scan of message files: %s", e)
 
@@ -4878,13 +4903,10 @@ class AgyProcessOrchestrator:
                 cids_to_check: set[str] = set(self._sessions.keys())
                 if self.active_view_cid:
                     cids_to_check.add(self.active_view_cid)
-
-                try:
-                    for cid_dir in BRAIN_DIR.iterdir():
-                        if cid_dir.is_dir() and (cid_dir / ".system_generated").is_dir():
-                            cids_to_check.add(cid_dir.name)
-                except Exception:
-                    pass
+                for t in self.active_background_tasks.values():
+                    t_cid = t.get("conversation_id")
+                    if t_cid:
+                        cids_to_check.add(t_cid)
 
                 for cid in list(cids_to_check):
                     sg_dir = BRAIN_DIR / cid / ".system_generated"
@@ -5017,6 +5039,10 @@ class AgyProcessOrchestrator:
                         if is_completed:
                             self._seen_completed_tasks.add(task_key)
                             self._seen_completed_tasks.add(full_task_id)
+                            try:
+                                atomic_write_secure(str(completed_tasks_file), json.dumps(list(self._seen_completed_tasks)) + "\n", mode=0o600)
+                            except Exception:
+                                pass
 
                             t_info = self.active_background_tasks.pop(full_task_id, None)
                             t_info_legacy = self.active_background_tasks.pop(task_key, None)
@@ -5095,14 +5121,27 @@ class AgyProcessOrchestrator:
                                 "status": "cancelled" if is_user_stopped else ("completed" if exit_code == 0 else "failed"),
                             })
 
-                            # Only emit notification and agent turn if task completed AFTER the agent turn
-                            is_user_stopped = (
-                                task_key in self._stopped_by_user_tasks
+                            # Only emit notification and agent turn if task completed during THIS server session
+                            task_mtime = 0.0
+                            try:
+                                if task_file.exists():
+                                    task_mtime = task_file.stat().st_mtime
+                            except Exception:
+                                pass
+
+                            is_from_current_session = bool(
+                                t_info is not None
+                                or (task_mtime >= self.server_start_time)
+                            )
+
+                            is_user_stopped = bool(
+                                is_cancelled
+                                or task_key in self._stopped_by_user_tasks
                                 or full_task_id in self._stopped_by_user_tasks
                                 or exit_code in (137, 143)
                             )
 
-                            if not is_running_in_spawned_turn and not is_user_stopped:
+                            if is_from_current_session and not is_running_in_spawned_turn and not is_user_stopped:
                                 status_label = "Completed" if exit_code == 0 else f"Failed (exit code {exit_code})"
                                 emit_native_notif_event({
                                     "event": "task_completed",
@@ -5124,10 +5163,13 @@ class AgyProcessOrchestrator:
                         else:
                             if full_task_id not in self.active_background_tasks and task_key not in self.active_background_tasks:
                                 try:
-                                    age = time.time() - task_file.stat().st_mtime
+                                    mtime = task_file.stat().st_mtime
+                                    age = time.time() - mtime
                                 except Exception:
-                                    age = 0
-                                if age > 7200:
+                                    mtime = 0.0
+                                    age = 0.0
+                                if age > 7200 or mtime < self.server_start_time:
+                                    self._seen_completed_tasks.add(task_key)
                                     self._seen_completed_tasks.add(full_task_id)
                                     continue
 
