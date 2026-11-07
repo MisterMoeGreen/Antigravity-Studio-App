@@ -3919,6 +3919,7 @@ class SessionExecutionContext:
     effort: str = "high"
     active_proc: Optional[asyncio.subprocess.Process] = None
     current_turn_id: Optional[str] = None
+    spontaneous_turn_id: Optional[str] = None
     turn_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     is_running: bool = False
     interrupted: bool = False
@@ -4733,10 +4734,12 @@ class AgyProcessOrchestrator:
         async def _watchdog():
             try:
                 await asyncio.sleep(2.5)
-                if ctx.is_running and ctx.current_turn_id and not ctx.turn_lock.locked():
-                    turn_id = ctx.current_turn_id
+                if ctx.is_running and (ctx.spontaneous_turn_id or ctx.current_turn_id) and not ctx.turn_lock.locked():
+                    turn_id = ctx.spontaneous_turn_id or ctx.current_turn_id
                     ctx.is_running = False
-                    ctx.current_turn_id = None
+                    if ctx.current_turn_id == turn_id:
+                        ctx.current_turn_id = None
+                    ctx.spontaneous_turn_id = None
                     ctx.current_action = ""
                     s_title = ctx.title or (f"Session {cid[:8]}" if cid else "Conversation")
                     usage_summary = getattr(ctx, "_active_usage_summary", {"input_tokens": 0, "output_tokens": 0, "thinking_tokens": 0})
@@ -4803,6 +4806,7 @@ class AgyProcessOrchestrator:
                 if not ctx.is_running and su_type in ("agent_message_chunk", "agent_thought_chunk", "tool_call"):
                     turn_id = f"turn-bg-{uuid.uuid4().hex[:8]}"
                     ctx.current_turn_id = turn_id
+                    ctx.spontaneous_turn_id = turn_id
                     ctx.is_running = True
                     ctx.current_action = f"Running ({ctx.model})"
                     ctx.active_snapshot = TurnSnapshot(turn_id=turn_id, model=ctx.model)
@@ -4828,7 +4832,7 @@ class AgyProcessOrchestrator:
                         "start_time": time.time(),
                     })
 
-                turn_id = ctx.current_turn_id or f"turn-{uuid.uuid4().hex[:8]}"
+                turn_id = getattr(ctx, "spontaneous_turn_id", None) or ctx.current_turn_id or f"turn-{uuid.uuid4().hex[:8]}"
                 usage_summary = getattr(ctx, "_active_usage_summary", None)
                 if usage_summary is None:
                     usage_summary = {"input_tokens": 0, "output_tokens": 0, "thinking_tokens": 0}
@@ -4969,20 +4973,27 @@ class AgyProcessOrchestrator:
             )
             cid = ctx.conversation_id
 
-        # 1. Intra-session lock check
-        if ctx.turn_lock.locked():
+        # 1. Spontaneous daemon turn settlement (wait up to 3s for background task feedback to wrap up)
+        if getattr(ctx, "spontaneous_turn_id", None) and ctx.is_running:
+            for _ in range(30):
+                if not getattr(ctx, "spontaneous_turn_id", None) or not ctx.is_running:
+                    break
+                await asyncio.sleep(0.1)
+
+        # 2. Intra-session lock check
+        if ctx.turn_lock.locked() or (ctx.is_running and getattr(ctx, "spontaneous_turn_id", None)):
             await self.broadcast(
                 {
                     "type": "system_card",
                     "conversation_id": cid,
                     "title": "Session Busy",
-                    "markdown": "This session is currently processing a turn. Tap **Stop** to interrupt it first.",
+                    "markdown": "This session is currently processing background task feedback. Please wait a moment...",
                     "level": "warning",
                 }
             )
             return
 
-        # 2. Maximum concurrency cap check (MAX_CONCURRENT_SESSIONS = 2)
+        # 3. Maximum concurrency cap check (MAX_CONCURRENT_SESSIONS = 2)
         running_sessions = [c for c in self._sessions.values() if c.is_running and c.conversation_id != cid]
         if len(running_sessions) >= MAX_CONCURRENT_SESSIONS:
             await self.broadcast(
@@ -5017,6 +5028,9 @@ class AgyProcessOrchestrator:
             )
 
         async with ctx.turn_lock:
+            if cid and cid in self._spontaneous_turn_watchdogs:
+                self._spontaneous_turn_watchdogs.pop(cid).cancel()
+            ctx.spontaneous_turn_id = None
             turn_id = f"turn-{uuid.uuid4().hex[:8]}"
             ctx.current_turn_id = turn_id
             ctx.interrupted = False

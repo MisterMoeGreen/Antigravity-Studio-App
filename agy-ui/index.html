@@ -6294,6 +6294,11 @@
             const tRec = getOrCreateTurnRecord(buf, msg.turn_id, msg.model || state.model);
             tRec.finalized = false;
             tRec.startTime = buf.startTime;
+            for (const [tId, tRecItem] of Array.from(buf.activeTurns.entries())) {
+              if (tId !== msg.turn_id && tRecItem.finalized) {
+                buf.activeTurns.delete(tId);
+              }
+            }
             renderSessionDrawerList();
 
             if (cid === state.conversationId) {
@@ -7633,6 +7638,11 @@
           buf.isRunning = true;
           buf.startTime = performance.now();
           buf.unread = false;
+          for (const [tId, tRecItem] of Array.from(buf.activeTurns.entries())) {
+            if (tRecItem.finalized) {
+              buf.activeTurns.delete(tId);
+            }
+          }
           syncUnreadToStorage();
 
           if (trimmed.startsWith('/')) {
