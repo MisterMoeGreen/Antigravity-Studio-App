@@ -399,8 +399,7 @@ object AgyNotificationManager {
         }
     }
 
-    fun shouldSendCompletionNotification(conversationId: String, isBackgroundTask: Boolean = false): Boolean {
-        if (isBackgroundTask) return true
+    fun shouldSendCompletionNotification(conversationId: String): Boolean {
         if (!isAppForeground) return true
         val active = activeConversationId?.trim()
         val target = conversationId.trim()
@@ -437,7 +436,7 @@ object AgyNotificationManager {
             return
         }
 
-        if (!shouldSendCompletionNotification(conversationId, isBackgroundTask) || !hasNotificationPermission(context)) {
+        if (!shouldSendCompletionNotification(conversationId) || !hasNotificationPermission(context)) {
             return
         }
 
@@ -486,9 +485,8 @@ object AgyNotificationManager {
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .build()
 
-        val notifId = if (isBackgroundTask) (conversationId.hashCode() and 0x0FFFFFFF) or 0x20000000 else NOTIF_ID_COMPLETION
         try {
-            nm.notify(conversationId, notifId, notification)
+            nm.notify(conversationId, NOTIF_ID_COMPLETION, notification)
         } catch (e: SecurityException) {
             Log.w(TAG, "POST_NOTIFICATIONS not granted: ${e.message}")
         }
