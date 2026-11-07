@@ -414,6 +414,8 @@ API_KEYS_MANIFEST_FILE = GEMINI_RULES_DIR / "api_keys_manifest.md"
 MCP_CONFIG_FILE = GEMINI_CONFIG_DIR / "mcp_config.json"
 MCP_VAULT_FILE = GEMINI_DIR / "mcp_vault.json"
 KEYSTORE_VAULT_FILE = GEMINI_DIR / "keystore_vault.json"
+MCP_DIR = GEMINI_DIR / "mcp"
+MCP_DISABLED_DIR = GEMINI_DIR / "mcp_disabled"
 GLOBAL_SKILLS_DIR = GEMINI_CONFIG_DIR / "skills"
 BUILTIN_SKILLS_DIR = HOME_DIR / ".gemini" / "antigravity-cli" / "builtin" / "skills"
 PROTECTED_SYSTEM_SKILLS: frozenset[str] = frozenset({"ask-question"})
@@ -753,48 +755,150 @@ class McpSecurityGate:
             return False
 
 
+def sync_and_sanitize_mcp_vault_and_config() -> dict[str, Any]:
+    """Sanitizes mcp_config.json, migrates plaintext auth headers and remote URLs into mcp_vault.json,
+    enforces loopback proxy routing, and quarantines disabled MCP tool schemas away from the engine.
+    """
+    vault: dict[str, Any] = {}
+    if MCP_VAULT_FILE.exists():
+        try:
+            os.chmod(str(MCP_VAULT_FILE), 0o600)
+            vault = json.loads(MCP_VAULT_FILE.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning("Error reading %s: %s", MCP_VAULT_FILE, exc)
+            vault = {}
+
+    MCP_DISABLED_DIR.mkdir(parents=True, exist_ok=True)
+    MCP_DIR.mkdir(parents=True, exist_ok=True)
+
+    if MCP_CONFIG_FILE.exists():
+        try:
+            os.chmod(str(MCP_CONFIG_FILE), 0o600)
+            cdata = json.loads(MCP_CONFIG_FILE.read_text(encoding="utf-8"))
+            servers = cdata.setdefault("mcpServers", {})
+            vault_changed = False
+            config_changed = False
+
+            for s_name, s_meta in list(servers.items()):
+                if not isinstance(s_meta, dict):
+                    continue
+
+                trans = "http" if ("serverUrl" in s_meta or "url" in s_meta or s_meta.get("type") == "http") else "stdio"
+                is_disabled = bool(s_meta.get("disabled", False))
+
+                if s_name not in vault:
+                    if trans == "http":
+                        raw_url = s_meta.get("serverUrl") or s_meta.get("url") or ""
+                        vault[s_name] = {
+                            "enabled": not is_disabled,
+                            "transport": "http",
+                            "upstreamUrl": raw_url if f"/mcp-proxy/{s_name}" not in raw_url else "",
+                            "headers": s_meta.get("headers", {}),
+                            "created_at": int(time.time()),
+                        }
+                    else:
+                        vault[s_name] = {
+                            "enabled": not is_disabled,
+                            "transport": "stdio",
+                            "command": s_meta.get("command", "") if s_meta.get("command") != "/bin/false" else "",
+                            "args": s_meta.get("args", []),
+                            "env": s_meta.get("env", {}),
+                            "created_at": int(time.time()),
+                        }
+                    vault_changed = True
+
+                v_entry = vault[s_name]
+                v_enabled = v_entry.get("enabled", not is_disabled)
+
+                if trans == "http":
+                    target_proxy_url = f"http://127.0.0.1:{PORT}/mcp-proxy/{s_name}"
+                    current_url = s_meta.get("serverUrl") or s_meta.get("url") or ""
+                    if current_url != target_proxy_url:
+                        if current_url and "/mcp-proxy/" not in current_url:
+                            v_entry["upstreamUrl"] = current_url
+                            vault_changed = True
+                        s_meta["serverUrl"] = target_proxy_url
+                        s_meta.pop("url", None)
+                        config_changed = True
+
+                    if "headers" in s_meta and s_meta["headers"]:
+                        v_headers = v_entry.setdefault("headers", {})
+                        v_headers.update(s_meta["headers"])
+                        s_meta.pop("headers", None)
+                        config_changed = True
+                        vault_changed = True
+
+                    if s_meta.get("disabled", False) != (not v_enabled):
+                        s_meta["disabled"] = not v_enabled
+                        config_changed = True
+                else:
+                    if not v_enabled:
+                        if s_meta.get("command") != "/bin/false":
+                            if s_meta.get("command"):
+                                v_entry["command"] = s_meta.get("command")
+                                vault_changed = True
+                            s_meta["command"] = "/bin/false"
+                            config_changed = True
+                        if not s_meta.get("disabled"):
+                            s_meta["disabled"] = True
+                            config_changed = True
+                    else:
+                        if s_meta.get("command") == "/bin/false":
+                            s_meta["command"] = v_entry.get("command", "")
+                            config_changed = True
+                        if s_meta.get("disabled"):
+                            s_meta["disabled"] = False
+                            config_changed = True
+
+                # Quarantine or restore schema directories in ~/.gemini/antigravity-cli/mcp/
+                active_schema_dir = MCP_DIR / s_name
+                disabled_schema_dir = MCP_DISABLED_DIR / s_name
+
+                if not v_enabled:
+                    if active_schema_dir.is_dir():
+                        try:
+                            if disabled_schema_dir.exists():
+                                shutil.rmtree(disabled_schema_dir)
+                            shutil.move(str(active_schema_dir), str(disabled_schema_dir))
+                        except Exception as exc:
+                            logger.warning("Error quarantining disabled MCP %s: %s", s_name, exc)
+                else:
+                    if disabled_schema_dir.is_dir() and not active_schema_dir.exists():
+                        try:
+                            shutil.move(str(disabled_schema_dir), str(active_schema_dir))
+                        except Exception as exc:
+                            logger.warning("Error restoring enabled MCP %s: %s", s_name, exc)
+
+            # Quarantine any orphaned schema directories in MCP_DIR that have no active server in mcpServers
+            try:
+                for entry in MCP_DIR.iterdir():
+                    if entry.is_dir() and entry.name not in servers:
+                        orphaned_target = MCP_DISABLED_DIR / entry.name
+                        if orphaned_target.exists():
+                            shutil.rmtree(orphaned_target)
+                        shutil.move(str(entry), str(orphaned_target))
+            except Exception as exc:
+                logger.warning("Error quarantining orphaned MCP schema directories: %s", exc)
+
+            if vault_changed:
+                save_mcp_vault(vault)
+            if config_changed:
+                atomic_write_secure(str(MCP_CONFIG_FILE), json.dumps(cdata, indent=2) + "\n", mode=0o600)
+
+        except Exception as exc:
+            logger.warning("Error during sync_and_sanitize_mcp_vault_and_config: %s", exc)
+
+    return vault
+
+
 def load_mcp_vault() -> dict[str, Any]:
     if not MCP_VAULT_FILE.exists():
-        default_vault: dict[str, Any] = {}
-        if MCP_CONFIG_FILE.exists():
-            try:
-                data = json.loads(MCP_CONFIG_FILE.read_text(encoding="utf-8"))
-                for s_name, s_meta in data.get("mcpServers", {}).items():
-                    if isinstance(s_meta, dict):
-                        trans = "http" if ("serverUrl" in s_meta or "url" in s_meta) else "stdio"
-                        if trans == "http":
-                            s_url = s_meta.get("serverUrl") or s_meta.get("url") or ""
-                            if s_url and not f"/mcp-proxy/{s_name}" in s_url:
-                                default_vault[s_name] = {
-                                    "enabled": not s_meta.get("disabled", False),
-                                    "transport": "http",
-                                    "upstreamUrl": s_url,
-                                    "headers": s_meta.get("headers", {}),
-                                    "created_at": int(time.time()),
-                                }
-                                s_meta["serverUrl"] = f"http://127.0.0.1:{PORT}/mcp-proxy/{s_name}"
-                                s_meta.pop("headers", None)
-                        else:
-                            default_vault[s_name] = {
-                                "enabled": not s_meta.get("disabled", False),
-                                "transport": "stdio",
-                                "command": s_meta.get("command", ""),
-                                "args": s_meta.get("args", []),
-                                "env": s_meta.get("env", {}),
-                                "created_at": int(time.time()),
-                            }
-                if default_vault:
-                    atomic_write_secure(str(MCP_CONFIG_FILE), json.dumps(data, indent=2) + "\n", mode=0o600)
-            except Exception as e:
-                logger.warning("Error migrating MCP servers into vault: %s", e)
-        atomic_write_secure(str(MCP_VAULT_FILE), json.dumps(default_vault, indent=2) + "\n", mode=0o600)
-        return default_vault
-
+        return sync_and_sanitize_mcp_vault_and_config()
     try:
         os.chmod(str(MCP_VAULT_FILE), 0o600)
         return json.loads(MCP_VAULT_FILE.read_text(encoding="utf-8"))
     except Exception:
-        return {}
+        return sync_and_sanitize_mcp_vault_and_config()
 
 
 def save_mcp_vault(vault: dict[str, Any]) -> None:
@@ -1375,31 +1479,54 @@ async def toggle_mcp_server(name: str, enabled: bool) -> dict[str, Any]:
     server_entry = vault.get(name, {})
     trans = server_entry.get("transport", "http")
 
-    if trans == "stdio":
-        if MCP_CONFIG_FILE.exists():
-            try:
-                cdata = json.loads(MCP_CONFIG_FILE.read_text(encoding="utf-8"))
-                if name in cdata.get("mcpServers", {}):
+    if MCP_CONFIG_FILE.exists():
+        try:
+            cdata = json.loads(MCP_CONFIG_FILE.read_text(encoding="utf-8"))
+            if name in cdata.get("mcpServers", {}):
+                cdata["mcpServers"][name]["disabled"] = not enabled
+                if trans == "stdio":
                     if not enabled:
                         cdata["mcpServers"][name]["command"] = "/bin/false"
-                        cdata["mcpServers"][name]["disabled"] = True
                     else:
                         cdata["mcpServers"][name]["command"] = server_entry.get("command", "")
                         cdata["mcpServers"][name]["args"] = server_entry.get("args", [])
-                        cdata["mcpServers"][name]["disabled"] = False
-                    atomic_write_secure(str(MCP_CONFIG_FILE), json.dumps(cdata, indent=2) + "\n", mode=0o600)
-            except Exception as e:
-                logger.warning("Error neutralizing stdio MCP %s: %s", name, e)
-    else:
-        sub = "enable" if enabled else "disable"
-        try:
-            cmd = [str(AGY_BIN), "mcp", sub, name]
-            proc = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-            )
-            await asyncio.wait_for(proc.communicate(), timeout=10.0)
+                else:
+                    cdata["mcpServers"][name]["serverUrl"] = f"http://127.0.0.1:{PORT}/mcp-proxy/{name}"
+                    cdata["mcpServers"][name].pop("headers", None)
+                    cdata["mcpServers"][name].pop("url", None)
+                atomic_write_secure(str(MCP_CONFIG_FILE), json.dumps(cdata, indent=2) + "\n", mode=0o600)
         except Exception as e:
-            logger.warning("agy mcp %s warning for %s: %s", sub, name, e)
+            logger.warning("Error neutralizing MCP %s in config: %s", name, e)
+
+    # Quarantine or restore schema directories in ~/.gemini/antigravity-cli/mcp/
+    active_schema_dir = MCP_DIR / name
+    disabled_schema_dir = MCP_DISABLED_DIR / name
+    if not enabled:
+        if active_schema_dir.is_dir():
+            try:
+                MCP_DISABLED_DIR.mkdir(parents=True, exist_ok=True)
+                if disabled_schema_dir.exists():
+                    shutil.rmtree(disabled_schema_dir)
+                shutil.move(str(active_schema_dir), str(disabled_schema_dir))
+            except Exception as exc:
+                logger.warning("Error quarantining disabled MCP %s: %s", name, exc)
+    else:
+        if disabled_schema_dir.is_dir() and not active_schema_dir.exists():
+            try:
+                MCP_DIR.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(disabled_schema_dir), str(active_schema_dir))
+            except Exception as exc:
+                logger.warning("Error restoring enabled MCP %s: %s", name, exc)
+
+    sub = "enable" if enabled else "disable"
+    try:
+        cmd = [str(AGY_BIN), "mcp", sub, name]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=10.0)
+    except Exception as e:
+        logger.warning("agy mcp %s warning for %s: %s", sub, name, e)
 
     if MCP_CONFIG_FILE.exists():
         os.chmod(str(MCP_CONFIG_FILE), 0o600)
@@ -1429,6 +1556,19 @@ async def delete_mcp_server(name: str) -> dict[str, Any]:
                 atomic_write_secure(str(MCP_CONFIG_FILE), json.dumps(data, indent=2) + "\n", mode=0o600)
         except Exception as exc:
             logger.warning("Failed pruning %s from %s: %s", name, MCP_CONFIG_FILE, exc)
+
+    active_schema_dir = MCP_DIR / name
+    disabled_schema_dir = MCP_DISABLED_DIR / name
+    if active_schema_dir.is_dir():
+        try:
+            shutil.rmtree(active_schema_dir)
+        except Exception:
+            pass
+    if disabled_schema_dir.is_dir():
+        try:
+            shutil.rmtree(disabled_schema_dir)
+        except Exception:
+            pass
 
     return {"status": "ok", "name": name}
 
@@ -7264,9 +7404,10 @@ async def set_android_clipboard(text: str) -> bool:
 # ---------------------------------------------------------------------------
 
 class TerminalExecutionManager:
-    def __init__(self, orchestrator: AgyProcessOrchestrator, broadcast_cb: Any) -> None:
+    def __init__(self, orchestrator: AgyProcessOrchestrator, broadcast_cb: Any, server: Any = None) -> None:
         self.orchestrator = orchestrator
         self.broadcast = broadcast_cb
+        self.server = server
         self.active_processes: dict[str, asyncio.subprocess.Process] = {}
 
     async def run_command(self, command_id: str, command: str, cid: str, workspace: str, websocket: Any) -> None:
@@ -7279,7 +7420,8 @@ class TerminalExecutionManager:
             return
 
         start_time = time.monotonic()
-        ws_dir = os.path.expanduser(workspace or self.orchestrator.default_workspace)
+        active_ws = workspace or (self.server.default_workspace if self.server else None) or getattr(self.orchestrator, "default_workspace", None) or get_default_workspace()
+        ws_dir = os.path.expanduser(active_ws)
         if not os.path.isdir(ws_dir):
             ws_dir = os.path.expanduser("~")
 
@@ -7363,53 +7505,115 @@ class TerminalExecutionManager:
             self.active_processes.pop(command_id, None)
 
     async def _handle_cd(self, command_id: str, cmd_str: str, cid: str, workspace: str, websocket: Any) -> None:
-        parts = cmd_str.split(None, 1)
-        target = parts[1].strip() if len(parts) > 1 else "~"
-        base_dir = Path(workspace or self.orchestrator.default_workspace).expanduser()
-        new_path = (base_dir / target).expanduser().resolve() if not os.path.isabs(os.path.expanduser(target)) else Path(target).expanduser().resolve()
+        try:
+            parts = cmd_str.split(None, 1)
+            target = parts[1].strip() if len(parts) > 1 else "~"
+            if (target.startswith('"') and target.endswith('"')) or (target.startswith("'") and target.endswith("'")):
+                target = target[1:-1].strip()
 
-        if new_path.is_dir():
-            new_path_str = str(new_path)
-            self.orchestrator.default_workspace = new_path_str
-            ctx = self.orchestrator._sessions.get(cid)
-            if ctx:
-                ctx.workspace = new_path_str
-            await self.broadcast({
-                "type": "config_updated",
-                "workspace": new_path_str,
-                "git_branch": self.orchestrator._get_git_branch(new_path_str),
-            })
-            delta = f"Changed active workspace to {new_path_str}\n"
-            await websocket.send(json.dumps({
-                "type": "terminal_output",
-                "command_id": command_id,
-                "conversation_id": cid,
-                "delta": delta,
-            }))
-            await websocket.send(json.dumps({
-                "type": "terminal_complete",
-                "command_id": command_id,
-                "conversation_id": cid,
-                "exit_code": 0,
-                "duration_ms": 5,
-                "workspace": new_path_str,
-            }))
-        else:
-            delta = f"cd: {target}: No such file or directory\n"
-            await websocket.send(json.dumps({
-                "type": "terminal_output",
-                "command_id": command_id,
-                "conversation_id": cid,
-                "delta": delta,
-            }))
-            await websocket.send(json.dumps({
-                "type": "terminal_complete",
-                "command_id": command_id,
-                "conversation_id": cid,
-                "exit_code": 1,
-                "duration_ms": 2,
-                "workspace": str(base_dir),
-            }))
+            active_ws = workspace or (self.server.default_workspace if self.server else None) or getattr(self.orchestrator, "default_workspace", None) or get_default_workspace()
+            base_dir = Path(active_ws).expanduser()
+
+            if target == "~" or target.startswith("~/"):
+                new_path = Path(os.path.expanduser(target)).resolve()
+            elif os.path.isabs(target):
+                new_path = Path(target).resolve()
+            else:
+                new_path = (base_dir / target).resolve()
+
+            if new_path.is_dir():
+                new_path_str = str(new_path)
+                if self.server:
+                    self.server.default_workspace = new_path_str
+                self.orchestrator.default_workspace = new_path_str
+                self.orchestrator.config.workspace = new_path_str
+                ctx = self.orchestrator._sessions.get(cid)
+                if ctx:
+                    ctx.workspace = new_path_str
+                try:
+                    save_app_settings({"default_workspace": new_path_str})
+                except Exception:
+                    pass
+
+                branch = get_git_branch(new_path_str)
+                await self.broadcast({
+                    "type": "config_updated",
+                    "conversation_id": cid,
+                    "config": {
+                        "conversation_id": cid,
+                        "workspace": new_path_str,
+                        "git_branch": branch,
+                    },
+                })
+                await self.broadcast({
+                    "type": "default_workspace_updated",
+                    "default_workspace": new_path_str,
+                })
+                delta = f"Changed active workspace to {new_path_str}\n"
+                await websocket.send(json.dumps({
+                    "type": "terminal_output",
+                    "command_id": command_id,
+                    "conversation_id": cid,
+                    "delta": delta,
+                }))
+                await websocket.send(json.dumps({
+                    "type": "terminal_complete",
+                    "command_id": command_id,
+                    "conversation_id": cid,
+                    "exit_code": 0,
+                    "duration_ms": 5,
+                    "workspace": new_path_str,
+                    "git_branch": branch,
+                }))
+                try:
+                    self.orchestrator.storage.append_message(
+                        cid,
+                        "terminal",
+                        delta,
+                        extra={
+                            "command": cmd_str,
+                            "exit_code": 0,
+                            "duration_ms": 5,
+                            "workspace": new_path_str,
+                        }
+                    )
+                except Exception:
+                    pass
+            else:
+                delta = f"cd: {target}: No such file or directory\n"
+                await websocket.send(json.dumps({
+                    "type": "terminal_output",
+                    "command_id": command_id,
+                    "conversation_id": cid,
+                    "delta": delta,
+                }))
+                await websocket.send(json.dumps({
+                    "type": "terminal_complete",
+                    "command_id": command_id,
+                    "conversation_id": cid,
+                    "exit_code": 1,
+                    "duration_ms": 2,
+                    "workspace": str(base_dir),
+                }))
+        except Exception as exc:
+            logger.exception("Error in _handle_cd: %s", exc)
+            try:
+                await websocket.send(json.dumps({
+                    "type": "terminal_output",
+                    "command_id": command_id,
+                    "conversation_id": cid,
+                    "delta": f"cd: error: {exc}\n",
+                }))
+                await websocket.send(json.dumps({
+                    "type": "terminal_complete",
+                    "command_id": command_id,
+                    "conversation_id": cid,
+                    "exit_code": 1,
+                    "duration_ms": 2,
+                    "workspace": workspace or str(Path.home()),
+                }))
+            except Exception:
+                pass
 
     def abort_command(self, command_id: str) -> None:
         proc = self.active_processes.get(command_id)
@@ -7458,7 +7662,7 @@ class AgyWebServer:
         self.ipc_server: Optional[asyncio.AbstractServer] = None
         self.device_ipc_sock_path: Path = GEMINI_DIR / "device_api.sock"
         self.device_ipc_server: Optional[asyncio.AbstractServer] = None
-        self.terminal_mgr = TerminalExecutionManager(self.orchestrator, self.broadcast)
+        self.terminal_mgr = TerminalExecutionManager(self.orchestrator, self.broadcast, self)
 
     def get_all_sessions(self, search_query: str = "", limit: int = 100) -> list[dict[str, Any]]:
         return self.orchestrator.get_all_sessions(search_query=search_query, limit=limit)
@@ -10641,7 +10845,7 @@ class AgyWebServer:
             cmd_id = str(data.get("command_id") or f"term-{uuid.uuid4().hex[:8]}")
             command = str(data.get("command") or "").strip()
             cid = str(data.get("conversation_id") or self.orchestrator.active_view_cid or "")
-            workspace = str(data.get("workspace") or self.orchestrator.config.workspace or "")
+            workspace = str(data.get("workspace") or getattr(self.orchestrator, "default_workspace", None) or self.default_workspace or "")
             asyncio.create_task(
                 self.terminal_mgr.run_command(cmd_id, command, cid, workspace, websocket)
             )
@@ -11242,6 +11446,8 @@ async def main() -> None:
         logger.debug("Failed setting PR_SET_DUMPABLE: %s", exc)
 
     sync_gemini_md_prompt()
+    migrate_legacy_api_keys_store()
+    sync_and_sanitize_mcp_vault_and_config()
     app = AgyWebServer()
     stop_event = asyncio.Event()
 
