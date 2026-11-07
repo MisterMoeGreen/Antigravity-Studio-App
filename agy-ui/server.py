@@ -4466,6 +4466,7 @@ class AgyProcessOrchestrator:
         # Background Task Telemetry (ARGON-18-03)
         self.server_start_time: float = time.time()
         self.active_background_tasks: dict[str, dict[str, Any]] = {}
+        self.recently_completed_tasks: dict[str, dict[str, Any]] = {}
         self._pending_task_completions: dict[str, list[dict[str, Any]]] = defaultdict(list)
         self._pending_task_timers: dict[str, asyncio.Task] = {}
         self._bg_watcher_task: Optional[asyncio.Task] = None
@@ -5028,11 +5029,12 @@ class AgyProcessOrchestrator:
                             if t_info_check:
                                 target_pid = t_info_check.get("pid")
                                 task_age = time.time() - t_info_check.get("start_time", time.time())
+                                is_internal_timer = t_info_check.get("is_timer_or_internal", False)
                                 if target_pid and task_age > 3.0 and not os.path.exists(f"/proc/{target_pid}"):
                                     is_completed = True
                                     completion_data = {"content": f"Task {task_key} exited with code 0"}
-                                elif not target_pid and task_age > 8.0:
-                                    # Tasks without a child process (e.g. timers/schedules) complete automatically after age threshold
+                                elif not target_pid and is_internal_timer and task_age > 8.0:
+                                    # Internal timers/schedules without a child process complete automatically after age threshold
                                     is_completed = True
                                     completion_data = {"content": f"Task {task_key} completed"}
 
@@ -5120,6 +5122,22 @@ class AgyProcessOrchestrator:
                                 "cancelled": is_user_stopped,
                                 "status": "cancelled" if is_user_stopped else ("completed" if exit_code == 0 else "failed"),
                             })
+
+                            # Record in recently_completed_tasks so reconnected WebSockets receive recent completions
+                            self.recently_completed_tasks[full_task_id] = {
+                                "task_id": task_key,
+                                "conversation_id": cid,
+                                "summary": summary or "Task",
+                                "duration": duration,
+                                "exit_code": exit_code,
+                                "completed_at": time.time(),
+                                "status": "cancelled" if is_user_stopped else ("completed" if exit_code == 0 else "failed"),
+                            }
+                            now_t = time.time()
+                            self.recently_completed_tasks = {
+                                k: v for k, v in self.recently_completed_tasks.items()
+                                if (now_t - v.get("completed_at", 0)) < 120.0
+                            }
 
                             # Only emit notification and agent turn if task completed during THIS server session
                             task_mtime = 0.0
@@ -5211,6 +5229,7 @@ class AgyProcessOrchestrator:
 
                                 clean_task = re.sub(r'[\x22\x27]', '', ' '.join(task_cmd.split())).strip().lower() if task_cmd else ""
                                 matched_pid: Optional[int] = None
+                                fallback_pid: Optional[int] = None
 
                                 if self.acp_proc and self.acp_proc.pid:
                                     try:
@@ -5229,6 +5248,9 @@ class AgyProcessOrchestrator:
                                                     raw_c = cf.read().decode("utf-8", errors="replace").replace("\x00", " ").strip()
                                                 if "github_mcp" in raw_c or "server.py" in raw_c:
                                                     continue
+
+                                                if fallback_pid is None:
+                                                    fallback_pid = p_int
 
                                                 clean_c = re.sub(r'[\x22\x27]', '', ' '.join(raw_c.split())).strip().lower()
 
@@ -5250,6 +5272,7 @@ class AgyProcessOrchestrator:
                                     "command": task_cmd,
                                     "start_time": start_time,
                                     "pid": final_pid,
+                                    "is_timer_or_internal": is_timer_or_internal,
                                     "spawned_during_turn_id": getattr(ctx, "current_turn_id", None) if ctx else None,
                                 }
                                 self.active_background_tasks[full_task_id] = t_info
@@ -9237,6 +9260,10 @@ class AgyWebServer:
                                 if bg_id not in self.orchestrator._seen_completed_tasks
                                 and bg_id not in self.orchestrator._stopped_by_user_tasks
                             ],
+                            "recent_completed_tasks": [
+                                task for task in self.orchestrator.recently_completed_tasks.values()
+                                if (time.time() - task.get("completed_at", 0)) < 45.0
+                            ],
                             "is_running": self.orchestrator.is_running,
                             "is_authenticating": self.orchestrator.is_authenticating,
                         }
@@ -9292,6 +9319,11 @@ class AgyWebServer:
                                         if bg_info.get("conversation_id") == active_cid
                                         and bg_id not in self.orchestrator._seen_completed_tasks
                                         and bg_id not in self.orchestrator._stopped_by_user_tasks
+                                    ],
+                                    "recent_completed_tasks": [
+                                        task for task in self.orchestrator.recently_completed_tasks.values()
+                                        if task.get("conversation_id") == active_cid
+                                        and (time.time() - task.get("completed_at", 0)) < 45.0
                                     ],
                                 }
                             )
@@ -10373,6 +10405,11 @@ class AgyWebServer:
                         if bg_info.get("conversation_id") == cid
                         and bg_id not in self.orchestrator._seen_completed_tasks
                         and bg_id not in self.orchestrator._stopped_by_user_tasks
+                    ],
+                    "recent_completed_tasks": [
+                        task for task in self.orchestrator.recently_completed_tasks.values()
+                        if task.get("conversation_id") == cid
+                        and (time.time() - task.get("completed_at", 0)) < 45.0
                     ],
                 }
             )

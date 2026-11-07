@@ -6299,6 +6299,9 @@
             if (Array.isArray(msg.active_background_tasks)) {
               reconcileActiveBackgroundTasks(msg.active_background_tasks, null);
             }
+            if (Array.isArray(msg.recent_completed_tasks)) {
+              checkRecentCompletedTasks(msg.recent_completed_tasks);
+            }
             renderSessionDrawerList();
             if (msg.system_info) {
               if (msg.system_info.app_version) {
@@ -6478,6 +6481,9 @@
               reconcileActiveBackgroundTasks(msg.active_background_tasks, msg.conversation_id);
             } else {
               updateBgTaskBar();
+            }
+            if (Array.isArray(msg.recent_completed_tasks)) {
+              checkRecentCompletedTasks(msg.recent_completed_tasks);
             }
             if (window.AndroidApp && typeof window.AndroidApp.setActiveSession === 'function') {
               window.AndroidApp.setActiveSession(msg.conversation_id);
@@ -7918,6 +7924,32 @@
           }
         } else {
           updateBgTaskBar();
+        }
+      }
+
+      function checkRecentCompletedTasks(tasks) {
+        if (!Array.isArray(tasks) || tasks.length === 0) return;
+        const latest = tasks[tasks.length - 1];
+        if (!latest) return;
+        const age = (Date.now() - ((latest.completed_at || 0) * 1000)) / 1000;
+        if (age < 45 && activeBgTasks.size === 0) {
+          if (bgTaskStatusBar) {
+            bgTaskStatusBar.classList.add('completed');
+            bgTaskStatusBar.style.display = 'flex';
+            if (bgTaskLabel) {
+              bgTaskLabel.textContent = `✓ ${latest.summary || 'Task'} completed (${Math.round(latest.duration || 0)}s)`;
+            }
+            if (bgTaskIconWrap) {
+              bgTaskIconWrap.innerHTML = `<svg class="fa-icon" viewBox="0 0 448 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M438.6 105.4c12.5 12.5 12.5 32.8 0 45.3l-256 256c-12.5 12.5-32.8 12.5-45.3 0l-128-128c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0L160 338.7 393.4 105.4c12.5-12.5 32.8-12.5 45.3 0z"/></svg>`;
+            }
+            if (bgTaskTime) bgTaskTime.textContent = 'DONE';
+            setTimeout(() => {
+              if (activeBgTasks.size === 0 && bgTaskStatusBar) {
+                bgTaskStatusBar.style.display = 'none';
+                bgTaskStatusBar.classList.remove('completed');
+              }
+            }, 4000);
+          }
         }
       }
 
