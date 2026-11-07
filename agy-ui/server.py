@@ -5113,6 +5113,7 @@ class AgyProcessOrchestrator:
                     turn_id = ctx.current_turn_id
                     ctx.is_running = False
                     ctx.current_turn_id = None
+                    ctx.active_snapshot = None
                     ctx.current_action = ""
                     s_title = ctx.title or (f"Session {cid[:8]}" if cid else "Conversation")
                     usage_summary = getattr(ctx, "_active_usage_summary", {"input_tokens": 0, "output_tokens": 0, "thinking_tokens": 0})

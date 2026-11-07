@@ -6477,7 +6477,8 @@
               if (msg.current_action) {
                 histBuf.currentAction = msg.current_action;
               }
-              if (msg.active_turn) {
+              histBuf.activeTurns.clear();
+              if (msg.active_turn && histBuf.isRunning) {
                 const at = msg.active_turn;
                 const tRec = getOrCreateTurnRecord(histBuf, at.turn_id, at.model || state.model);
                 tRec.finalized = false;
@@ -6580,6 +6581,7 @@
             } else if (!buf.startTime) {
               buf.startTime = performance.now();
             }
+            buf.activeTurns.clear();
             const tRec = getOrCreateTurnRecord(buf, msg.turn_id, msg.model || state.model);
             tRec.finalized = false;
             tRec.startTime = buf.startTime;
@@ -6674,8 +6676,10 @@
               buf.activeUserAttachments = [];
               buf.startTime = 0;
               buf.isPinned = false;
-              tRec = getOrCreateTurnRecord(buf, msg.turn_id);
-              tRec.finalized = true;
+              for (const [_, tr] of buf.activeTurns.entries()) {
+                tr.finalized = true;
+              }
+              buf.activeTurns.clear();
 
               if (msg.title && msg.title !== 'New Conversation') {
                 const renItem = state.sessions.find(x => x.conversation_id === cid);
@@ -8015,6 +8019,7 @@
 
           // Record user prompt in active session buffer
           const buf = getOrCreateSessionBuffer(state.conversationId);
+          buf.activeTurns.clear();
           buf.activeUserPrompt = trimmed;
           buf.activeUserAttachments = attachments;
           buf.isRunning = true;
