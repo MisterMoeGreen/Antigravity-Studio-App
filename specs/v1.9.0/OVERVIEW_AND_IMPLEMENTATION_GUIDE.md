@@ -145,7 +145,7 @@ flowchart LR
     G1["Phase 1: Status Bar Icon\n(Spec 04)"] --> G2["Phase 2: MCP Proxy Gatekeeper\n(Spec 01)"]
     G2 --> G3["Phase 3: Android Keystore Vault\n(Spec 02)"]
     G3 --> G4["Phase 4: Device APIs & UI\n(Spec 03)"]
-    G4 --> G5["Phase 5: Argon Audit\n& Integration Pass"]
+    G4 --> G5["Phase 5: Architectural Review\n& Integration Pass"]
 ```
 
 1. **Phase 1: Notification Asset & Service Integration**:
@@ -163,6 +163,6 @@ flowchart LR
    - Add "General Settings" menu item and subview in `index.html`.
    - Establish `device_api.sock` IPC listener in Android host.
    - Create `agy-device` CLI wrapper and `device-mcp` tool registration.
-5. **Phase 5: Architectural Hardening & Argon Audit**:
-   - Execute Argon automated heuristics and deep reasoning threat model.
+5. **Phase 5: Architectural Hardening & System Audit**:
+   - Execute automated review heuristics and deep reasoning threat model.
    - Verify zero regressions against Android W^X and AST structural gates.

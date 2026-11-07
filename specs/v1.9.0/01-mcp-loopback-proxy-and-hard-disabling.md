@@ -139,7 +139,7 @@ async def handle_mcp_proxy(request: web.Request) -> web.Response:
 
     upstream_url = server_meta["upstreamUrl"]
 
-    # ARGON-V19-01: SSRF & Loopback Target Prevention Gate
+    # ARCH-V19-01: SSRF & Loopback Target Prevention Gate
     parsed_target = urllib.parse.urlparse(upstream_url)
     if parsed_target.hostname in ("127.0.0.1", "localhost", "::1", "0.0.0.0") or (
         parsed_target.port and parsed_target.port in (PORT, 8081, 8089)

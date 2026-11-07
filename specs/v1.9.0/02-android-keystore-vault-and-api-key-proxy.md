@@ -50,7 +50,7 @@ flowchart TD
 In the Android host application (`ai.agy.app`), a hardware-backed master key is provisioned:
 
 ```kotlin
-// ARGON-V19-03: Graceful StrongBox -> Standard TEE Fallback
+// ARCH-V19-03: Graceful StrongBox -> Standard TEE Fallback
 val masterKey = try {
     MasterKey.Builder(context)
         .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)

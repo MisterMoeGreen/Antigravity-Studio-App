@@ -106,11 +106,11 @@ sequenceDiagram
 
 ### 3.1 Socket Specification & Storage Invariant
 * **Path**: `/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/device_api.sock`.
-* **VFS Invariant (ARGON-V19-06)**: Must be hosted strictly on internal ext4 storage (`~/.gemini/antigravity-cli/`). Creating UNIX domain sockets on Android FUSE shared storage (`/storage/emulated/0/...`) is strictly prohibited as FUSE does not support AF_UNIX sockets or POSIX `0600` permissions.
+* **VFS Invariant (ARCH-V19-06)**: Must be hosted strictly on internal ext4 storage (`~/.gemini/antigravity-cli/`). Creating UNIX domain sockets on Android FUSE shared storage (`/storage/emulated/0/...`) is strictly prohibited as FUSE does not support AF_UNIX sockets or POSIX `0600` permissions.
 * **File Permissions**: `0600` (restricted strictly to the app UID).
 * **Protocol**: Line-delimited JSON (`\n`).
 
-### 3.2 Android 10+ Clipboard & Foreground Focus Invariant (ARGON-V19-05)
+### 3.2 Android 10+ Clipboard & Foreground Focus Invariant (ARCH-V19-05)
 Under Android 10+ (API 29+), `ClipboardManager.getPrimaryClip()` is blocked by the OS unless the requesting application currently holds active window focus. 
 * If `clipboard_get` is requested while the app is backgrounded, the bridge returns:
   `{"status": "error", "code": "CLIPBOARD_UNFOCUSED", "message": "Clipboard read requires active app window focus on Android 10+"}`.

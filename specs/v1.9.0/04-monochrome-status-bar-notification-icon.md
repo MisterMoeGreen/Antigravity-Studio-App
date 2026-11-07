@@ -76,7 +76,7 @@ The new status bar icon is defined as a scalable Android Vector Drawable (`ic_st
 In `app/src/main/java/ai/agy/app/service/AgyForegroundService.kt`:
 
 ```kotlin
-// ARGON-V19-07: Explicit PendingIntent.FLAG_IMMUTABLE for Android 12+ (targetSdk 34+)
+// ARCH-V19-07: Explicit PendingIntent.FLAG_IMMUTABLE for Android 12+ (targetSdk 34+)
 val pendingIntentFlags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
 
 val pendingIntent = PendingIntent.getActivity(
