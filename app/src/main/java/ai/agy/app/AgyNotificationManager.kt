@@ -399,7 +399,8 @@ object AgyNotificationManager {
         }
     }
 
-    fun shouldSendCompletionNotification(conversationId: String): Boolean {
+    fun shouldSendCompletionNotification(conversationId: String, isBackgroundTask: Boolean = false): Boolean {
+        if (isBackgroundTask) return true
         if (!isAppForeground) return true
         val active = activeConversationId?.trim()
         val target = conversationId.trim()
@@ -414,7 +415,8 @@ object AgyNotificationManager {
         conversationId: String,
         sessionTitle: String,
         rawPreview: String,
-        turnStatus: String = "COMPLETED"
+        turnStatus: String = "COMPLETED",
+        isBackgroundTask: Boolean = false
     ) {
         val wasAbortedByUser: Boolean
         val isDuplicateCompletion: Boolean
@@ -435,17 +437,17 @@ object AgyNotificationManager {
             return
         }
 
-        if (!shouldSendCompletionNotification(conversationId) || !hasNotificationPermission(context)) {
+        if (!shouldSendCompletionNotification(conversationId, isBackgroundTask) || !hasNotificationPermission(context)) {
             return
         }
 
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
         val cleanPreview = sanitizeMarkdownPreview(rawPreview)
         val displayTitle = sessionTitle.trim().ifEmpty { "Session ${conversationId.take(6)}" }
-        val statusHeading = if (turnStatus.equals("ERROR", ignoreCase = true)) {
-            "Agent encountered an error"
+        val statusHeading = if (isBackgroundTask) {
+            if (turnStatus.equals("ERROR", ignoreCase = true)) "Background task failed" else "Background task finished"
         } else {
-            "Agent finished"
+            if (turnStatus.equals("ERROR", ignoreCase = true)) "Agent encountered an error" else "Agent finished"
         }
 
         val clickIntent = Intent(context, MainActivity::class.java).apply {
@@ -484,8 +486,9 @@ object AgyNotificationManager {
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .build()
 
+        val notifId = if (isBackgroundTask) (conversationId.hashCode() and 0x0FFFFFFF) or 0x20000000 else NOTIF_ID_COMPLETION
         try {
-            nm.notify(conversationId, NOTIF_ID_COMPLETION, notification)
+            nm.notify(conversationId, notifId, notification)
         } catch (e: SecurityException) {
             Log.w(TAG, "POST_NOTIFICATIONS not granted: ${e.message}")
         }
@@ -530,7 +533,8 @@ object AgyNotificationManager {
                     migrateSession(context, oldCid, newCid)
                 }
                 "turn_complete", "task_completed" -> {
-                    val summary = obj.optString("title", if (event == "task_completed") "Background task finished" else "")
+                    val isBackgroundTask = (event == "task_completed")
+                    val summary = obj.optString("title", if (isBackgroundTask) "Background task finished" else "")
                     val status = obj.optString("status", "COMPLETED")
                     val preview = obj.optString("preview", "")
                     val finalPreview = if (preview.isNotBlank()) preview else status
@@ -540,7 +544,8 @@ object AgyNotificationManager {
                         conversationId = cid,
                         sessionTitle = summary,
                         rawPreview = finalPreview,
-                        turnStatus = if (exitCode == 0 && !status.equals("ERROR", ignoreCase = true)) "COMPLETED" else "ERROR"
+                        turnStatus = if (exitCode == 0 && !status.equals("ERROR", ignoreCase = true)) "COMPLETED" else "ERROR",
+                        isBackgroundTask = isBackgroundTask
                     )
                 }
             }

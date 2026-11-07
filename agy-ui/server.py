@@ -4419,26 +4419,6 @@ class AgyProcessOrchestrator:
                 if not BRAIN_DIR.exists():
                     continue
 
-                # Prune dead background tasks whose processes have already exited
-                for bg_id, bg_info in list(self.active_background_tasks.items()):
-                    bg_pid = bg_info.get("pid")
-                    bg_start = bg_info.get("start_time", 0)
-                    if bg_pid and (time.time() - bg_start > 4.0) and not os.path.exists(f"/proc/{bg_pid}"):
-                        self.active_background_tasks.pop(bg_id, None)
-                        canon_key = bg_info.get("task_id") or (bg_id.split("/")[-1] if "/" in bg_id else bg_id)
-                        self.active_background_tasks.pop(canon_key, None)
-                        self._seen_completed_tasks.add(bg_id)
-                        self._seen_completed_tasks.add(canon_key)
-                        await self.broadcast({
-                            "type": "background_task_completed",
-                            "conversation_id": bg_info.get("conversation_id"),
-                            "task_id": canon_key,
-                            "summary": bg_info.get("summary") or "Background Command",
-                            "exit_code": 0,
-                            "duration": max(0.0, time.time() - bg_start),
-                            "output_snippet": "",
-                        })
-
                 cids_to_check: set[str] = set(self._sessions.keys())
                 if self.active_view_cid:
                     cids_to_check.add(self.active_view_cid)
@@ -4602,13 +4582,14 @@ class AgyProcessOrchestrator:
                                 or exit_code in (137, 143)
                             )
 
-                            if not is_running_in_spawned_turn and not is_user_stopped and exit_code == 0:
+                            if not is_running_in_spawned_turn and not is_user_stopped:
+                                status_label = "Completed" if exit_code == 0 else f"Failed (exit code {exit_code})"
                                 emit_native_notif_event({
                                     "event": "task_completed",
                                     "conversation_id": cid,
-                                    "title": f"Task Completed: {summary}",
-                                    "status": f"Exit code {exit_code} ({int(duration)}s)",
-                                    "preview": output_snippet[:200] if output_snippet else f"Exit code {exit_code} ({int(duration)}s)",
+                                    "title": f"Task {status_label}: {summary}",
+                                    "status": f"{status_label} ({int(duration)}s)",
+                                    "preview": output_snippet[:200] if output_snippet else f"{status_label} ({int(duration)}s)",
                                     "exit_code": exit_code,
                                 })
 
@@ -4716,6 +4697,16 @@ class AgyProcessOrchestrator:
                                     "summary": summary,
                                     "start_time": start_time,
                                 })
+
+                # Prune any orphaned active tasks that were already marked completed
+                for bg_id, bg_info in list(self.active_background_tasks.items()):
+                    canon_key = bg_info.get("task_id") or (bg_id.split("/")[-1] if "/" in bg_id else bg_id)
+                    bg_cid = bg_info.get("conversation_id")
+                    full_id = f"{bg_cid}/{canon_key}" if bg_cid else canon_key
+                    if (canon_key in self._seen_completed_tasks or full_id in self._seen_completed_tasks or bg_id in self._seen_completed_tasks):
+                        self.active_background_tasks.pop(bg_id, None)
+                        self.active_background_tasks.pop(canon_key, None)
+                        self.active_background_tasks.pop(full_id, None)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
