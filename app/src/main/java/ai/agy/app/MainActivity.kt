@@ -88,29 +88,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private val locationPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { perms ->
-        val granted = perms.values.any { it }
-        if (!granted) {
-            DeviceApiBridge.setToggle(this, DeviceApiBridge.PREF_PERM_LOCATION, false)
-            runOnUiThread {
-                webView.evaluateJavascript("window.onDeviceSettingsUpdated && window.onDeviceSettingsUpdated();", null)
-            }
-        }
-    }
-
-    private val cameraPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (!isGranted) {
-            DeviceApiBridge.setToggle(this, DeviceApiBridge.PREF_PERM_CAMERA, false)
-            runOnUiThread {
-                webView.evaluateJavascript("window.onDeviceSettingsUpdated && window.onDeviceSettingsUpdated();", null)
-            }
-        }
-    }
-
     private fun refreshForegroundNotification() {
         val serviceIntent = Intent(this, AgyForegroundService::class.java).apply {
             action = AgyForegroundService.ACTION_UPDATE_NOTIFICATION
@@ -537,63 +514,6 @@ class MainActivity : AppCompatActivity() {
                 arr.put(obj)
             }
             return arr.toString()
-        }
-
-        @JavascriptInterface
-        fun getDeviceApiSettings(): String {
-            return DeviceApiBridge.getSettingsJson(this@MainActivity)
-        }
-
-        @JavascriptInterface
-        fun setDeviceApiToggle(key: String, enabled: Boolean): Boolean {
-            val canonicalKey = when (key) {
-                "device_api_enabled" -> DeviceApiBridge.PREF_MASTER_DEVICE_APIS
-                "device_api_battery" -> DeviceApiBridge.PREF_PERM_BATTERY
-                "device_api_notify" -> DeviceApiBridge.PREF_PERM_NOTIFICATIONS
-                "device_api_clipboard" -> DeviceApiBridge.PREF_PERM_CLIPBOARD
-                "device_api_location" -> DeviceApiBridge.PREF_PERM_LOCATION
-                "device_api_camera" -> DeviceApiBridge.PREF_PERM_CAMERA
-                "device_api_tts" -> DeviceApiBridge.PREF_PERM_TTS
-                "device_api_share" -> DeviceApiBridge.PREF_PERM_SHARE
-                else -> key
-            }
-            val res = DeviceApiBridge.setToggle(this@MainActivity, canonicalKey, enabled)
-            if (enabled) {
-                when (canonicalKey) {
-                    DeviceApiBridge.PREF_PERM_LOCATION -> {
-                        if (checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                            runOnUiThread {
-                                locationPermissionLauncher.launch(arrayOf(
-                                    android.Manifest.permission.ACCESS_FINE_LOCATION,
-                                    android.Manifest.permission.ACCESS_COARSE_LOCATION
-                                ))
-                            }
-                        }
-                    }
-                    DeviceApiBridge.PREF_PERM_CAMERA -> {
-                        if (checkSelfPermission(android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                            runOnUiThread {
-                                cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
-                            }
-                        }
-                    }
-                    DeviceApiBridge.PREF_PERM_NOTIFICATIONS -> {
-                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                                runOnUiThread {
-                                    notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            return res
-        }
-
-        @JavascriptInterface
-        fun executeDeviceApi(payloadStr: String): String {
-            return DeviceApiBridge.executeAction(this@MainActivity, payloadStr).toString()
         }
 
         @JavascriptInterface

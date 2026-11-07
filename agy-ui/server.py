@@ -7725,8 +7725,6 @@ class AgyWebServer:
         self._pending_questions: dict[str, dict[str, Any]] = {}
         self.ipc_sock_path: Path = GEMINI_DIR / "ask_question.sock"
         self.ipc_server: Optional[asyncio.AbstractServer] = None
-        self.device_ipc_sock_path: Path = GEMINI_DIR / "device_api.sock"
-        self.device_ipc_server: Optional[asyncio.AbstractServer] = None
         self.terminal_mgr = TerminalExecutionManager(self.orchestrator, self.broadcast, self)
 
     def get_all_sessions(self, search_query: str = "", limit: int = 100) -> list[dict[str, Any]]:
@@ -7799,257 +7797,6 @@ class AgyWebServer:
                 await writer.wait_closed()
             except Exception:
                 pass
-
-    def _get_device_prefs(self) -> dict[str, bool]:
-        prefs_file = Path("/data/data/ai.agy.app/shared_prefs/ai.agy.app_device_settings.xml")
-        prefs = {
-            "master_device_apis": False,
-            "device_perm_battery": False,
-            "device_perm_notifications": False,
-            "device_perm_clipboard": False,
-            "device_perm_location": False,
-            "device_perm_camera": False,
-            "device_perm_tts": False,
-            "device_perm_share": False,
-        }
-        alias_map = {
-            "device_api_enabled": "master_device_apis",
-            "device_api_battery": "device_perm_battery",
-            "device_api_notify": "device_perm_notifications",
-            "device_api_clipboard": "device_perm_clipboard",
-            "device_api_location": "device_perm_location",
-            "device_api_camera": "device_perm_camera",
-            "device_api_tts": "device_perm_tts",
-            "device_api_share": "device_perm_share",
-        }
-        if prefs_file.exists():
-            try:
-                import xml.etree.ElementTree as ET
-                root = ET.fromstring(prefs_file.read_text(encoding="utf-8"))
-                for elem in root.findall("boolean"):
-                    name = elem.get("name")
-                    val = elem.get("value") == "true"
-                    if name in prefs:
-                        prefs[name] = val
-                    elif name in alias_map:
-                        prefs[alias_map[name]] = val
-            except Exception as e:
-                logger.debug("Failed parsing device prefs xml: %s", e)
-        # Mirror canonical state to aliases for backwards compatibility
-        for alias_k, canonical_k in alias_map.items():
-            prefs[alias_k] = prefs.get(canonical_k, False)
-        return prefs
-
-    def _set_device_pref(self, key: str, val: bool) -> None:
-        prefs_file = Path("/data/data/ai.agy.app/shared_prefs/ai.agy.app_device_settings.xml")
-        prefs_file.parent.mkdir(parents=True, exist_ok=True)
-        alias_map = {
-            "device_api_enabled": "master_device_apis",
-            "device_api_battery": "device_perm_battery",
-            "device_api_notify": "device_perm_notifications",
-            "device_api_clipboard": "device_perm_clipboard",
-            "device_api_location": "device_perm_location",
-            "device_api_camera": "device_perm_camera",
-            "device_api_tts": "device_perm_tts",
-            "device_api_share": "device_perm_share",
-        }
-        canonical_key = alias_map.get(key, key)
-        prefs = self._get_device_prefs()
-        prefs[canonical_key] = val
-        for alias_k, c_k in alias_map.items():
-            prefs[alias_k] = prefs.get(c_k, False)
-
-        canonical_keys = [
-            "master_device_apis",
-            "device_perm_battery",
-            "device_perm_notifications",
-            "device_perm_clipboard",
-            "device_perm_location",
-            "device_perm_camera",
-            "device_perm_tts",
-            "device_perm_share",
-        ]
-        lines = ["<?xml version='1.0' encoding='utf-8' standalone='yes' ?>", "<map>"]
-        for k in canonical_keys:
-            v = prefs.get(k, False)
-            lines.append(f'    <boolean name="{k}" value="{"true" if v else "false"}" />')
-        lines.append("</map>\n")
-        atomic_write_secure(str(prefs_file), "\n".join(lines), mode=0o600)
-
-    async def start_device_ipc_server(self) -> None:
-        GEMINI_DIR.mkdir(parents=True, exist_ok=True)
-        if self.device_ipc_sock_path.exists():
-            try:
-                self.device_ipc_sock_path.unlink()
-            except Exception as exc:
-                logger.warning("Could not unlink stale device socket: %s", exc)
-        try:
-            self.device_ipc_server = await asyncio.start_unix_server(
-                self.handle_device_ipc_client,
-                str(self.device_ipc_sock_path),
-            )
-            try:
-                os.chmod(str(self.device_ipc_sock_path), 0o600)
-            except Exception:
-                pass
-            logger.info("Antigravity Native Device API IPC server listening on %s (mode 0600)", self.device_ipc_sock_path)
-        except Exception as exc:
-            logger.error("Failed to start device API IPC server on %s: %s", self.device_ipc_sock_path, exc)
-
-    async def stop_device_ipc_server(self) -> None:
-        if self.device_ipc_server:
-            self.device_ipc_server.close()
-            try:
-                await self.device_ipc_server.wait_closed()
-            except Exception:
-                pass
-            self.device_ipc_server = None
-        if self.device_ipc_sock_path.exists():
-            try:
-                self.device_ipc_sock_path.unlink()
-            except Exception:
-                pass
-
-    async def handle_device_ipc_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        try:
-            line = await asyncio.wait_for(reader.readline(), timeout=15.0)
-            if not line or len(line) > 65536:
-                return
-            payload = json.loads(line.decode("utf-8"))
-            action = payload.get("action", "")
-
-            prefs = self._get_device_prefs()
-            if not prefs.get("master_device_apis", False):
-                err_res = {
-                    "status": "error",
-                    "code": "FEATURE_DISABLED",
-                    "message": "Device API is disabled in General Settings"
-                }
-                writer.write(json.dumps(err_res).encode("utf-8") + b"\n")
-                await writer.drain()
-                return
-
-            res = await self._execute_device_action(action, payload, prefs)
-            writer.write(json.dumps(res).encode("utf-8") + b"\n")
-            await writer.drain()
-        except Exception as exc:
-            logger.warning("Error in device IPC client: %s", exc)
-            try:
-                err_res = {"status": "error", "code": "EXECUTION_ERROR", "message": str(exc)}
-                writer.write(json.dumps(err_res).encode("utf-8") + b"\n")
-                await writer.drain()
-            except Exception:
-                pass
-        finally:
-            try:
-                writer.close()
-                await writer.wait_closed()
-            except Exception:
-                pass
-
-    async def _execute_device_action(self, action: str, payload: dict[str, Any], prefs: dict[str, bool]) -> dict[str, Any]:
-        if action == "battery_status":
-            if not prefs.get("device_perm_battery", False):
-                return {"status": "error", "code": "FEATURE_DISABLED", "message": "Battery & Device Info is disabled in General Settings"}
-            telemetry_file = Path(USR_DIR) / "tmp" / "android_telemetry.json"
-            if telemetry_file.exists():
-                try:
-                    tdata = json.loads(telemetry_file.read_text(encoding="utf-8"))
-                    return {
-                        "status": "ok",
-                        "data": {
-                            "level": tdata.get("battery_pct", 100),
-                            "charging": tdata.get("charging", False),
-                            "temperature": tdata.get("temp_c", 25.0),
-                            "device_model": tdata.get("device_model", "Android Device"),
-                        }
-                    }
-                except Exception:
-                    pass
-            return {"status": "ok", "data": {"level": 100, "charging": False, "temperature": 25.0}}
-
-        elif action == "send_notification":
-            if not prefs.get("device_perm_notifications", False):
-                return {"status": "error", "code": "FEATURE_DISABLED", "message": "Notifications & Vibrate is disabled in General Settings"}
-            title = payload.get("title", "Antigravity Alert")
-            body = payload.get("body", "")
-            emit_native_notif_event({
-                "event": "turn_complete",
-                "conversation_id": "device_api",
-                "title": title,
-                "preview": body,
-                "status": "COMPLETED",
-            })
-            return {"status": "ok", "data": {"notification_id": int(time.time() * 1000) % 100000}}
-
-        elif action == "vibrate":
-            if not prefs.get("device_perm_notifications", False):
-                return {"status": "error", "code": "FEATURE_DISABLED", "message": "Notifications & Vibrate is disabled in General Settings"}
-            return {"status": "ok"}
-
-        elif action == "clipboard_get":
-            if not prefs.get("device_perm_clipboard", False):
-                return {"status": "error", "code": "FEATURE_DISABLED", "message": "System Clipboard is disabled in General Settings"}
-            clip_bin = shutil.which("termux-clipboard-get")
-            if clip_bin:
-                try:
-                    proc = await asyncio.create_subprocess_exec(
-                        clip_bin, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
-                    )
-                    out, _ = await asyncio.wait_for(proc.communicate(), timeout=2.0)
-                    return {"status": "ok", "data": {"text": out.decode("utf-8", "replace")}}
-                except Exception:
-                    pass
-            return {"status": "ok", "data": {"text": ""}}
-
-        elif action == "clipboard_set":
-            if not prefs.get("device_perm_clipboard", False):
-                return {"status": "error", "code": "FEATURE_DISABLED", "message": "System Clipboard is disabled in General Settings"}
-            text = payload.get("text", "")
-            await set_android_clipboard(text)
-            return {"status": "ok"}
-
-        elif action == "get_location":
-            if not prefs.get("device_perm_location", False):
-                return {"status": "error", "code": "FEATURE_DISABLED", "message": "Geolocation is disabled in General Settings"}
-            return {"status": "ok", "data": {"latitude": 0.0, "longitude": 0.0, "altitude": 0.0}}
-
-        elif action == "tts_speak":
-            if not prefs.get("device_perm_tts", False):
-                return {"status": "error", "code": "FEATURE_DISABLED", "message": "Text-to-Speech is disabled in General Settings"}
-            return {"status": "ok"}
-
-        elif action == "take_photo":
-            if not prefs.get("device_perm_camera", False):
-                return {"status": "error", "code": "FEATURE_DISABLED", "message": "Camera Capture is disabled in General Settings"}
-            raw_path = payload.get("dest_path", "").strip()
-            if not raw_path:
-                return {"status": "error", "code": "INVALID_ARGUMENT", "message": "dest_path parameter is required"}
-            dest = Path(raw_path).expanduser().resolve()
-            home = HOME_DIR.resolve()
-            storage = Path("/storage/emulated/0").resolve()
-            if not (str(dest).startswith(str(home)) or str(dest).startswith(str(storage))):
-                return {"status": "error", "code": "PATH_VIOLATION", "message": "Path outside workspace or home directory"}
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            if not dest.exists():
-                dest.write_bytes(b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00H\x00H\x00\x00\xff\xdb\x00C\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\t\t\x08\n\x0c\x14\r\x0c\x0b\x0b\x0c\x19\x12\x13\x0f\x14\x1d\x1a\x1f\x1e\x1d\x1a\x1c\x1c $.' \",#\x1c\x1c(7),01444\x1f'9=82<.342\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00\xff\xc4\x00\x1f\x00\x00\x01\x05\x01\x01\x01\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\xff\xda\x00\x08\x01\x01\x00\x00?\x00\xbf\x00\xff\xd9")
-            return {"status": "ok", "data": {"path": str(dest), "bytes": dest.stat().st_size}}
-
-        elif action == "open_url":
-            if not prefs.get("device_perm_share", False):
-                return {"status": "error", "code": "FEATURE_DISABLED", "message": "System Share Sheet is disabled in General Settings"}
-            url = payload.get("url", "").strip()
-            parsed = urllib.parse.urlparse(url)
-            if parsed.scheme.lower() not in ("http", "https"):
-                return {"status": "error", "code": "INVALID_URI_SCHEME", "message": "Only http and https schemes are permitted"}
-            try:
-                subprocess.Popen(["am", "start", "-a", "android.intent.action.VIEW", "-d", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except Exception:
-                pass
-            return {"status": "ok"}
-
-        else:
-            return {"status": "error", "code": "UNKNOWN_ACTION", "message": f"Unrecognized action: {action}"}
 
     async def process_question_ask(self, payload: dict[str, Any]) -> dict[str, Any]:
         raw_questions = payload.get("questions")
@@ -10975,20 +10722,6 @@ class AgyWebServer:
                 self.terminal_mgr.abort_command(cmd_id)
             return
 
-        # General Settings & Native Device APIs (Module 03, AC-DEV-01..09)
-        if mtype == "get_device_settings":
-            prefs = self._get_device_prefs()
-            await websocket.send(json.dumps({"type": "device_settings", "settings": prefs}))
-            return
-
-        if mtype == "set_device_toggle":
-            key = str(data.get("key") or "").strip()
-            val = bool(data.get("enabled", False))
-            if key:
-                self._set_device_pref(key, val)
-                prefs = self._get_device_prefs()
-                await self.broadcast({"type": "device_settings", "settings": prefs})
-            return
 
     async def execute_slash_command(self, cmd: str, arg: str) -> bool:
         cfg = self.orchestrator.config
@@ -11577,7 +11310,6 @@ async def main() -> None:
             pass
 
     await app.start_ipc_server()
-    await app.start_device_ipc_server()
     app.orchestrator.ensure_bg_task_watcher()
     try:
         async with serve(
@@ -11609,7 +11341,6 @@ async def main() -> None:
         except Exception:
             pass
         await app.stop_ipc_server()
-        await app.stop_device_ipc_server()
 
 
 if __name__ == "__main__":

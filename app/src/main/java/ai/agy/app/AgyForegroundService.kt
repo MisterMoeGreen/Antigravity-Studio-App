@@ -64,7 +64,6 @@ class AgyForegroundService : Service() {
         _readyPortFlow.value = null
         _authTokenFlow.value = null
         AgyNotificationManager.initChannels(this)
-        DeviceApiBridge.init(this)
         KeystoreVault.migrateLegacyApiKeysIfPresent(this)
         acquireWakeLock()
         startStickyNotification(8081)

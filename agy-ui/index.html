@@ -3343,60 +3343,6 @@
       border: 1px solid rgba(239, 68, 68, 0.4);
     }
 
-    /* General Settings Toggle Switch (Module 03) */
-    .toggle-switch {
-      position: relative;
-      display: inline-block;
-      width: 44px;
-      height: 24px;
-      min-width: 44px;
-      min-height: 24px;
-      flex-shrink: 0;
-      cursor: pointer;
-      touch-action: manipulation;
-    }
-    .toggle-switch input {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      opacity: 0;
-      margin: 0;
-      cursor: pointer;
-      z-index: 2;
-      touch-action: manipulation;
-    }
-    .toggle-slider {
-      position: absolute;
-      cursor: pointer;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background-color: var(--bg-surface);
-      border: 1px solid var(--border-subtle);
-      transition: .2s;
-      border-radius: 24px;
-      pointer-events: none;
-    }
-    .toggle-slider:before {
-      position: absolute;
-      content: "";
-      height: 16px;
-      width: 16px;
-      left: 3px;
-      bottom: 3px;
-      background-color: var(--text-tertiary);
-      transition: .2s;
-      border-radius: 50%;
-    }
-    .toggle-switch input:checked + .toggle-slider {
-      background-color: var(--accent-primary);
-      border-color: var(--accent-primary);
-    }
-    .toggle-switch input:checked + .toggle-slider:before {
-      transform: translateX(20px);
-      background-color: #fff;
-    }
-
   </style>
 </head>
 <body>
@@ -4031,20 +3977,6 @@
             <svg class="settings-menu-chevron fa-icon" viewBox="0 0 320 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg>
           </div>
 
-          <!-- General Settings (Module 03, AC-DEV-01) -->
-          <div class="settings-menu-item" data-target="viewGeneralSettings">
-            <div class="settings-menu-icon">
-              <svg class="fa-icon" viewBox="0 0 512 512" aria-hidden="true" focusable="false">
-                <path fill="currentColor" d="M0 416c0-17.7 14.3-32 32-32l54.7 0c12.3-28.3 40.5-48 73.3-48s61 19.7 73.3 48L480 384c17.7 0 32 14.3 32 32s-14.3 32-32 32l-246.7 0c-12.3 28.3-40.5 48-73.3 48s-61-19.7-73.3-48L32 448c-17.7 0-32-14.3-32-32zm192 0a32 32 0 1 0 -64 0 32 32 0 1 0 64 0zM320 256c0-17.7 14.3-32 32-32l128 0c17.7 0 32 14.3 32 32s-14.3 32-32 32l-128 0c-17.7 0-32-14.3-32-32zm-128 0c0-17.7 14.3-32 32-32l54.7 0c12.3-28.3 40.5-48 73.3-48s61 19.7 73.3 48L32 288c-17.7 0-32-14.3-32-32s14.3-32 32-32l246.7 0c12.3-28.3 40.5-48 73.3-48s61 19.7 73.3 48L192 256zm64 0a32 32 0 1 0 -64 0 32 32 0 1 0 64 0zM0 96C0 78.3 14.3 64 32 64l246.7 0c12.3-28.3 40.5-48 73.3-48s61 19.7 73.3 48L480 96c17.7 0 32 14.3 32 32s-14.3 32-32 32l-54.7 0c-12.3 28.3-40.5 48-73.3 48s-61-19.7-73.3-48L32 128C14.3 128 0 113.7 0 96zm352 32a32 32 0 1 0 0-64 32 32 0 1 0 0 64z"/>
-              </svg>
-            </div>
-            <div class="settings-menu-info">
-              <div class="settings-menu-title">General Settings</div>
-              <div class="settings-menu-desc">Preferences, device APIs & hardware access</div>
-            </div>
-            <svg class="settings-menu-chevron fa-icon" viewBox="0 0 320 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg>
-          </div>
-
           <!-- Export & Import (v1.6.3) -->
           <div class="settings-menu-item" data-target="viewExportImport">
             <div class="settings-menu-icon">
@@ -4468,100 +4400,6 @@
       </div>
     </div>
 
-    <!-- View: General Settings (Module 03, AC-DEV-01) -->
-    <div class="settings-subview" id="viewGeneralSettings">
-      <div class="subview-header">
-        <button class="icon-btn subview-back-btn" data-back="viewGeneralSettings" title="Back to menu">
-          <svg class="fa-icon" viewBox="0 0 448 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M9.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.2 288 416 288c17.7 0 32-14.3 32-32s-14.3-32-32-32l-306.7 0L214.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg>
-        </button>
-        <div class="subview-title">General Settings</div>
-        <button class="icon-btn" id="btnCloseGeneralSettings" title="Close Settings">
-          <svg class="fa-icon" viewBox="0 0 384 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M342.6 150.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L192 210.7 86.6 105.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L146.7 256 41.4 361.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192 301.3 297.4 406.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L237.3 256 342.6 150.6z"/></svg>
-        </button>
-      </div>
-      <div class="subview-body" style="padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));">
-        <div class="settings-info-banner">
-          Configure general application preferences and device hardware capabilities available to the agent runtime.
-        </div>
-
-        <div class="settings-card" style="padding:14px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:12px;display:flex;flex-direction:column;gap:12px;">
-          <div style="font-size:12px;font-weight:700;color:var(--text-tertiary);letter-spacing:0.05em;text-transform:uppercase;">
-            Agent Device Capabilities
-          </div>
-
-          <!-- Master Switch (AC-DEV-02) -->
-          <label class="touch-toggle-row" style="display:flex;align-items:center;justify-content:space-between;padding:12px;background:var(--bg-card);border-radius:10px;border:1px solid var(--border-subtle);cursor:pointer;touch-action:manipulation;min-height:54px;">
-            <div style="flex:1;padding-right:12px;">
-              <div style="font-size:14px;font-weight:600;color:var(--text-primary);">Master Device API Bridge</div>
-              <div style="font-size:12px;color:var(--text-secondary);margin-top:2px;">Allow the agent to interact with device hardware.</div>
-            </div>
-            <span class="toggle-switch">
-              <input type="checkbox" id="toggleDeviceMaster" />
-              <span class="toggle-slider"></span>
-            </span>
-          </label>
-
-          <!-- Sub-toggles container (AC-DEV-02..09) -->
-          <div id="deviceSubTogglesContainer" style="display:flex;flex-direction:column;gap:8px;transition:opacity 0.2s;">
-            <label class="touch-checkbox-row device-subtoggle-row">
-              <input type="checkbox" id="toggleDeviceBattery" class="form-checkbox" />
-              <div class="checkbox-text">
-                <span class="checkbox-label">Battery & Device Info</span>
-                <span class="checkbox-desc">Query level, charging status & battery temperature</span>
-              </div>
-            </label>
-
-            <label class="touch-checkbox-row device-subtoggle-row">
-              <input type="checkbox" id="toggleDeviceNotify" class="form-checkbox" />
-              <div class="checkbox-text">
-                <span class="checkbox-label">Notifications & Vibrate</span>
-                <span class="checkbox-desc">Post status notifications & trigger haptic feedback</span>
-              </div>
-            </label>
-
-            <label class="touch-checkbox-row device-subtoggle-row">
-              <input type="checkbox" id="toggleDeviceClipboard" class="form-checkbox" />
-              <div class="checkbox-text">
-                <span class="checkbox-label">System Clipboard</span>
-                <span class="checkbox-desc">Read and write device clipboard text</span>
-              </div>
-            </label>
-
-            <label class="touch-checkbox-row device-subtoggle-row">
-              <input type="checkbox" id="toggleDeviceLocation" class="form-checkbox" />
-              <div class="checkbox-text">
-                <span class="checkbox-label">Geolocation</span>
-                <span class="checkbox-desc">Query GPS coordinates (prompts OS permission)</span>
-              </div>
-            </label>
-
-            <label class="touch-checkbox-row device-subtoggle-row">
-              <input type="checkbox" id="toggleDeviceCamera" class="form-checkbox" />
-              <div class="checkbox-text">
-                <span class="checkbox-label">Camera Capture</span>
-                <span class="checkbox-desc">Take workspace photos (prompts OS permission)</span>
-              </div>
-            </label>
-
-            <label class="touch-checkbox-row device-subtoggle-row">
-              <input type="checkbox" id="toggleDeviceTts" class="form-checkbox" />
-              <div class="checkbox-text">
-                <span class="checkbox-label">Text-to-Speech (TTS)</span>
-                <span class="checkbox-desc">Audio speech synthesis announcements</span>
-              </div>
-            </label>
-
-            <label class="touch-checkbox-row device-subtoggle-row">
-              <input type="checkbox" id="toggleDeviceShare" class="form-checkbox" />
-              <div class="checkbox-text">
-                <span class="checkbox-label">System Share & URL Open</span>
-                <span class="checkbox-desc">Open verified web URLs in browser</span>
-              </div>
-            </label>
-          </div>
-        </div>
-      </div>
-    </div>
   </div>
 
   <!-- Modal: Generate SSH Key -->
@@ -7127,10 +6965,6 @@
             break;
           }
 
-          /* Native Device API Settings (Module 03, AC-DEV-01..09) */
-          case 'device_settings':
-            updateDeviceSettingsUI(msg.settings);
-            break;
         }
       }
 
@@ -9145,7 +8979,7 @@
       const btnCloseSettingsHub = document.getElementById('btnCloseSettingsHub');
 
       let currentSettingsView = 'viewSettingsMenu';
-      const settingsViews = ['viewSettingsMenu', 'viewPrompts', 'viewSSH', 'viewApiKeys', 'viewSkills', 'viewMCP', 'viewPackages', 'viewUpdates', 'viewExportImport', 'viewGeneralSettings'];
+      const settingsViews = ['viewSettingsMenu', 'viewPrompts', 'viewSSH', 'viewApiKeys', 'viewSkills', 'viewMCP', 'viewPackages', 'viewUpdates', 'viewExportImport'];
 
       function openSettingsHub() {
         if (!settingsHub) return;
@@ -9214,93 +9048,8 @@
           sendWs({ type: 'get_packages' });
         } else if (targetId === 'viewUpdates') {
           initUpdatesView();
-        } else if (targetId === 'viewGeneralSettings') {
-          loadDeviceSettings();
         }
       }
-
-      function loadDeviceSettings() {
-        if (window.AndroidApp && typeof window.AndroidApp.getDeviceApiSettings === 'function') {
-          try {
-            const raw = window.AndroidApp.getDeviceApiSettings();
-            const prefs = JSON.parse(raw);
-            updateDeviceSettingsUI(prefs);
-            return;
-          } catch (e) {
-            console.warn('Failed parsing getDeviceApiSettings:', e);
-          }
-        }
-        sendWs({ type: 'get_device_settings' });
-      }
-
-      function updateDeviceSettingsUI(prefs) {
-        if (!prefs) return;
-        const master = document.getElementById('toggleDeviceMaster');
-        const cont = document.getElementById('deviceSubTogglesContainer');
-        const battery = document.getElementById('toggleDeviceBattery');
-        const notify = document.getElementById('toggleDeviceNotify');
-        const clipboard = document.getElementById('toggleDeviceClipboard');
-        const location = document.getElementById('toggleDeviceLocation');
-        const camera = document.getElementById('toggleDeviceCamera');
-        const tts = document.getElementById('toggleDeviceTts');
-        const share = document.getElementById('toggleDeviceShare');
-
-        const masterEnabled = !!(prefs.master_device_apis !== undefined ? prefs.master_device_apis : prefs.device_api_enabled);
-        if (master) master.checked = masterEnabled;
-        if (battery) battery.checked = !!(prefs.device_perm_battery !== undefined ? prefs.device_perm_battery : prefs.device_api_battery);
-        if (notify) notify.checked = !!(prefs.device_perm_notifications !== undefined ? prefs.device_perm_notifications : prefs.device_api_notify);
-        if (clipboard) clipboard.checked = !!(prefs.device_perm_clipboard !== undefined ? prefs.device_perm_clipboard : prefs.device_api_clipboard);
-        if (location) location.checked = !!(prefs.device_perm_location !== undefined ? prefs.device_perm_location : prefs.device_api_location);
-        if (camera) camera.checked = !!(prefs.device_perm_camera !== undefined ? prefs.device_perm_camera : prefs.device_api_camera);
-        if (tts) tts.checked = !!(prefs.device_perm_tts !== undefined ? prefs.device_perm_tts : prefs.device_api_tts);
-        if (share) share.checked = !!(prefs.device_perm_share !== undefined ? prefs.device_perm_share : prefs.device_api_share);
-
-        if (cont) {
-          cont.style.opacity = masterEnabled ? '1' : '0.4';
-          cont.style.pointerEvents = masterEnabled ? 'auto' : 'none';
-        }
-      }
-
-      function initDeviceSettingsListeners() {
-        const toggleMap = [
-          { id: 'toggleDeviceMaster', key: 'master_device_apis', alias: 'device_api_enabled', isMaster: true },
-          { id: 'toggleDeviceBattery', key: 'device_perm_battery', alias: 'device_api_battery' },
-          { id: 'toggleDeviceNotify', key: 'device_perm_notifications', alias: 'device_api_notify' },
-          { id: 'toggleDeviceClipboard', key: 'device_perm_clipboard', alias: 'device_api_clipboard' },
-          { id: 'toggleDeviceLocation', key: 'device_perm_location', alias: 'device_api_location' },
-          { id: 'toggleDeviceCamera', key: 'device_perm_camera', alias: 'device_api_camera' },
-          { id: 'toggleDeviceTts', key: 'device_perm_tts', alias: 'device_api_tts' },
-          { id: 'toggleDeviceShare', key: 'device_perm_share', alias: 'device_api_share' },
-        ];
-
-        toggleMap.forEach(item => {
-          const el = document.getElementById(item.id);
-          if (!el) return;
-          el.addEventListener('change', () => {
-            const enabled = el.checked;
-            if (item.isMaster) {
-              const cont = document.getElementById('deviceSubTogglesContainer');
-              if (cont) {
-                cont.style.opacity = enabled ? '1' : '0.4';
-                cont.style.pointerEvents = enabled ? 'auto' : 'none';
-              }
-            }
-            if (window.AndroidApp && typeof window.AndroidApp.setDeviceApiToggle === 'function') {
-              window.AndroidApp.setDeviceApiToggle(item.key, enabled);
-              if (item.alias) {
-                window.AndroidApp.setDeviceApiToggle(item.alias, enabled);
-              }
-            }
-            sendWs({ type: 'set_device_toggle', key: item.key, enabled: enabled });
-          });
-        });
-
-        const btnCloseGeneralSettings = document.getElementById('btnCloseGeneralSettings');
-        if (btnCloseGeneralSettings) {
-          btnCloseGeneralSettings.addEventListener('click', closeSettingsHub);
-        }
-      }
-      initDeviceSettingsListeners();
 
       function goBackSettingsView(viewId) {
         const el = document.getElementById(viewId);
