@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from collections import defaultdict
 import datetime
 import hashlib
 import io
@@ -2943,10 +2944,24 @@ class AntigravityStorageEngine:
                             break
                         new_data.extend(_encode_varint(tag))
                         new_data.extend(_encode_varint(val))
+                    elif wire == 1:
+                        fixed64 = s.read(8)
+                        if len(fixed64) < 8:
+                            break
+                        new_data.extend(_encode_varint(tag))
+                        new_data.extend(fixed64)
+                    elif wire == 5:
+                        fixed32 = s.read(4)
+                        if len(fixed32) < 4:
+                            break
+                        new_data.extend(_encode_varint(tag))
+                        new_data.extend(fixed32)
                     else:
                         break
                 if pruned:
-                    pb_path.write_bytes(bytes(new_data))
+                    tmp_pb = pb_path.with_suffix(pb_path.suffix + ".tmp")
+                    tmp_pb.write_bytes(bytes(new_data))
+                    os.replace(tmp_pb, pb_path)
                     logger.info("Purged ghost sessions from %s, new size: %d", filename, len(new_data))
             except Exception as exc:
                 logger.warning("Error pruning ghost sessions from %s: %s", filename, exc)
@@ -3350,11 +3365,25 @@ class AntigravityStorageEngine:
                             break
                         new_data.extend(_encode_varint(tag))
                         new_data.extend(_encode_varint(val))
+                    elif wire == 1:
+                        fixed64 = s.read(8)
+                        if len(fixed64) < 8:
+                            break
+                        new_data.extend(_encode_varint(tag))
+                        new_data.extend(fixed64)
+                    elif wire == 5:
+                        fixed32 = s.read(4)
+                        if len(fixed32) < 4:
+                            break
+                        new_data.extend(_encode_varint(tag))
+                        new_data.extend(fixed32)
                     else:
                         break
 
                 if pruned:
-                    pb_path.write_bytes(bytes(new_data))
+                    tmp_pb = pb_path.with_suffix(pb_path.suffix + ".tmp")
+                    tmp_pb.write_bytes(bytes(new_data))
+                    os.replace(tmp_pb, pb_path)
                     logger.info("Pruned session %s from %s", cid, filename)
             except Exception as exc:
                 logger.warning("Failed pruning %s from %s: %s", cid, filename, exc)
@@ -4190,6 +4219,8 @@ class SessionExecutionContext:
     effort: str = "high"
     active_proc: Optional[asyncio.subprocess.Process] = None
     current_turn_id: Optional[str] = None
+    spontaneous_turn_id: Optional[str] = None
+    is_background_feedback_running: bool = False
     turn_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     is_running: bool = False
     interrupted: bool = False
@@ -4281,6 +4312,7 @@ class AgyProcessOrchestrator:
         # Persistent ACP Daemon Lifecycle (v1.8.0)
         self.acp_proc: Optional[asyncio.subprocess.Process] = None
         self.acp_lock: asyncio.Lock = asyncio.Lock()
+        self._acp_stdin_lock: asyncio.Lock = asyncio.Lock()
         self._acp_request_id: int = 0
         self._pending_requests: dict[int, asyncio.Future] = {}
         self._acp_sessions: dict[str, str] = {}
@@ -4293,6 +4325,8 @@ class AgyProcessOrchestrator:
 
         # Background Task Telemetry (ARGON-18-03)
         self.active_background_tasks: dict[str, dict[str, Any]] = {}
+        self._pending_task_completions: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        self._pending_task_timers: dict[str, asyncio.Task] = {}
         self._bg_watcher_task: Optional[asyncio.Task] = None
         self._seen_bg_message_files: set[str] = set()
         self._seen_completed_tasks: set[str] = set()
@@ -4449,6 +4483,11 @@ class AgyProcessOrchestrator:
                     pass
                 self.acp_proc = None
                 self._acp_initialized = False
+
+            # Clear in-memory session mappings so fresh daemon starts clean (ARGON-18-02)
+            self._acp_sessions.clear()
+            self._acp_session_to_cid.clear()
+            self._acp_loading_sessions.clear()
 
             try:
                 self.storage.purge_all_ghost_sessions()
@@ -4680,10 +4719,11 @@ class AgyProcessOrchestrator:
             if BRAIN_DIR.exists():
                 for mfile in BRAIN_DIR.glob("*/.system_generated/messages/*.json"):
                     self._seen_bg_message_files.add(mfile.name)
+                    cid_parent = mfile.parent.parent.parent.name
                     try:
                         content = mfile.read_text(encoding="utf-8", errors="replace")
                         for m in re.finditer(r"task-(\d+)", content):
-                            self._seen_completed_tasks.add(f"task-{m.group(1)}")
+                            self._seen_completed_tasks.add(f"{cid_parent}/task-{m.group(1)}")
                     except Exception:
                         pass
         except Exception as e:
@@ -4838,7 +4878,9 @@ class AgyProcessOrchestrator:
                             self._seen_completed_tasks.add(task_key)
                             self._seen_completed_tasks.add(full_task_id)
 
-                            t_info = self.active_background_tasks.pop(task_key, None) or self.active_background_tasks.pop(full_task_id, None)
+                            t_info = self.active_background_tasks.pop(full_task_id, None)
+                            t_info_legacy = self.active_background_tasks.pop(task_key, None)
+                            t_info = t_info or t_info_legacy
 
                             exit_code = 0
                             duration = 0.0
@@ -4920,49 +4962,33 @@ class AgyProcessOrchestrator:
                                 or exit_code in (137, 143)
                             )
 
-                            if t_info and not is_running_in_spawned_turn and not is_user_stopped and exit_code == 0:
+                            if not is_running_in_spawned_turn and not is_user_stopped:
+                                status_label = "Completed" if exit_code == 0 else f"Failed (exit code {exit_code})"
                                 emit_native_notif_event({
                                     "event": "task_completed",
                                     "conversation_id": cid,
-                                    "title": f"Task Completed: {summary}",
-                                    "status": f"Exit code {exit_code} ({int(duration)}s)",
-                                    "preview": output_snippet[:200] if output_snippet else f"Exit code {exit_code} ({int(duration)}s)",
+                                    "title": f"Task {status_label}: {summary}",
+                                    "status": f"{status_label} ({int(duration)}s)",
+                                    "preview": output_snippet[:200] if output_snippet else f"{status_label} ({int(duration)}s)",
                                     "exit_code": exit_code,
                                 })
 
-                                notice_prompt = (
-                                    f"<SYSTEM_MESSAGE>\n"
-                                    f"[Background Task Completed]\n"
-                                    f"Task: {summary} ({task_key})\n"
-                                    f"Exit Code: {exit_code}\n"
-                                    f"Duration: {int(duration)}s\n"
-                                    f"Command Output:\n"
-                                    f"{output_snippet[:600] if output_snippet else '(No output)'}\n\n"
-                                    f"STRICT INSTRUCTIONS:\n"
-                                    f"- Summarize ONLY this single finished task: '{summary}' ({task_key}).\n"
-                                    f"- Respond with exactly ONE short sentence (e.g. \"Task '{summary}' ({task_key}) completed in {int(duration)}s.\").\n"
-                                    f"- ABSOLUTELY DO NOT list, summarize, review, or mention any other background jobs or tasks.\n"
-                                    f"- DO NOT restart, re-run, or spawn new background tasks.\n"
-                                    f"</SYSTEM_MESSAGE>"
-                                )
-
-                                async def _safe_execute_completion(prompt_text: str, target_cid: str) -> None:
-                                    for _ in range(40):
-                                        target_ctx = self.get_or_create_context(target_cid)
-                                        if target_ctx and not target_ctx.is_running and not target_ctx.turn_lock.locked():
-                                            await self.execute_turn(prompt_text, conversation_id=target_cid)
-                                            return
-                                        await asyncio.sleep(0.5)
-
-                                asyncio.create_task(_safe_execute_completion(notice_prompt, cid))
+                                self._pending_task_completions[cid].append({
+                                    "task_key": task_key,
+                                    "summary": summary,
+                                    "exit_code": exit_code,
+                                    "duration": duration,
+                                    "output_snippet": output_snippet[:600],
+                                })
+                                self._schedule_background_feedback(cid)
                         else:
-                            if task_key not in self.active_background_tasks and full_task_id not in self.active_background_tasks:
+                            if full_task_id not in self.active_background_tasks and task_key not in self.active_background_tasks:
                                 try:
                                     age = time.time() - task_file.stat().st_mtime
                                 except Exception:
                                     age = 0
                                 if age > 7200:
-                                    self._seen_completed_tasks.add(task_key)
+                                    self._seen_completed_tasks.add(full_task_id)
                                     continue
 
                                 # Extract exact task command from transcript.jsonl
@@ -5003,8 +5029,6 @@ class AgyProcessOrchestrator:
 
                                 clean_task = re.sub(r'[\x22\x27]', '', ' '.join(task_cmd.split())).strip().lower() if task_cmd else ""
                                 matched_pid: Optional[int] = None
-                                fallback_pid: Optional[int] = None
-                                fallback_starttime: int = -1
 
                                 if self.acp_proc and self.acp_proc.pid:
                                     try:
@@ -5025,15 +5049,10 @@ class AgyProcessOrchestrator:
                                                     continue
 
                                                 clean_c = re.sub(r'[\x22\x27]', '', ' '.join(raw_c.split())).strip().lower()
-                                                p_st = int(stat_parts[19]) if len(stat_parts) > 19 else p_int
 
                                                 if clean_task and (clean_c == clean_task or clean_task in clean_c or clean_c in clean_task):
                                                     matched_pid = p_int
                                                     break
-
-                                                if p_st > fallback_starttime:
-                                                    fallback_starttime = p_st
-                                                    fallback_pid = p_int
                                             except Exception:
                                                 pass
                                     except Exception:
@@ -5051,7 +5070,7 @@ class AgyProcessOrchestrator:
                                     "pid": final_pid,
                                     "spawned_during_turn_id": getattr(ctx, "current_turn_id", None) if ctx else None,
                                 }
-                                self.active_background_tasks[task_key] = t_info
+                                self.active_background_tasks[full_task_id] = t_info
                                 await self.broadcast({
                                     "type": "background_task_started",
                                     "conversation_id": cid,
@@ -5059,6 +5078,16 @@ class AgyProcessOrchestrator:
                                     "summary": summary,
                                     "start_time": start_time,
                                 })
+
+                # Prune any orphaned active tasks that were already marked completed
+                for bg_id, bg_info in list(self.active_background_tasks.items()):
+                    canon_key = bg_info.get("task_id") or (bg_id.split("/")[-1] if "/" in bg_id else bg_id)
+                    bg_cid = bg_info.get("conversation_id")
+                    full_id = f"{bg_cid}/{canon_key}" if bg_cid else canon_key
+                    if (canon_key in self._seen_completed_tasks or full_id in self._seen_completed_tasks or bg_id in self._seen_completed_tasks):
+                        self.active_background_tasks.pop(bg_id, None)
+                        self.active_background_tasks.pop(canon_key, None)
+                        self.active_background_tasks.pop(full_id, None)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
@@ -5081,8 +5110,9 @@ class AgyProcessOrchestrator:
             "params": params,
         }
         line = json.dumps(payload) + "\n"
-        self.acp_proc.stdin.write(line.encode("utf-8"))
-        await self.acp_proc.stdin.drain()
+        async with self._acp_stdin_lock:
+            self.acp_proc.stdin.write(line.encode("utf-8"))
+            await self.acp_proc.stdin.drain()
 
         try:
             return await asyncio.wait_for(fut, timeout=timeout)
@@ -5099,8 +5129,9 @@ class AgyProcessOrchestrator:
             "params": params,
         }
         line = json.dumps(payload) + "\n"
-        self.acp_proc.stdin.write(line.encode("utf-8"))
-        await self.acp_proc.stdin.drain()
+        async with self._acp_stdin_lock:
+            self.acp_proc.stdin.write(line.encode("utf-8"))
+            await self.acp_proc.stdin.drain()
 
     def _schedule_spontaneous_turn_watchdog(self, cid: str, ctx: SessionExecutionContext) -> None:
         if cid in self._spontaneous_turn_watchdogs:
@@ -5109,10 +5140,12 @@ class AgyProcessOrchestrator:
         async def _watchdog():
             try:
                 await asyncio.sleep(2.5)
-                if ctx.is_running and ctx.current_turn_id and not ctx.turn_lock.locked():
-                    turn_id = ctx.current_turn_id
+                if ctx.is_running and (ctx.spontaneous_turn_id or ctx.current_turn_id) and not ctx.turn_lock.locked():
+                    turn_id = ctx.spontaneous_turn_id or ctx.current_turn_id
                     ctx.is_running = False
-                    ctx.current_turn_id = None
+                    if ctx.current_turn_id == turn_id:
+                        ctx.current_turn_id = None
+                    ctx.spontaneous_turn_id = None
                     ctx.active_snapshot = None
                     ctx.current_action = ""
                     s_title = ctx.title or (f"Session {cid[:8]}" if cid else "Conversation")
@@ -5152,6 +5185,71 @@ class AgyProcessOrchestrator:
 
         self._spontaneous_turn_watchdogs[cid] = asyncio.create_task(_watchdog())
 
+    def _schedule_background_feedback(self, cid: str) -> None:
+        """
+        Schedules debounced agent feedback for completed background tasks.
+        If the user submits a prompt before this executes, pending tasks
+        are seamlessly prepended to the user's prompt so no race condition occurs.
+        """
+        if cid in self._pending_task_timers:
+            self._pending_task_timers[cid].cancel()
+
+        async def _feedback_runner():
+            try:
+                await asyncio.sleep(1.2)
+                ctx = self.get_or_create_context(cid)
+                for _ in range(60):
+                    if not ctx.is_running and not ctx.turn_lock.locked():
+                        break
+                    await asyncio.sleep(0.5)
+
+                if ctx.is_running or ctx.turn_lock.locked():
+                    return
+
+                pending = self._pending_task_completions.pop(cid, [])
+                if not pending:
+                    return
+
+                if len(pending) == 1:
+                    p = pending[0]
+                    notice_prompt = (
+                        f"<SYSTEM_MESSAGE>\n"
+                        f"[Background Task Completed]\n"
+                        f"Task: {p['summary']} ({p['task_key']})\n"
+                        f"Exit Code: {p['exit_code']}\n"
+                        f"Duration: {int(p['duration'])}s\n"
+                        f"Command Output:\n"
+                        f"{p['output_snippet'] if p['output_snippet'] else '(No output)'}\n\n"
+                        f"STRICT INSTRUCTIONS:\n"
+                        f"- Inform the user that the background task has completed with a brief, clear summary.\n"
+                        f"- DO NOT restart, re-run, or spawn new background tasks.\n"
+                        f"</SYSTEM_MESSAGE>"
+                    )
+                else:
+                    items_str = "\n".join(
+                        f"- Task '{p['summary']}' ({p['task_key']}) finished in {int(p['duration'])}s with exit code {p['exit_code']}.\n"
+                        f"  Output:\n  {p['output_snippet'] if p['output_snippet'] else '(No output)'}"
+                        for p in pending
+                    )
+                    notice_prompt = (
+                        f"<SYSTEM_MESSAGE>\n"
+                        f"[Background Tasks Completed]\n"
+                        f"{items_str}\n\n"
+                        f"STRICT INSTRUCTIONS:\n"
+                        f"- Summarize these finished tasks with a brief completion summary for the user.\n"
+                        f"- DO NOT restart, re-run, or spawn new background tasks.\n"
+                        f"</SYSTEM_MESSAGE>"
+                    )
+                await self.execute_turn(notice_prompt, conversation_id=cid, is_background_feedback=True)
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.warning("Error in background feedback runner for %s: %s", cid, e)
+            finally:
+                self._pending_task_timers.pop(cid, None)
+
+        self._pending_task_timers[cid] = asyncio.create_task(_feedback_runner())
+
     async def _handle_acp_notification(self, msg: dict[str, Any]) -> None:
         method = msg.get("method")
         params = msg.get("params") or {}
@@ -5180,6 +5278,7 @@ class AgyProcessOrchestrator:
                 if not ctx.is_running and su_type in ("agent_message_chunk", "agent_thought_chunk", "tool_call"):
                     turn_id = f"turn-bg-{uuid.uuid4().hex[:8]}"
                     ctx.current_turn_id = turn_id
+                    ctx.spontaneous_turn_id = turn_id
                     ctx.is_running = True
                     ctx.current_action = f"Running ({ctx.model})"
                     ctx.active_snapshot = TurnSnapshot(turn_id=turn_id, model=ctx.model)
@@ -5205,7 +5304,7 @@ class AgyProcessOrchestrator:
                         "start_time": time.time(),
                     })
 
-                turn_id = ctx.current_turn_id or f"turn-{uuid.uuid4().hex[:8]}"
+                turn_id = getattr(ctx, "spontaneous_turn_id", None) or ctx.current_turn_id or f"turn-{uuid.uuid4().hex[:8]}"
                 usage_summary = getattr(ctx, "_active_usage_summary", None)
                 if usage_summary is None:
                     usage_summary = {"input_tokens": 0, "output_tokens": 0, "thinking_tokens": 0}
@@ -5231,8 +5330,9 @@ class AgyProcessOrchestrator:
                     },
                 }
                 if self.acp_proc and self.acp_proc.stdin:
-                    self.acp_proc.stdin.write((json.dumps(resp) + "\n").encode("utf-8"))
-                    await self.acp_proc.stdin.drain()
+                    async with self._acp_stdin_lock:
+                        self.acp_proc.stdin.write((json.dumps(resp) + "\n").encode("utf-8"))
+                        await self.acp_proc.stdin.drain()
 
     def build_cli_args(
         self,
@@ -5309,6 +5409,7 @@ class AgyProcessOrchestrator:
         effort: Optional[str] = None,
         workspace: Optional[str] = None,
         initial_title: Optional[str] = None,
+        is_background_feedback: bool = False,
     ) -> None:
         raw_cid = (conversation_id or "").strip()
         if raw_cid in self._migrated_cids:
@@ -5345,20 +5446,27 @@ class AgyProcessOrchestrator:
             )
             cid = ctx.conversation_id
 
-        # 1. Intra-session lock check
-        if ctx.turn_lock.locked():
+        # 1. Spontaneous daemon turn or background feedback settlement (wait up to 5s for feedback to wrap up)
+        if getattr(ctx, "is_background_feedback_running", False) or (getattr(ctx, "spontaneous_turn_id", None) and ctx.is_running):
+            for _ in range(50):
+                if not getattr(ctx, "is_background_feedback_running", False) and not getattr(ctx, "spontaneous_turn_id", None):
+                    break
+                await asyncio.sleep(0.1)
+
+        # 2. Intra-session lock check
+        if ctx.turn_lock.locked() or (ctx.is_running and getattr(ctx, "spontaneous_turn_id", None)):
             await self.broadcast(
                 {
                     "type": "system_card",
                     "conversation_id": cid,
                     "title": "Session Busy",
-                    "markdown": "This session is currently processing a turn. Tap **Stop** to interrupt it first.",
+                    "markdown": "This session is currently processing background task feedback. Please wait a moment...",
                     "level": "warning",
                 }
             )
             return
 
-        # 2. Maximum concurrency cap check (MAX_CONCURRENT_SESSIONS = 2)
+        # 3. Maximum concurrency cap check (MAX_CONCURRENT_SESSIONS = 2)
         running_sessions = [c for c in self._sessions.values() if c.is_running and c.conversation_id != cid]
         if len(running_sessions) >= MAX_CONCURRENT_SESSIONS:
             await self.broadcast(
@@ -5393,6 +5501,11 @@ class AgyProcessOrchestrator:
             )
 
         async with ctx.turn_lock:
+            if is_background_feedback:
+                ctx.is_background_feedback_running = True
+            if cid and cid in self._spontaneous_turn_watchdogs:
+                self._spontaneous_turn_watchdogs.pop(cid).cancel()
+            ctx.spontaneous_turn_id = None
             turn_id = f"turn-{uuid.uuid4().hex[:8]}"
             ctx.current_turn_id = turn_id
             ctx.interrupted = False
@@ -5533,11 +5646,17 @@ class AgyProcessOrchestrator:
                                 await self.acp_call("session/resume", {"sessionId": cid, "workspaceUris": [ws_uri]}, timeout=15.0)
                                 acp_session_id = cid
                             except Exception as resume_err:
-                                logger.debug("session/resume failed for %s, falling back to session/new: %s", cid, resume_err)
-                                load_new = await self.acp_call("session/new", {"workspaceUris": [ws_uri]}, timeout=30.0)
-                                real_cid = str(load_new.get("sessionId") or cid)
-                                acp_session_id = real_cid
-                                self._acp_session_to_cid[real_cid] = cid
+                                logger.debug("session/resume failed for %s, trying session/load: %s", cid, resume_err)
+                                try:
+                                    # Fallback 1: session/load restores session history without history fracture
+                                    await self.acp_call("session/load", {"sessionId": cid}, timeout=30.0)
+                                    acp_session_id = cid
+                                except Exception as load_err:
+                                    logger.debug("session/load failed for %s, falling back to session/new: %s", cid, load_err)
+                                    load_new = await self.acp_call("session/new", {"workspaceUris": [ws_uri]}, timeout=30.0)
+                                    real_cid = str(load_new.get("sessionId") or cid)
+                                    acp_session_id = real_cid
+                                    self._acp_session_to_cid[real_cid] = cid
                             self._acp_sessions[cid] = acp_session_id
                             self._acp_session_to_cid[acp_session_id] = cid
                         finally:
@@ -5621,7 +5740,8 @@ class AgyProcessOrchestrator:
                         "status": "Thinking...",
                     }
                 )
-                if final_cid:
+                is_view_match = (is_new_session or self.active_view_cid in (None, raw_cid, final_cid))
+                if final_cid and is_view_match:
                     self.active_view_cid = final_cid
                     save_app_settings({"last_active_cid": final_cid})
                 await self.broadcast(
@@ -5639,6 +5759,27 @@ class AgyProcessOrchestrator:
                 }, timeout=3600.0)
 
                 stop_reason = prompt_res.get("stopReason", "end_turn")
+                if stop_reason == "auth_required":
+                    logger.warning("Auth expired mid-session during turn [%s]", turn_id)
+                    self._pending_auth_prompt = prompt
+                    self._pending_auth_attachments = attachments or []
+                    self.auth_cid = final_cid
+                    self.auth_turn_id = turn_id
+                    await self.broadcast({
+                        "type": "auth_required",
+                        "reason": "expired",
+                        "conversation_id": final_cid,
+                    })
+                    await self.broadcast({
+                        "type": "turn_complete",
+                        "conversation_id": final_cid,
+                        "old_conversation_id": raw_cid if (raw_cid and raw_cid != final_cid) else None,
+                        "turn_id": turn_id,
+                        "status": "AUTH_REQUIRED",
+                        "stop_reason": "auth_required",
+                    })
+                    asyncio.create_task(self.trigger_in_app_login(turn_id=turn_id, cid=final_cid))
+                    return
                 usage_info = prompt_res.get("usage") or {}
                 if usage_info:
                     usage_summary["input_tokens"] = usage_info.get("inputTokens", usage_summary["input_tokens"])
@@ -5684,9 +5825,11 @@ class AgyProcessOrchestrator:
                     }
                 )
 
-                if final_cid:
+                if final_cid and is_view_match:
                     self.active_view_cid = final_cid
                     save_app_settings({"last_active_cid": final_cid})
+                elif final_cid and final_cid != self.active_view_cid:
+                    self.unread_sessions.add(final_cid)
                 await self.broadcast(
                     {
                         "type": "session_list",
@@ -5707,7 +5850,29 @@ class AgyProcessOrchestrator:
 
             except Exception as e:
                 logger.error("Error in ACP turn [%s]: %s", cid[:8] if cid else "new", e)
-                if ctx.interrupted:
+                err_str = str(e).lower()
+                is_auth_error = any(kw in err_str for kw in ("auth", "401", "unauthenticated", "token source", "not logged in", "authentication required"))
+                if is_auth_error and not ctx.interrupted:
+                    logger.warning("ACP auth exception detected in turn [%s]: %s", turn_id, e)
+                    self._pending_auth_prompt = prompt
+                    self._pending_auth_attachments = attachments or []
+                    self.auth_cid = final_cid
+                    self.auth_turn_id = turn_id
+                    await self.broadcast({
+                        "type": "auth_required",
+                        "reason": "expired",
+                        "conversation_id": final_cid,
+                    })
+                    await self.broadcast({
+                        "type": "turn_complete",
+                        "conversation_id": final_cid,
+                        "old_conversation_id": raw_cid if (raw_cid and raw_cid != final_cid) else None,
+                        "turn_id": turn_id,
+                        "status": "AUTH_REQUIRED",
+                        "stop_reason": "auth_required",
+                    })
+                    asyncio.create_task(self.trigger_in_app_login(turn_id=turn_id, cid=final_cid))
+                elif ctx.interrupted:
                     await self.broadcast(
                         {
                             "type": "turn_complete",
@@ -5739,6 +5904,8 @@ class AgyProcessOrchestrator:
                         }
                     )
             finally:
+                if is_background_feedback:
+                    ctx.is_background_feedback_running = False
                 ctx.is_running = False
                 ctx.current_turn_id = None
                 ctx.active_snapshot = None
@@ -5880,6 +6047,12 @@ class AgyProcessOrchestrator:
                     await cb_res
             except Exception as exc:
                 logger.warning("Error in on_auth_success_cb: %s", exc)
+
+        # Recycle ACP daemon so it picks up refreshed OAuth credentials (ARGON-V18-04)
+        try:
+            await self.recycle_acp_daemon()
+        except Exception as exc:
+            logger.warning("Error recycling ACP daemon after auth success: %s", exc)
 
         if pending_prompt:
             logger.info("Resuming pending prompt after successful authentication on [%s]: %s", target_cid or "active", pending_prompt[:60])
@@ -6271,6 +6444,11 @@ class AgyProcessOrchestrator:
                 if not isinstance(msg, dict):
                     continue
 
+                method = msg.get("method")
+                if method:
+                    await self._handle_acp_notification(msg)
+                    continue
+
                 req_id = msg.get("id")
                 if req_id is not None and req_id in self._pending_requests:
                     fut = self._pending_requests[req_id]
@@ -6281,10 +6459,6 @@ class AgyProcessOrchestrator:
                         else:
                             fut.set_result(msg.get("result", {}))
                     continue
-
-                method = msg.get("method")
-                if method:
-                    await self._handle_acp_notification(msg)
 
             except asyncio.CancelledError:
                 break
@@ -8769,7 +8943,7 @@ class AgyWebServer:
                             "unread_sessions": list(self.orchestrator.unread_sessions),
                             "active_background_tasks": [
                                 {
-                                    "task_id": bg_id,
+                                    "task_id": bg_info.get("task_id") or (bg_id.split("/")[-1] if "/" in bg_id else bg_id),
                                     "conversation_id": bg_info.get("conversation_id"),
                                     "summary": bg_info.get("summary"),
                                     "start_time": bg_info.get("start_time"),
@@ -8824,7 +8998,7 @@ class AgyWebServer:
                                     } if (ctx.is_running and ctx.active_snapshot) else None,
                                     "active_background_tasks": [
                                         {
-                                            "task_id": bg_id,
+                                            "task_id": bg_info.get("task_id") or (bg_id.split("/")[-1] if "/" in bg_id else bg_id),
                                             "conversation_id": bg_info.get("conversation_id"),
                                             "summary": bg_info.get("summary"),
                                             "start_time": bg_info.get("start_time"),
@@ -9711,6 +9885,27 @@ class AgyWebServer:
             if not prompt:
                 return
 
+            # If there are pending background task completions for this session,
+            # cancel the standalone feedback turn and prepend them directly to the prompt!
+            if cid:
+                pending_comps = self.orchestrator._pending_task_completions.pop(cid, [])
+                if cid in self.orchestrator._pending_task_timers:
+                    self.orchestrator._pending_task_timers.pop(cid).cancel()
+
+                if pending_comps:
+                    comp_lines = "\n\n".join(
+                        f"<SYSTEM_MESSAGE>\n"
+                        f"[Background Task Completed]\n"
+                        f"Task: {c['summary']} ({c['task_key']})\n"
+                        f"Exit Code: {c['exit_code']}\n"
+                        f"Duration: {int(c['duration'])}s\n"
+                        f"Command Output:\n"
+                        f"{c['output_snippet'] if c['output_snippet'] else '(No output)'}\n"
+                        f"</SYSTEM_MESSAGE>"
+                        for c in pending_comps
+                    )
+                    prompt = f"{comp_lines}\n\n{prompt}"
+
             # Update session execution context if sent with prompt
             if cid:
                 ctx = self.orchestrator.get_or_create_context(cid)
@@ -9803,7 +9998,9 @@ class AgyWebServer:
             logger.info("User requested stop for background task: %s (cid: %s)", task_key, cid)
             self.orchestrator.stop_background_task(cid, task_key)
 
-            t_info = self.orchestrator.active_background_tasks.pop(task_key, None) or self.orchestrator.active_background_tasks.pop(full_task_id, None)
+            t_info = self.orchestrator.active_background_tasks.pop(full_task_id, None)
+            t_info_legacy = self.orchestrator.active_background_tasks.pop(task_key, None)
+            t_info = t_info or t_info_legacy
             self.orchestrator._seen_completed_tasks.add(task_key)
             self.orchestrator._seen_completed_tasks.add(full_task_id)
 
@@ -9882,7 +10079,7 @@ class AgyWebServer:
                     } if (ctx.is_running and ctx.active_snapshot) else None,
                     "active_background_tasks": [
                         {
-                            "task_id": bg_id,
+                            "task_id": bg_info.get("task_id") or (bg_id.split("/")[-1] if "/" in bg_id else bg_id),
                             "conversation_id": bg_info.get("conversation_id"),
                             "summary": bg_info.get("summary"),
                             "start_time": bg_info.get("start_time"),
@@ -9902,10 +10099,11 @@ class AgyWebServer:
                     and bg_id not in self.orchestrator._seen_completed_tasks
                     and bg_id not in self.orchestrator._stopped_by_user_tasks
                 ):
+                    task_short_id = bg_info.get("task_id") or (bg_id.split("/")[-1] if "/" in bg_id else bg_id)
                     await self.broadcast({
                         "type": "background_task_started",
                         "conversation_id": cid,
-                        "task_id": bg_id,
+                        "task_id": task_short_id,
                         "summary": bg_info["summary"],
                         "start_time": bg_info["start_time"],
                     })
@@ -11075,6 +11273,15 @@ async def main() -> None:
         try:
             if PID_FILE.exists():
                 PID_FILE.unlink()
+        except Exception:
+            pass
+        try:
+            if app.orchestrator.acp_proc:
+                app.orchestrator.acp_proc.terminate()
+                try:
+                    await asyncio.wait_for(app.orchestrator.acp_proc.wait(), timeout=2.0)
+                except Exception:
+                    app.orchestrator.acp_proc.kill()
         except Exception:
             pass
         await app.stop_ipc_server()

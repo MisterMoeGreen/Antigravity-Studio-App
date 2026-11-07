@@ -415,7 +415,8 @@ object AgyNotificationManager {
         conversationId: String,
         sessionTitle: String,
         rawPreview: String,
-        turnStatus: String = "COMPLETED"
+        turnStatus: String = "COMPLETED",
+        isBackgroundTask: Boolean = false
     ) {
         val wasAbortedByUser: Boolean
         val isDuplicateCompletion: Boolean
@@ -443,10 +444,10 @@ object AgyNotificationManager {
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
         val cleanPreview = sanitizeMarkdownPreview(rawPreview)
         val displayTitle = sessionTitle.trim().ifEmpty { "Session ${conversationId.take(6)}" }
-        val statusHeading = if (turnStatus.equals("ERROR", ignoreCase = true)) {
-            "Agent encountered an error"
+        val statusHeading = if (isBackgroundTask) {
+            if (turnStatus.equals("ERROR", ignoreCase = true)) "Background task failed" else "Background task finished"
         } else {
-            "Agent finished"
+            if (turnStatus.equals("ERROR", ignoreCase = true)) "Agent encountered an error" else "Agent finished"
         }
 
         val clickIntent = Intent(context, MainActivity::class.java).apply {
@@ -532,7 +533,8 @@ object AgyNotificationManager {
                     migrateSession(context, oldCid, newCid)
                 }
                 "turn_complete", "task_completed" -> {
-                    val summary = obj.optString("title", if (event == "task_completed") "Background task finished" else "")
+                    val isBackgroundTask = (event == "task_completed")
+                    val summary = obj.optString("title", if (isBackgroundTask) "Background task finished" else "")
                     val status = obj.optString("status", "COMPLETED")
                     val preview = obj.optString("preview", "")
                     val finalPreview = if (preview.isNotBlank()) preview else status
@@ -542,7 +544,8 @@ object AgyNotificationManager {
                         conversationId = cid,
                         sessionTitle = summary,
                         rawPreview = finalPreview,
-                        turnStatus = if (exitCode == 0 && !status.equals("ERROR", ignoreCase = true)) "COMPLETED" else "ERROR"
+                        turnStatus = if (exitCode == 0 && !status.equals("ERROR", ignoreCase = true)) "COMPLETED" else "ERROR",
+                        isBackgroundTask = isBackgroundTask
                     )
                 }
             }
