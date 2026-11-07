@@ -2644,10 +2644,24 @@ class AntigravityStorageEngine:
                             break
                         new_data.extend(_encode_varint(tag))
                         new_data.extend(_encode_varint(val))
+                    elif wire == 1:
+                        fixed64 = s.read(8)
+                        if len(fixed64) < 8:
+                            break
+                        new_data.extend(_encode_varint(tag))
+                        new_data.extend(fixed64)
+                    elif wire == 5:
+                        fixed32 = s.read(4)
+                        if len(fixed32) < 4:
+                            break
+                        new_data.extend(_encode_varint(tag))
+                        new_data.extend(fixed32)
                     else:
                         break
                 if pruned:
-                    pb_path.write_bytes(bytes(new_data))
+                    tmp_pb = pb_path.with_suffix(pb_path.suffix + ".tmp")
+                    tmp_pb.write_bytes(bytes(new_data))
+                    os.replace(tmp_pb, pb_path)
                     logger.info("Purged ghost sessions from %s, new size: %d", filename, len(new_data))
             except Exception as exc:
                 logger.warning("Error pruning ghost sessions from %s: %s", filename, exc)
@@ -3051,11 +3065,25 @@ class AntigravityStorageEngine:
                             break
                         new_data.extend(_encode_varint(tag))
                         new_data.extend(_encode_varint(val))
+                    elif wire == 1:
+                        fixed64 = s.read(8)
+                        if len(fixed64) < 8:
+                            break
+                        new_data.extend(_encode_varint(tag))
+                        new_data.extend(fixed64)
+                    elif wire == 5:
+                        fixed32 = s.read(4)
+                        if len(fixed32) < 4:
+                            break
+                        new_data.extend(_encode_varint(tag))
+                        new_data.extend(fixed32)
                     else:
                         break
 
                 if pruned:
-                    pb_path.write_bytes(bytes(new_data))
+                    tmp_pb = pb_path.with_suffix(pb_path.suffix + ".tmp")
+                    tmp_pb.write_bytes(bytes(new_data))
+                    os.replace(tmp_pb, pb_path)
                     logger.info("Pruned session %s from %s", cid, filename)
             except Exception as exc:
                 logger.warning("Failed pruning %s from %s: %s", cid, filename, exc)
@@ -3982,6 +4010,7 @@ class AgyProcessOrchestrator:
         # Persistent ACP Daemon Lifecycle (v1.8.0)
         self.acp_proc: Optional[asyncio.subprocess.Process] = None
         self.acp_lock: asyncio.Lock = asyncio.Lock()
+        self._acp_stdin_lock: asyncio.Lock = asyncio.Lock()
         self._acp_request_id: int = 0
         self._pending_requests: dict[int, asyncio.Future] = {}
         self._acp_sessions: dict[str, str] = {}
@@ -4150,6 +4179,11 @@ class AgyProcessOrchestrator:
                     pass
                 self.acp_proc = None
                 self._acp_initialized = False
+
+            # Clear in-memory session mappings so fresh daemon starts clean (ARGON-18-02)
+            self._acp_sessions.clear()
+            self._acp_session_to_cid.clear()
+            self._acp_loading_sessions.clear()
 
             try:
                 self.storage.purge_all_ghost_sessions()
@@ -4364,10 +4398,11 @@ class AgyProcessOrchestrator:
             if BRAIN_DIR.exists():
                 for mfile in BRAIN_DIR.glob("*/.system_generated/messages/*.json"):
                     self._seen_bg_message_files.add(mfile.name)
+                    cid_parent = mfile.parent.parent.parent.name
                     try:
                         content = mfile.read_text(encoding="utf-8", errors="replace")
                         for m in re.finditer(r"task-(\d+)", content):
-                            self._seen_completed_tasks.add(f"task-{m.group(1)}")
+                            self._seen_completed_tasks.add(f"{cid_parent}/task-{m.group(1)}")
                     except Exception:
                         pass
         except Exception as e:
@@ -4407,7 +4442,7 @@ class AgyProcessOrchestrator:
                         task_key = task_file.stem  # e.g. "task-1297"
                         full_task_id = f"{cid}/{task_key}"
 
-                        if task_key in self._seen_completed_tasks or full_task_id in self._seen_completed_tasks:
+                        if full_task_id in self._seen_completed_tasks:
                             continue
 
                         is_completed = False
@@ -4582,7 +4617,7 @@ class AgyProcessOrchestrator:
                                 except Exception:
                                     age = 0
                                 if age > 7200:
-                                    self._seen_completed_tasks.add(task_key)
+                                    self._seen_completed_tasks.add(full_task_id)
                                     continue
 
                                 # Extract exact task command from transcript.jsonl
@@ -4623,8 +4658,6 @@ class AgyProcessOrchestrator:
 
                                 clean_task = re.sub(r'[\x22\x27]', '', ' '.join(task_cmd.split())).strip().lower() if task_cmd else ""
                                 matched_pid: Optional[int] = None
-                                fallback_pid: Optional[int] = None
-                                fallback_starttime: int = -1
 
                                 if self.acp_proc and self.acp_proc.pid:
                                     try:
@@ -4645,21 +4678,16 @@ class AgyProcessOrchestrator:
                                                     continue
 
                                                 clean_c = re.sub(r'[\x22\x27]', '', ' '.join(raw_c.split())).strip().lower()
-                                                p_st = int(stat_parts[19]) if len(stat_parts) > 19 else p_int
 
                                                 if clean_task and (clean_c == clean_task or clean_task in clean_c or clean_c in clean_task):
                                                     matched_pid = p_int
                                                     break
-
-                                                if p_st > fallback_starttime:
-                                                    fallback_starttime = p_st
-                                                    fallback_pid = p_int
                                             except Exception:
                                                 pass
                                     except Exception:
                                         pass
 
-                                final_pid = matched_pid if matched_pid is not None else fallback_pid
+                                final_pid = matched_pid
 
                                 t_info = {
                                     "task_id": task_key,
@@ -4670,6 +4698,7 @@ class AgyProcessOrchestrator:
                                     "pid": final_pid,
                                     "spawned_during_turn_id": getattr(ctx, "current_turn_id", None) if ctx else None,
                                 }
+                                self.active_background_tasks[full_task_id] = t_info
                                 self.active_background_tasks[task_key] = t_info
                                 await self.broadcast({
                                     "type": "background_task_started",
@@ -4700,8 +4729,9 @@ class AgyProcessOrchestrator:
             "params": params,
         }
         line = json.dumps(payload) + "\n"
-        self.acp_proc.stdin.write(line.encode("utf-8"))
-        await self.acp_proc.stdin.drain()
+        async with self._acp_stdin_lock:
+            self.acp_proc.stdin.write(line.encode("utf-8"))
+            await self.acp_proc.stdin.drain()
 
         try:
             return await asyncio.wait_for(fut, timeout=timeout)
@@ -4718,8 +4748,9 @@ class AgyProcessOrchestrator:
             "params": params,
         }
         line = json.dumps(payload) + "\n"
-        self.acp_proc.stdin.write(line.encode("utf-8"))
-        await self.acp_proc.stdin.drain()
+        async with self._acp_stdin_lock:
+            self.acp_proc.stdin.write(line.encode("utf-8"))
+            await self.acp_proc.stdin.drain()
 
     def _schedule_spontaneous_turn_watchdog(self, cid: str, ctx: SessionExecutionContext) -> None:
         if cid in self._spontaneous_turn_watchdogs:
@@ -4849,8 +4880,9 @@ class AgyProcessOrchestrator:
                     },
                 }
                 if self.acp_proc and self.acp_proc.stdin:
-                    self.acp_proc.stdin.write((json.dumps(resp) + "\n").encode("utf-8"))
-                    await self.acp_proc.stdin.drain()
+                    async with self._acp_stdin_lock:
+                        self.acp_proc.stdin.write((json.dumps(resp) + "\n").encode("utf-8"))
+                        await self.acp_proc.stdin.drain()
 
     def build_cli_args(
         self,
@@ -5151,11 +5183,17 @@ class AgyProcessOrchestrator:
                                 await self.acp_call("session/resume", {"sessionId": cid, "workspaceUris": [ws_uri]}, timeout=15.0)
                                 acp_session_id = cid
                             except Exception as resume_err:
-                                logger.debug("session/resume failed for %s, falling back to session/new: %s", cid, resume_err)
-                                load_new = await self.acp_call("session/new", {"workspaceUris": [ws_uri]}, timeout=30.0)
-                                real_cid = str(load_new.get("sessionId") or cid)
-                                acp_session_id = real_cid
-                                self._acp_session_to_cid[real_cid] = cid
+                                logger.debug("session/resume failed for %s, trying session/load: %s", cid, resume_err)
+                                try:
+                                    # Fallback 1: session/load restores session history without history fracture
+                                    await self.acp_call("session/load", {"sessionId": cid}, timeout=30.0)
+                                    acp_session_id = cid
+                                except Exception as load_err:
+                                    logger.debug("session/load failed for %s, falling back to session/new: %s", cid, load_err)
+                                    load_new = await self.acp_call("session/new", {"workspaceUris": [ws_uri]}, timeout=30.0)
+                                    real_cid = str(load_new.get("sessionId") or cid)
+                                    acp_session_id = real_cid
+                                    self._acp_session_to_cid[real_cid] = cid
                             self._acp_sessions[cid] = acp_session_id
                             self._acp_session_to_cid[acp_session_id] = cid
                         finally:
@@ -5239,7 +5277,8 @@ class AgyProcessOrchestrator:
                         "status": "Thinking...",
                     }
                 )
-                if final_cid:
+                is_view_match = (is_new_session or self.active_view_cid in (None, raw_cid, final_cid))
+                if final_cid and is_view_match:
                     self.active_view_cid = final_cid
                     save_app_settings({"last_active_cid": final_cid})
                 await self.broadcast(
@@ -5257,6 +5296,27 @@ class AgyProcessOrchestrator:
                 }, timeout=3600.0)
 
                 stop_reason = prompt_res.get("stopReason", "end_turn")
+                if stop_reason == "auth_required":
+                    logger.warning("Auth expired mid-session during turn [%s]", turn_id)
+                    self._pending_auth_prompt = prompt
+                    self._pending_auth_attachments = attachments or []
+                    self.auth_cid = final_cid
+                    self.auth_turn_id = turn_id
+                    await self.broadcast({
+                        "type": "auth_required",
+                        "reason": "expired",
+                        "conversation_id": final_cid,
+                    })
+                    await self.broadcast({
+                        "type": "turn_complete",
+                        "conversation_id": final_cid,
+                        "old_conversation_id": raw_cid if (raw_cid and raw_cid != final_cid) else None,
+                        "turn_id": turn_id,
+                        "status": "AUTH_REQUIRED",
+                        "stop_reason": "auth_required",
+                    })
+                    asyncio.create_task(self.trigger_in_app_login(turn_id=turn_id, cid=final_cid))
+                    return
                 usage_info = prompt_res.get("usage") or {}
                 if usage_info:
                     usage_summary["input_tokens"] = usage_info.get("inputTokens", usage_summary["input_tokens"])
@@ -5302,9 +5362,11 @@ class AgyProcessOrchestrator:
                     }
                 )
 
-                if final_cid:
+                if final_cid and is_view_match:
                     self.active_view_cid = final_cid
                     save_app_settings({"last_active_cid": final_cid})
+                elif final_cid and final_cid != self.active_view_cid:
+                    self.unread_sessions.add(final_cid)
                 await self.broadcast(
                     {
                         "type": "session_list",
@@ -5325,7 +5387,29 @@ class AgyProcessOrchestrator:
 
             except Exception as e:
                 logger.error("Error in ACP turn [%s]: %s", cid[:8] if cid else "new", e)
-                if ctx.interrupted:
+                err_str = str(e).lower()
+                is_auth_error = any(kw in err_str for kw in ("auth", "401", "unauthenticated", "token source", "not logged in", "authentication required"))
+                if is_auth_error and not ctx.interrupted:
+                    logger.warning("ACP auth exception detected in turn [%s]: %s", turn_id, e)
+                    self._pending_auth_prompt = prompt
+                    self._pending_auth_attachments = attachments or []
+                    self.auth_cid = final_cid
+                    self.auth_turn_id = turn_id
+                    await self.broadcast({
+                        "type": "auth_required",
+                        "reason": "expired",
+                        "conversation_id": final_cid,
+                    })
+                    await self.broadcast({
+                        "type": "turn_complete",
+                        "conversation_id": final_cid,
+                        "old_conversation_id": raw_cid if (raw_cid and raw_cid != final_cid) else None,
+                        "turn_id": turn_id,
+                        "status": "AUTH_REQUIRED",
+                        "stop_reason": "auth_required",
+                    })
+                    asyncio.create_task(self.trigger_in_app_login(turn_id=turn_id, cid=final_cid))
+                elif ctx.interrupted:
                     await self.broadcast(
                         {
                             "type": "turn_complete",
@@ -5498,6 +5582,12 @@ class AgyProcessOrchestrator:
                     await cb_res
             except Exception as exc:
                 logger.warning("Error in on_auth_success_cb: %s", exc)
+
+        # Recycle ACP daemon so it picks up refreshed OAuth credentials (ARGON-V18-04)
+        try:
+            await self.recycle_acp_daemon()
+        except Exception as exc:
+            logger.warning("Error recycling ACP daemon after auth success: %s", exc)
 
         if pending_prompt:
             logger.info("Resuming pending prompt after successful authentication on [%s]: %s", target_cid or "active", pending_prompt[:60])
@@ -5889,6 +5979,11 @@ class AgyProcessOrchestrator:
                 if not isinstance(msg, dict):
                     continue
 
+                method = msg.get("method")
+                if method:
+                    await self._handle_acp_notification(msg)
+                    continue
+
                 req_id = msg.get("id")
                 if req_id is not None and req_id in self._pending_requests:
                     fut = self._pending_requests[req_id]
@@ -5899,10 +5994,6 @@ class AgyProcessOrchestrator:
                         else:
                             fut.set_result(msg.get("result", {}))
                     continue
-
-                method = msg.get("method")
-                if method:
-                    await self._handle_acp_notification(msg)
 
             except asyncio.CancelledError:
                 break
@@ -10000,6 +10091,15 @@ async def main() -> None:
         try:
             if PID_FILE.exists():
                 PID_FILE.unlink()
+        except Exception:
+            pass
+        try:
+            if app.orchestrator.acp_proc:
+                app.orchestrator.acp_proc.terminate()
+                try:
+                    await asyncio.wait_for(app.orchestrator.acp_proc.wait(), timeout=2.0)
+                except Exception:
+                    app.orchestrator.acp_proc.kill()
         except Exception:
             pass
         await app.stop_ipc_server()

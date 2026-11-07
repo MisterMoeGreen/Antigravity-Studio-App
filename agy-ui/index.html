@@ -1038,7 +1038,10 @@
       background: rgba(59, 130, 246, 0.12);
       border: 1px solid rgba(59, 130, 246, 0.25);
       border-radius: 6px;
-      padding: 3px 8px;
+      padding: 6px 10px;
+      min-height: 38px;
+      touch-action: manipulation;
+      cursor: pointer;
       user-select: none;
       overflow: hidden;
       white-space: nowrap;
@@ -3584,7 +3587,7 @@
     <div class="sheet-handle"></div>
     <div class="sheet-title">
       <span>Active Background Jobs (<span id="bgTaskSheetCount">0</span>)</span>
-      <button class="icon-btn" id="btnCloseBgTaskAction" style="width:30px;height:30px;" title="Close"><svg class="fa-icon" viewBox="0 0 384 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M342.6 150.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L192 210.7 86.6 105.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L146.7 256 41.4 361.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192 301.3 297.4 406.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L237.3 256 342.6 150.6z"/></svg></button>
+      <button class="icon-btn" id="btnCloseBgTaskAction" style="width:44px;height:44px;display:flex;align-items:center;justify-content:center;" title="Close"><svg class="fa-icon" viewBox="0 0 384 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M342.6 150.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L192 210.7 86.6 105.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L146.7 256 41.4 361.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192 301.3 297.4 406.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L237.3 256 342.6 150.6z"/></svg></button>
     </div>
     <div class="sheet-list" id="bgTaskSheetList" style="max-height:50vh; overflow-y:auto; padding-bottom:12px;"></div>
   </section>
@@ -7269,12 +7272,10 @@
       }
 
       function isDraftOrMatchesSession(cid) {
-        if (!cid) return true;
-        if (state.conversationId === cid) return true;
-        if (!state.conversationId || state.conversationId === 'default' || state.conversationId === 'session-draft') {
-          return true;
+        if (!cid || cid === 'default' || cid === 'session-draft') {
+          return !state.conversationId || state.conversationId === 'default' || state.conversationId === 'session-draft';
         }
-        return false;
+        return state.conversationId === cid;
       }
 
       function getTasksForCurrentSession() {
@@ -7350,7 +7351,7 @@
 
           const btnStop = document.createElement('button');
           btnStop.className = 'btn-stop-bg-task';
-          btnStop.style.cssText = 'background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.35);color:#f87171;font-weight:600;font-size:12px;padding:6px 14px;border-radius:6px;cursor:pointer;flex-shrink:0;touch-action:manipulation;';
+          btnStop.style.cssText = 'min-height:44px;min-width:64px;display:inline-flex;align-items:center;justify-content:center;background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.35);color:#f87171;font-weight:600;font-size:13px;padding:8px 16px;border-radius:6px;cursor:pointer;flex-shrink:0;touch-action:manipulation;';
           btnStop.textContent = 'Stop';
           btnStop.addEventListener('click', (ev) => {
             ev.stopPropagation();

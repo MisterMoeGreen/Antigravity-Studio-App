@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONObject
+import kotlin.concurrent.thread
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
@@ -237,7 +238,7 @@ class AgyForegroundService : Service() {
                 }
                 pidFile.delete()
             }
-            // Scan /proc for any leftover server.py instances belonging to this UID
+            // Scan /proc for any leftover server.py or agy daemon instances belonging to this UID
             val procDir = File("/proc")
             procDir.listFiles()?.forEach { file ->
                 if (file.isDirectory && file.name.all { it.isDigit() }) {
@@ -245,7 +246,7 @@ class AgyForegroundService : Service() {
                     if (pid != myPid) {
                         try {
                             val cmdline = File(file, "cmdline").readText()
-                            if (cmdline.contains("server.py")) {
+                            if (cmdline.contains("server.py") || cmdline.contains("/opt/agy/agy") || cmdline.contains("agy acp")) {
                                 android.system.Os.kill(pid, 9)
                             }
                         } catch (_: Exception) {}
@@ -255,6 +256,7 @@ class AgyForegroundService : Service() {
             val pkillBin = File("$usr/bin/pkill")
             if (pkillBin.exists()) {
                 Runtime.getRuntime().exec(arrayOf(pkillBin.absolutePath, "-9", "-f", "server.py")).waitFor()
+                Runtime.getRuntime().exec(arrayOf(pkillBin.absolutePath, "-9", "-f", "/opt/agy/agy")).waitFor()
             }
         } catch (_: Exception) {}
     }
@@ -343,8 +345,12 @@ class AgyForegroundService : Service() {
             daemonProcess = null
         } catch (_: Exception) {}
         try {
+            thread(isDaemon = true, name = "AgyCleanup") {
+                cleanupStaleDaemonProcesses()
+            }
+        } catch (_: Exception) {
             cleanupStaleDaemonProcesses()
-        } catch (_: Exception) {}
+        }
         networkCallback?.let {
             val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             try { cm.unregisterNetworkCallback(it) } catch (_: Exception) {}
