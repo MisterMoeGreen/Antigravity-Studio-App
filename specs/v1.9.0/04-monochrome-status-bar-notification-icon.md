@@ -88,6 +88,23 @@ val pendingIntent = PendingIntent.getActivity(
     pendingIntentFlags
 )
 
+// ARCH-V19-11: Safe AdaptiveIconDrawable -> Bitmap conversion
+// On Android 8.0+ (API 26+), R.mipmap.ic_launcher is an XML AdaptiveIconDrawable;
+// BitmapFactory.decodeResource() returns null when passed an XML drawable.
+private fun getLauncherLargeIconBitmap(): Bitmap? {
+    val drawable = ContextCompat.getDrawable(this, R.mipmap.ic_launcher) ?: return null
+    if (drawable is BitmapDrawable && drawable.bitmap != null) {
+        return drawable.bitmap
+    }
+    val width = if (drawable.intrinsicWidth > 0) drawable.intrinsicWidth else 192
+    val height = if (drawable.intrinsicHeight > 0) drawable.intrinsicHeight else 192
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    drawable.setBounds(0, 0, canvas.width, canvas.height)
+    drawable.draw(canvas)
+    return bitmap
+}
+
 // Build notification for background daemon and progress updates
 val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID_FOREGROUND)
     // Small Icon: Monochrome silhouette for Status Bar
@@ -96,8 +113,8 @@ val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID_FOREGROUND
     // Brand Accent Color: Tints the small icon in expanded notification shade
     .setColor(ContextCompat.getColor(this, R.color.brand_primary))
     
-    // Large Icon: Full-color app logo in expanded shade card
-    .setLargeIcon(BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher))
+    // Large Icon: Full-color app logo in expanded shade card (via Canvas helper)
+    .setLargeIcon(getLauncherLargeIconBitmap())
     
     .setContentTitle(title)
     .setContentText(message)
@@ -130,3 +147,4 @@ To verify visual clarity across different Android display densities, the vector 
 - [ ] **AC-NOTIF-03**: Status bar notifications display the sharp Antigravity portal silhouette with zero generic "A" placeholders.
 - [ ] **AC-NOTIF-04**: Pulling down the notification shade reveals the full-color app logo as the Large Icon.
 - [ ] **AC-NOTIF-05**: Icon renders properly on both Dark Mode and Light Mode status bars without clipping.
+- [ ] **AC-NOTIF-06**: `getLauncherLargeIconBitmap()` safely converts `AdaptiveIconDrawable` to `Bitmap` via `Canvas`, ensuring `setLargeIcon` renders a non-null icon on Android 8.0+ (API 26–35).

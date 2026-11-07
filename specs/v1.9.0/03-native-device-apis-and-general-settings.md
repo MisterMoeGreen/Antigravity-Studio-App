@@ -64,7 +64,7 @@ Inside `viewGeneralSettings`, device permissions are structured with a Master Sw
 └─────────────────────────────────────────────────────────────┘
 ```
 
-* **Persistence**: Settings are stored in `~/.gemini/app_settings.json` and mirrored in Android `SharedPreferences`.
+* **Host-Authoritative Persistence (ARCH-V19-08)**: To prevent same-UID privilege escalation (where an autonomous agent edits `~/.gemini/app_settings.json` to enable device APIs), device permissions are stored **exclusively** in the host Android layer (`SharedPreferences` in `/data/data/ai.agy.app/shared_prefs/`). They can **only** be modified via native `@JavascriptInterface` calls (`AndroidApp.setDeviceApiToggle(key, enabled)`) triggered by direct user touch events in the Settings UI. Configuration files inside `~/.gemini/` are strictly non-authoritative.
 * **OS Permission Prompts**: When the user activates toggles requiring Android dangerous permissions (e.g. Location or Camera), the Android app immediately calls `ActivityCompat.requestPermissions()`. If denied, the toggle automatically reverts to unchecked.
 
 ---
@@ -79,23 +79,23 @@ sequenceDiagram
     actor Agent as Agent Script / CLI (agy-device)
     participant Sock as device_api.sock (~/.gemini/antigravity-cli/)
     participant Bridge as Android IPC Bridge (ai.agy.app)
-    participant Perms as Permission Gatekeeper
+    participant Perms as Host SharedPreferences Gatekeeper
     participant OS as Android OS Services
 
     Agent->>Sock: Connect & Send JSON {"action": "battery_status"}
-    Sock->>Bridge: Read request line
-    Bridge->>Perms: Check Master Switch & Feature Flag
+    Sock->>Bridge: Read request line (Max 64KB, 15s timeout)
+    Bridge->>Perms: Query Host SharedPreferences (Master Switch & Feature Flag)
     
     alt Master Switch is OFF or Feature Flag is FALSE
         Perms-->>Bridge: Rejected
         Bridge-->>Sock: {"status": "error", "code": "FEATURE_DISABLED", "message": "Device API is disabled in General Settings"}
         Sock-->>Agent: Error exit code 1
     else Permission Check Passes
-        Bridge->>Perms: Check Android Runtime Permission
-        alt OS Permission Missing
-            Bridge-->>Sock: {"status": "error", "code": "OS_PERMISSION_DENIED", "message": "Missing Android OS permission"}
+        Bridge->>Perms: Check Android Runtime Permission & Foreground Focus
+        alt OS Permission Missing or Backgrounded
+            Bridge-->>Sock: {"status": "error", "code": "PERMISSION_DENIED", "message": "Missing Android OS permission or required window focus"}
             Sock-->>Agent: Error exit code 1
-        else OS Permission Granted
+        else OS Permission Granted & Focus Valid
             Bridge->>OS: Invoke BatteryManager / NotificationManager
             OS-->>Bridge: Result (level: 85%, charging: true)
             Bridge-->>Sock: {"status": "ok", "data": {"level": 85, "charging": true}}
@@ -108,15 +108,21 @@ sequenceDiagram
 * **Path**: `/data/data/ai.agy.app/files/home/.gemini/antigravity-cli/device_api.sock`.
 * **VFS Invariant (ARCH-V19-06)**: Must be hosted strictly on internal ext4 storage (`~/.gemini/antigravity-cli/`). Creating UNIX domain sockets on Android FUSE shared storage (`/storage/emulated/0/...`) is strictly prohibited as FUSE does not support AF_UNIX sockets or POSIX `0600` permissions.
 * **File Permissions**: `0600` (restricted strictly to the app UID).
-* **Protocol**: Line-delimited JSON (`\n`).
+* **Protocol & Framing Guard**: Line-delimited JSON (`\n`). Handlers enforce a maximum line length of 64KB (`BufferedReader` bounded) with a 15-second read timeout per connection to prevent thread exhaustion.
 
-### 3.2 Android 10+ Clipboard & Foreground Focus Invariant (ARCH-V19-05)
-Under Android 10+ (API 29+), `ClipboardManager.getPrimaryClip()` is blocked by the OS unless the requesting application currently holds active window focus. 
-* If `clipboard_get` is requested while the app is backgrounded, the bridge returns:
-  `{"status": "error", "code": "CLIPBOARD_UNFOCUSED", "message": "Clipboard read requires active app window focus on Android 10+"}`.
-* `clipboard_set` remains permitted in the background with user-facing notification feedback.
+### 3.2 Android Security & Input Validation Invariants
+1. **Clipboard Foreground Focus (ARCH-V19-05)**:
+   Under Android 10+ (API 29+), `ClipboardManager.getPrimaryClip()` is blocked by the OS unless the requesting application currently holds active window focus. 
+   * If `clipboard_get` is requested while the app is backgrounded, the bridge returns:
+     `{"status": "error", "code": "CLIPBOARD_UNFOCUSED", "message": "Clipboard read requires active app window focus on Android 10+"}`.
+   * `clipboard_set` remains permitted in the background with user-facing notification feedback.
+2. **`open_url` Scheme Validation (ARCH-V19-09)**:
+   The `open_url` action parses the target URI and strictly enforces `http` or `https` schemes. Schemes such as `file://`, `content://`, `intent://`, or `market://` are rejected with `INVALID_URI_SCHEME` to prevent local file leaking or internal component hijacking.
+3. **`take_photo` Canonical Path Containment & Foreground Focus (ARCH-V19-10)**:
+   * **Path Containment**: The `dest_path` parameter is resolved to its `canonicalFile` and must reside strictly within the workspace directory or home directory (`~`). Paths escaping these bounds are rejected with `PATH_VIOLATION`.
+   * **Foreground State**: Under Android 9–14+ (targetSdk 35), camera hardware access from a backgrounded UID triggers a `SecurityException`. The bridge verifies that `MainActivity` is in the foreground (`Lifecycle.State.RESUMED`) before opening Camera2; if backgrounded, it returns `CAMERA_REQUIRES_FOREGROUND`.
 
-### 3.2 Supported Subcommands & Actions
+### 3.3 Supported Subcommands & Actions
 
 | Action | Required Permission | Payload Parameters | Return Data |
 | :--- | :--- | :--- | :--- |
@@ -127,8 +133,8 @@ Under Android 10+ (API 29+), `ClipboardManager.getPrimaryClip()` is blocked by t
 | `clipboard_set` | None | `{"text": str}` | `{"status": "ok"}` |
 | `get_location` | `ACCESS_FINE_LOCATION` | `{"accuracy": "balanced\|high"}` | `{"latitude": float, "longitude": float, "altitude": float}` |
 | `tts_speak` | None | `{"text": str, "pitch": float, "rate": float}` | `{"status": "ok"}` |
-| `take_photo` | `CAMERA` | `{"camera": "front\|back", "dest_path": str}` | `{"path": str, "bytes": int}` |
-| `open_url` | None | `{"url": str}` | `{"status": "ok"}` |
+| `take_photo` | `CAMERA` (Foreground) | `{"camera": "front\|back", "dest_path": str}` | `{"path": str, "bytes": int}` |
+| `open_url` | None (`http/https` only) | `{"url": str}` | `{"status": "ok"}` |
 
 ---
 
@@ -172,3 +178,6 @@ When Device APIs are toggled OFF in Settings, `device-mcp` is immediately unregi
 - [ ] **AC-DEV-04**: Toggling Location or Camera activates Android's native `ActivityCompat.requestPermissions()` dialog.
 - [ ] **AC-DEV-05**: Battery and notification commands communicate seamlessly over `device_api.sock` with zero Termux dependencies.
 - [ ] **AC-DEV-06**: Toggling Device APIs OFF unregisters `device-mcp` tools from the agent's active ACP capabilities.
+- [ ] **AC-DEV-07**: Device API Master Switch and sub-toggles are stored exclusively in host Android `SharedPreferences` and cannot be mutated by editing `~/.gemini/app_settings.json`.
+- [ ] **AC-DEV-08**: `open_url` rejects non-http/https schemes (`file://`, `intent://`), and `take_photo` enforces canonical workspace path containment.
+- [ ] **AC-DEV-09**: `take_photo` verifies `MainActivity` foreground lifecycle state (`RESUMED`) on Android 14+ (targetSdk 35) before accessing Camera2.

@@ -112,6 +112,37 @@ The mapping between proxy endpoints and real targets is held in secure app-priva
 The route `/mcp-proxy/{server_name}` in `server.py` handles all HTTP methods (POST, GET, SSE streaming):
 
 ```python
+import ipaddress
+import socket
+import urllib.parse
+from aiohttp import ClientTimeout, web
+
+class McpSecurityGate:
+    @staticmethod
+    def is_safe_upstream_url(url: str) -> bool:
+        """Validate that upstream URL is HTTP/HTTPS and does not resolve to loopback/internal IPs (ARCH-V19-01)."""
+        try:
+            parsed = urllib.parse.urlparse(url)
+            if parsed.scheme not in ("http", "https") or not parsed.hostname:
+                return False
+            # Resolve all A/AAAA records for hostname to prevent DNS rebinding and IP encoding tricks
+            addr_info = socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
+            for family, _, _, _, sockaddr in addr_info:
+                ip_str = sockaddr[0]
+                ip_obj = ipaddress.ip_address(ip_str)
+                if (
+                    ip_obj.is_loopback
+                    or ip_obj.is_unspecified
+                    or ip_obj.is_link_local
+                    or ip_obj.is_multicast
+                    or (isinstance(ip_obj, ipaddress.IPv6Address) and ip_obj.ipv4_mapped and ip_obj.ipv4_mapped.is_loopback)
+                ):
+                    return False
+            return True
+        except Exception:
+            return False
+
+
 async def handle_mcp_proxy(request: web.Request) -> web.Response:
     server_name = request.match_info["server_name"]
     vault = get_mcp_vault()
@@ -137,61 +168,63 @@ async def handle_mcp_proxy(request: web.Request) -> web.Response:
             status=403,
         )
 
-    upstream_url = server_meta["upstreamUrl"]
+    upstream_base = server_meta["upstreamUrl"]
 
-    # ARCH-V19-01: SSRF & Loopback Target Prevention Gate
-    parsed_target = urllib.parse.urlparse(upstream_url)
-    if parsed_target.hostname in ("127.0.0.1", "localhost", "::1", "0.0.0.0") or (
-        parsed_target.port and parsed_target.port in (PORT, 8081, 8089)
-    ):
-        logger.error("SSRF attempt blocked in MCP proxy: target %s", upstream_url)
+    # Route subpaths (/mcp-proxy/{name}/{subpath:.*}) and append query strings for SSE/JSON-RPC session support
+    subpath = request.match_info.get("subpath", "")
+    target_url = upstream_base.rstrip("/") + ("/" + subpath.lstrip("/") if subpath else "")
+    if request.query_string:
+        sep = "&" if "?" in target_url else "?"
+        target_url = f"{target_url}{sep}{request.query_string}"
+
+    # Strict SSRF & Loopback Prevention Check (ARCH-V19-01)
+    if not McpSecurityGate.is_safe_upstream_url(target_url):
+        logger.error("SSRF attempt blocked in MCP proxy: target %s", target_url)
         return web.json_response(
-            {"error": "Security violation: MCP upstream target cannot resolve to loopback."},
+            {"error": "Security violation: MCP upstream target resolves to forbidden address."},
             status=400,
         )
+
     headers = dict(request.headers)
     headers.pop("Host", None)
     headers.pop("Content-Length", None)
     
-    # In-Flight Secret Injection
+    # In-Flight Secret Injection from Vault
     vault_headers = server_meta.get("headers", {})
     for hk, hv in vault_headers.items():
         headers[hk] = hv
 
     headers["User-Agent"] = f"AntigravityStudio/{APP_VERSION} (MCP-Proxy)"
-
     body = await request.read()
-    timeout = aiohttp.ClientTimeout(total=60.0)
+
+    # Streaming-safe timeout: unbounded total timeout with 300s socket read timeout to preserve SSE streams
+    stream_timeout = ClientTimeout(total=None, sock_connect=15.0, sock_read=300.0)
 
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.request(
-                request.method,
-                upstream_url,
-                headers=headers,
-                data=body,
-                allow_redirects=True,
-            ) as resp:
-                resp_headers = dict(resp.headers)
-                resp_headers.pop("Transfer-Encoding", None)
-                resp_headers.pop("Content-Encoding", None)
+        # Use shared app-scoped ClientSession to preserve connection pooling
+        session = request.app["http_session"]
+        async with session.request(
+            request.method,
+            target_url,
+            headers=headers,
+            data=body,
+            allow_redirects=False,  # Prohibit open redirects to prevent bypass
+            timeout=stream_timeout,
+        ) as resp:
+            resp_headers = dict(resp.headers)
+            resp_headers.pop("Transfer-Encoding", None)
+            resp_headers.pop("Content-Encoding", None)
 
-                # Support SSE streaming (text/event-stream)
-                if "text/event-stream" in resp_headers.get("Content-Type", ""):
-                    stream_resp = web.StreamResponse(
-                        status=resp.status, headers=resp_headers
-                    )
-                    await stream_resp.prepare(request)
-                    async for chunk in resp.content.iter_any():
-                        await stream_resp.write(chunk)
-                    return stream_resp
+            # Support SSE streaming (text/event-stream)
+            if "text/event-stream" in resp_headers.get("Content-Type", ""):
+                stream_resp = web.StreamResponse(status=resp.status, headers=resp_headers)
+                await stream_resp.prepare(request)
+                async for chunk in resp.content.iter_any():
+                    await stream_resp.write(chunk)
+                return stream_resp
 
-                data = await resp.read()
-                return web.Response(
-                    status=resp.status,
-                    body=data,
-                    headers=resp_headers,
-                )
+            data = await resp.read()
+            return web.Response(status=resp.status, body=data, headers=resp_headers)
     except Exception as exc:
         logger.error("MCP upstream connection failed for %s: %s", server_name, exc)
         return web.json_response(
@@ -200,11 +233,11 @@ async def handle_mcp_proxy(request: web.Request) -> web.Response:
         )
 ```
 
-### 4.2 Stdio MCP Neutralization
+### 4.2 Stdio MCP Neutralization & Vault State Preservation
 When a stdio-based MCP (local script / process) is disabled:
-1. `server.py` updates `mcp_config.json` replacing the `command` field with `/bin/false`.
-2. The target script file (if located in `~/.gemini/scripts/`) has its POSIX permissions set to `0000` (`chmod 000`) or is moved to a quarantine subdirectory.
-3. If an agent attempts to execute the command directly via `run_command`, it exits immediately with return code `1`.
+1. **Preserve State in Vault**: The complete stdio definition (`command`, `args`, `env`) is preserved in `mcp_vault` before mutation, preventing permanent loss of parameters on re-enable or `.agy.md` backup export.
+2. **Neutralize Workspace Configuration**: `server.py` updates `mcp_config.json`, removing the active command or replacing it with `/bin/false`.
+3. **Execution Block**: When re-enabled, `server.py` restores the original command and parameters from the vault back into `mcp_config.json`.
 
 ---
 
@@ -257,3 +290,6 @@ When restoring a configuration bundle:
 - [ ] **AC-MCP-03**: Direct Python scripts or curl commands calling the local proxy route for a disabled MCP receive JSON-RPC error `-32000` with code `403`.
 - [ ] **AC-MCP-04**: Configuration export produces a valid encrypted `.agy.md` bundle containing the real upstream URLs and headers.
 - [ ] **AC-MCP-05**: Configuration import successfully ingests legacy v1.6.3/v1.8.0 MCP definitions and migrates them into the proxy vault with zero manual intervention.
+- [ ] **AC-MCP-06**: `handle_mcp_proxy` validates DNS resolution via `socket.getaddrinfo` + `ipaddress` and sets `allow_redirects=False`, strictly rejecting redirects and non-canonical loopback targets (`2130706433`, `127.0.0.2`, `[::ffff:127.0.0.1]`).
+- [ ] **AC-MCP-07**: `handle_mcp_proxy` supports subpaths (`/mcp-proxy/{name}/{subpath}`) and forwards query strings, maintaining SSE connections without 60s timeout cutoffs.
+- [ ] **AC-MCP-08**: Disabling a stdio MCP preserves its original command, args, and env in `mcp_vault` without parameter loss upon re-enable or export.

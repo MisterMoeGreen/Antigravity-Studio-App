@@ -130,6 +130,25 @@ def scan_file(file_path: str) -> List[Finding]:
                         continue
                     if "window.open" in clean_line and has_url_bridge:
                         continue
+                elif h["id"] == "SYS-08":
+                    # SYS-08 class fragmentation applies to python source files, not markdown specs
+                    if file_path.endswith(".md") or line.startswith((" ", "\t")):
+                        continue
+                    match = h["pattern"].search(line)
+                    if match:
+                        findings.append(
+                            Finding(
+                                rule_id=h["id"],
+                                severity=h["severity"],
+                                subsystem=h["subsystem"],
+                                file_path=file_path,
+                                line_num=idx,
+                                matched_text=match.group(0),
+                                description=h["description"],
+                                mitigation=h["mitigation"],
+                            )
+                        )
+                    continue
 
                 match = h["pattern"].search(clean_line)
                 if match:

@@ -131,10 +131,12 @@ The v1.9.0 specification is partitioned into 4 modular specifications:
 | Threat ID | Threat Vector | Target | v1.8.0 Vulnerability | v1.9.0 Architectural Mitigation |
 | :--- | :--- | :--- | :--- | :--- |
 | **THREAT-01** | Agent Tool Bypass | Disabled MCP Servers | Disabled MCP credentials and endpoint remain in `mcp_config.json`; agent calls directly. | Real target and headers redacted to secure vault; proxy drops disabled routes with `403 Forbidden`. |
-| **THREAT-02** | Credential Exfiltration | Plaintext `api_keys.json` | Shell scripts or dependencies read `~/.gemini/config/api_keys.json` or inspect `env`. | File eliminated; secrets sealed in Keystore; virtual base URLs injected into environment. |
-| **THREAT-03** | Unauthorized Device Access | Device Hardware / Sensors | Malicious tools probe hardware without explicit user knowledge or consent. | Master Switch OFF by default; granular permissions; Android OS runtime prompt required. |
+| **THREAT-02** | Credential Exfiltration | Plaintext `api_keys.json` | Shell scripts or dependencies read `~/.gemini/config/api_keys.json` or inspect `env`. | File eliminated; secrets sealed in Keystore; virtual base URLs injected into environment; `prctl(PR_SET_DUMPABLE, 0)` active. |
+| **THREAT-03** | Unauthorized Device Access | Device Hardware / Sensors | Malicious tools probe hardware without explicit user knowledge or consent. | Master Switch stored in host Android SharedPreferences (not on disk); granular permissions; OS runtime prompt required. |
 | **THREAT-04** | Backup Snooping | Exported Configuration | Unencrypted backup bundles expose keys and server credentials. | Mandatory Scrypt + AES-256-GCM encryption on all `.agy.md` backup exports preserved. |
-| **THREAT-05** | Notification Glitch | Status Bar Notification Icon | Full-color bitmap in `setSmallIcon` results in white square or fallback generic "A". | Pure monochrome Vector Drawable with transparent background and safe padding. |
+| **THREAT-05** | Notification Glitch | Status Bar Notification Icon | Full-color bitmap in `setSmallIcon` results in white square or fallback generic "A". | Pure monochrome Vector Drawable with transparent background and safe padding; Canvas conversion for adaptive icons. |
+| **THREAT-06** | Open Redirect SSRF | MCP Proxy Gatekeeper | Upstream server redirects to internal `127.0.0.1` endpoints or alternative IP encodings. | Enforced `allow_redirects=False` and DNS resolution + `ipaddress` validation blocking loopback and non-canonical IPs. |
+| **THREAT-07** | SDK Authentication Failure | Provider Reverse Proxy | SDKs use provider-specific headers (`x-api-key`, `x-goog-api-key`, body keys) rather than standard Bearer token. | Multi-provider dispatch table injecting proper headers and JSON body parameters per provider. |
 
 ---
 

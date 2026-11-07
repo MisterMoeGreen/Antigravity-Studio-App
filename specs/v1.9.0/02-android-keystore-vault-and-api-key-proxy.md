@@ -69,6 +69,14 @@ val masterKey = try {
 
 * **Non-Exportability Invariant**: Private key material never leaves the TEE/StrongBox hardware boundary.
 * **Ciphertext Storage**: Each credential is encrypted using AES-256-GCM with a unique 12-byte initialization vector (IV) and a 128-bit authentication tag. Ciphertexts are persisted in the app-private SQLite database outside `/files/home/`.
+* **Same-UID Memory Protection**: In Android, PRoot subshells and `server.py` run under the same Linux UID (`ai.agy.app`). To prevent child processes or compromised scripts from inspecting `/proc/<server_pid>/mem`, `server.py` executes `prctl(PR_SET_DUMPABLE, 0)` immediately upon startup via `ctypes`:
+  ```python
+  import ctypes
+  libc = ctypes.CDLL(None)
+  PR_SET_DUMPABLE = 4
+  libc.prctl(PR_SET_DUMPABLE, 0, 0, 0, 0)
+  ```
+* **Environment Scrubbing**: When `server.py` spawns child shells or `agy acp`, all internal IPC secrets and vault credentials are explicitly pruned from child process environments.
 
 ---
 
@@ -84,7 +92,9 @@ Rather than exposing raw secrets to the agent process environment, outbound traf
    The following AI services are routed through the secure local proxy:
    - OpenAI: `http://127.0.0.1:8081/proxy/openai/v1`
    - Anthropic: `http://127.0.0.1:8081/proxy/anthropic/v1`
+   - Gemini: `http://127.0.0.1:8081/proxy/gemini/v1`
    - Tavily Search: `http://127.0.0.1:8081/proxy/tavily`
+   - GitHub: `http://127.0.0.1:8081/proxy/github`
    ```
 
 ### 3.2 Environment Variable Virtualization
@@ -95,16 +105,22 @@ OPENAI_BASE_URL="http://127.0.0.1:8081/proxy/openai/v1"
 OPENAI_API_KEY="agy-managed-proxy-session"
 ANTHROPIC_BASE_URL="http://127.0.0.1:8081/proxy/anthropic/v1"
 ANTHROPIC_API_KEY="agy-managed-proxy-session"
+GEMINI_BASE_URL="http://127.0.0.1:8081/proxy/gemini"
 TAVILY_API_KEY="agy-managed-proxy-session"
 ```
 
-### 3.3 Proxy Request Handling
-The proxy listener in `server.py` handles outbound calls to `/proxy/{provider}/{path:.*}`:
-1. Strips the dummy `Authorization: Bearer agy-managed-proxy-session`.
-2. Retrieves the real decrypted key from memory.
-3. Injects the true `Authorization: Bearer <real_secret>` and forwards the request via HTTPS to the upstream endpoint (`https://api.openai.com/v1/...`).
-4. Streams the upstream response back to the client.
-5. If the user disables a key in Settings, the proxy route immediately returns `401 Unauthorized` or `403 Forbidden`.
+### 3.3 Provider-Aware Proxy Request Handling & Header Injection
+The proxy listener in `server.py` handles outbound calls to `/proxy/{provider}/{path:.*}`. Rather than assuming all providers accept `Authorization: Bearer`, the proxy dispatches through a provider-specific credential injection table:
+
+| Provider Route | Upstream Base URL | Credential Injection Strategy |
+| :--- | :--- | :--- |
+| `/proxy/openai/{path:.*}` | `https://api.openai.com/` | Injects header: `Authorization: Bearer <OPENAI_API_KEY>` |
+| `/proxy/anthropic/{path:.*}` | `https://api.anthropic.com/` | Injects header: `x-api-key: <ANTHROPIC_API_KEY>` (strips dummy `Authorization` header) |
+| `/proxy/gemini/{path:.*}` | `https://generativelanguage.googleapis.com/` | Injects header: `x-goog-api-key: <GEMINI_API_KEY>` (and rewrites `?key=...` query if present) |
+| `/proxy/tavily/{path:.*}` | `https://api.tavily.com/` | Injects header: `Authorization: Bearer <TAVILY_API_KEY>`; if body contains `"api_key": "agy-managed-proxy-session"`, replaces with real key |
+| `/proxy/github/{path:.*}` | `https://api.github.com/` | Injects header: `Authorization: Bearer <GITHUB_TOKEN>` |
+
+Streams the upstream response back to the client. If the user disables a key in Settings, the proxy route immediately returns `401 Unauthorized` or `403 Forbidden`.
 
 ---
 
@@ -115,9 +131,30 @@ The user requirement that **viewing and copying keys must keep working** is pres
 1. **Viewing in Settings UI**:
    * In **Settings → API Keys**, keys are displayed with masking (`sk-ant...****...ABCD`) by default.
    * Tapping the "Eye" toggle sends an IPC request to decrypt the key in memory. The unmasked string is rendered in the secure WebView DOM.
-2. **Copying to Clipboard**:
-   * Tapping the "Copy" icon triggers the native bridge `AndroidApp.setClipboardText(keyName)` in `MainActivity.kt`.
-   * The Android Kotlin layer retrieves the key from the Keystore vault in memory and pushes it directly into `android.content.ClipboardManager`.
+2. **Copying to Clipboard with Android 13+ Privacy Protection**:
+   * Tapping the "Copy" icon triggers the native bridge `AndroidApp.copyVaultKeyToClipboard(keyName)` in `MainActivity.kt`.
+   * On Android 13+ (API 33+), the OS shows an on-screen preview of clipboard content. To prevent screen-recording or bystander leaks, `ClipDescription.EXTRA_IS_SENSITIVE = true` is explicitly attached:
+     ```kotlin
+     @JavascriptInterface
+     fun copyVaultKeyToClipboard(keyName: String): Boolean {
+         val secretValue = keystoreVault.getDecryptedKey(keyName) ?: return false
+         runOnUiThread {
+             val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+             val clip = ClipData.newPlainText("API Key", secretValue)
+             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                 clip.description.extras = PersistableBundle().apply {
+                     putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+                 }
+             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                 clip.description.extras = PersistableBundle().apply {
+                     putBoolean("android.content.extra.IS_SENSITIVE", true)
+                 }
+             }
+             clipboard.setPrimaryClip(clip)
+         }
+         return true
+     }
+     ```
    * **Security Guarantee**: The key is transferred directly from Android Keystore memory to the system clipboard; no intermediate shell commands or plaintext files are created.
 
 ---
@@ -177,3 +214,6 @@ sequenceDiagram
 - [ ] **AC-KS-04**: Tapping "Copy" on an API key card in Settings successfully places the plaintext key on the Android system clipboard.
 - [ ] **AC-KS-05**: Exporting configurations produces a valid `.agy.md` bundle with mandatory password encryption.
 - [ ] **AC-KS-06**: Importing a legacy v1.6.3 `.agy.md` backup restores all keys directly into the Keystore vault without creating on-disk JSON files.
+- [ ] **AC-KS-07**: Proxy route correctly injects provider-specific credentials (`x-api-key` for Anthropic, `x-goog-api-key` for Gemini, `Authorization: Bearer` for OpenAI, and body injection for Tavily).
+- [ ] **AC-KS-08**: Tapping "Copy" on Android 13+ (API 33+) sets `ClipDescription.EXTRA_IS_SENSITIVE = true`, masking the key preview in system toast overlays.
+- [ ] **AC-KS-09**: `server.py` invokes `prctl(PR_SET_DUMPABLE, 0)` on boot, preventing same-UID processes from reading `/proc/<pid>/mem`.
