@@ -433,6 +433,23 @@ class MainActivity : AppCompatActivity() {
         }
 
         @JavascriptInterface
+        fun openCustomTab(url: String) {
+            openUrl(url)
+        }
+
+        @JavascriptInterface
+        fun dismissCustomTabAndFocusApp() {
+            runOnUiThread {
+                try {
+                    val intent = Intent(this@MainActivity, MainActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    }
+                    startActivity(intent)
+                } catch (_: Exception) {}
+            }
+        }
+
+        @JavascriptInterface
         fun getClipboardText(): String {
             return try {
                 if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
@@ -522,7 +539,7 @@ class MainActivity : AppCompatActivity() {
             val list = KeystoreVault.listKeysMasked(this@MainActivity)
             val arr = org.json.JSONArray()
             for (k in list) {
-                if (k.name == "__MCP_VAULT__") continue
+                if (k.name.startsWith("__")) continue
                 val obj = org.json.JSONObject().apply {
                     put("name", k.name)
                     put("masked_value", k.masked)

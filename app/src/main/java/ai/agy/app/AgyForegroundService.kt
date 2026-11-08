@@ -476,11 +476,21 @@ class AgyForegroundService : Service() {
                     res.put("status", "ok")
                     val keysObj = JSONObject()
                     KeystoreVault.getAllDecryptedKeys(this@AgyForegroundService).forEach { (k, v) ->
-                        if (k != "__MCP_VAULT__") {
+                        if (!k.startsWith("__")) {
                             keysObj.put(k, v)
                         }
                     }
                     res.put("keys", keysObj)
+                }
+                "get_key" -> {
+                    val name = req.getString("name")
+                    val value = KeystoreVault.getDecryptedKey(this@AgyForegroundService, name)
+                    if (value != null) {
+                        res.put("status", "ok")
+                        res.put("value", value)
+                    } else {
+                        res.put("status", "not_found")
+                    }
                 }
                 "save_key" -> {
                     val name = req.getString("name")

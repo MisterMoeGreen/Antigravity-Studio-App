@@ -27,6 +27,7 @@ import sqlite3
 import subprocess
 import sys
 import tarfile
+import zipfile
 import time
 import urllib.error
 import urllib.parse
@@ -1588,6 +1589,17 @@ def load_masked_mcp_servers() -> list[dict[str, Any]]:
                 k: v if is_secret_reference(v) else (mask_api_key(v) if any(x in k for x in ("KEY", "TOKEN", "SECRET", "PASSWORD")) else v)
                 for k, v in all_env.items()
             }
+        if trans == "http":
+            copy_srv["auth_mode"] = v_entry.get("auth_mode") or copy_srv.get("auth_mode", "api_key")
+            copy_srv["client_id"] = v_entry.get("client_id") or copy_srv.get("client_id", "")
+            copy_srv["scopes"] = v_entry.get("scopes") or copy_srv.get("scopes", "")
+            copy_srv["authenticated"] = v_entry.get("authenticated", False) if copy_srv["auth_mode"] == "oauth2" else True
+        else:
+            copy_srv["downloadUrl"] = v_entry.get("downloadUrl") or copy_srv.get("downloadUrl", "")
+            copy_srv["checksum"] = v_entry.get("checksum") or copy_srv.get("checksum", "")
+            cmd_name = Path(copy_srv.get("command", "")).name if copy_srv.get("command") else ""
+            staged_exists = bool(cmd_name and (MCP_BIN_DIR / name / cmd_name).exists())
+            copy_srv["provisioned"] = bool(v_entry.get("provisioned", False) or staged_exists)
         server_list.append(copy_srv)
     return server_list
 
@@ -1612,6 +1624,10 @@ async def probe_single_mcp_server(name: str) -> dict[str, Any]:
     if trans == "http":
         vault = load_mcp_vault()
         vault_entry = vault.get(name, {})
+        auth_mode = vault_entry.get("auth_mode") or srv.get("auth_mode", "api_key")
+        if auth_mode == "oauth2" and not vault_entry.get("authenticated", False):
+            return {"status": "auth_required", "name": name, "message": "Authentication required. Tap Connect to sign in."}
+
         url = vault_entry.get("upstreamUrl") or srv.get("serverUrl") or srv.get("url") or ""
         if not url:
             return {"status": "error", "name": name, "message": "No endpoint URL configured"}
@@ -1623,6 +1639,10 @@ async def probe_single_mcp_server(name: str) -> dict[str, Any]:
         resolved_headers = {
             hk: resolve_secret_reference(hv) for hk, hv in raw_headers.items()
         }
+        if auth_mode == "oauth2":
+            tok = await McpOAuth2Manager.get_valid_oauth_token(name)
+            if tok:
+                resolved_headers["Authorization"] = f"Bearer {tok}"
         loop = asyncio.get_running_loop()
 
         def _do_http() -> dict[str, Any]:
@@ -1726,6 +1746,680 @@ async def probe_mcp_health() -> dict[str, dict[str, str]]:
     return results
 
 
+MCP_BIN_DIR = USR_DIR / "opt" / "mcp-bin"
+RESERVED_SYSTEM_BINARIES = {
+    "agy", "agy-sh", "sh", "bash", "python", "python3", "node", "npm", "npx",
+    "git", "curl", "tar", "zstd", "patchelf"
+}
+MAX_MCP_DOWNLOAD_BYTES = 150 * 1024 * 1024  # 150 MB
+MAX_MCP_UNCOMPRESSED_BYTES = 300 * 1024 * 1024  # 300 MB
+
+
+class McpBinaryProvisioner:
+    """Manages on-demand provisioning, safe uncompressing, ELF validation, and isolated staging of Stdio MCP binaries."""
+
+    @staticmethod
+    def sanitize_name(name: str) -> str:
+        return re.sub(r"[^a-zA-Z0-9_-]", "", name)
+
+    @staticmethod
+    def validate_elf_binary(file_path: Path) -> None:
+        """Inspects ELF magic, architecture, machine headers, and Android 15 16KB page alignment."""
+        if not file_path.exists():
+            raise FileNotFoundError(f"Binary file not found: {file_path}")
+
+        file_size = file_path.stat().st_size
+        if file_size < 64:
+            raise ValueError(f"File is too small to be a valid executable ({file_size} bytes).")
+
+        with open(file_path, "rb") as f:
+            hdr = f.read(64)
+
+            # 1. OS check / Reject non-ELF
+            if hdr.startswith(b"\xfe\xed\xfa\xcf") or hdr.startswith(b"\xcf\xfa\xed\xfe") or hdr.startswith(b"\xca\xfe\xba\xbe"):
+                raise ValueError("macOS binary detected. Please select the Linux ARM64 release URL.")
+            if hdr.startswith(b"MZ"):
+                raise ValueError("Windows executable detected. Please select the Linux ARM64 release URL.")
+            if not hdr.startswith(b"\x7fELF"):
+                raise ValueError("Invalid executable: Not a valid ELF binary.")
+
+            # 2. Architecture & Endianness: 64-bit Little-Endian
+            ei_class = hdr[4]
+            if ei_class != 2:
+                raise ValueError(f"Unsupported ELF class {ei_class}. Only 64-bit ARM64 binaries are supported.")
+            ei_data = hdr[5]
+            if ei_data != 1:
+                raise ValueError(f"Unsupported ELF data encoding {ei_data}. Only Little-Endian is supported.")
+
+            # 3. Executable type: ET_EXEC (2) or ET_DYN (3)
+            e_type = int.from_bytes(hdr[16:18], "little")
+            if e_type not in (2, 3):
+                raise ValueError(f"Invalid ELF type {e_type}. Expected ET_EXEC (2) or ET_DYN (3).")
+
+            # 4. Machine: EM_AARCH64 (0xB7 = 183)
+            e_machine = int.from_bytes(hdr[18:20], "little")
+            if e_machine != 0xB7:
+                if e_machine == 0x3E:
+                    arch_name = "x86_64"
+                elif e_machine == 0x28:
+                    arch_name = "ARM 32-bit"
+                else:
+                    arch_name = f"machine 0x{e_machine:X}"
+                raise ValueError(f"Incompatible architecture: {arch_name} detected. Expected Linux ARM64 (EM_AARCH64).")
+
+            # 5. Android 15 16KB Page Alignment Check
+            pagesize = 4096
+            try:
+                pagesize = os.sysconf("SC_PAGESIZE")
+            except Exception:
+                pass
+
+            if pagesize >= 16384:
+                try:
+                    f.seek(32)
+                    phoff = int.from_bytes(f.read(8), "little")
+                    f.seek(54)
+                    phentsize = int.from_bytes(f.read(2), "little")
+                    phnum = int.from_bytes(f.read(2), "little")
+                    for i in range(phnum):
+                        f.seek(phoff + i * phentsize)
+                        p_type = int.from_bytes(f.read(4), "little")
+                        if p_type == 1:  # PT_LOAD
+                            f.seek(phoff + i * phentsize + 48)
+                            p_align = int.from_bytes(f.read(8), "little")
+                            if p_align < 0x4000:
+                                logger.warning(
+                                    "Staged binary %s declared PT_LOAD alignment 0x%x < 16KB on 16KB kernel",
+                                    file_path.name, p_align
+                                )
+                except Exception as exc:
+                    logger.debug("Could not inspect PT_LOAD headers: %s", exc)
+
+    @classmethod
+    async def provision_stdio_binary(
+        cls,
+        server_name: str,
+        command: str,
+        download_url: str,
+        expected_checksum: Optional[str] = None,
+        progress_cb: Optional[Any] = None,
+    ) -> tuple[Path, str]:
+        """Downloads, unpacks, validates ELF, and stages the binary into /usr/opt/mcp-bin/<server>/<cmd>."""
+        sanitized_server = cls.sanitize_name(server_name)
+        if not sanitized_server:
+            raise ValueError("Invalid server name")
+
+        cmd_base = Path(command).name
+        if cmd_base.lower() in RESERVED_SYSTEM_BINARIES:
+            raise ValueError(f"Reserved system binary '{cmd_base}' cannot be managed or overwritten.")
+
+        if not download_url.startswith("https://"):
+            raise ValueError("Download URL must use secure HTTPS protocol.")
+
+        staging_dir = MCP_BIN_DIR / sanitized_server
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        target_bin = staging_dir / cmd_base
+
+        logger.info("Provisioning Stdio MCP binary '%s' for '%s' from %s", cmd_base, sanitized_server, download_url)
+        if progress_cb:
+            await progress_cb(f"Downloading {cmd_base}...", 20)
+
+        # 1. Download stream with quota bounds
+        hasher = hashlib.sha256()
+        download_buffer = io.BytesIO()
+        total_downloaded = 0
+
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+            async with client.stream("GET", download_url) as resp:
+                if resp.status_code != 200:
+                    raise RuntimeError(f"HTTP download failed with status {resp.status_code}")
+                content_len = resp.headers.get("Content-Length")
+                if content_len and int(content_len) > MAX_MCP_DOWNLOAD_BYTES:
+                    raise ValueError(f"Download size {int(content_len)} exceeds maximum quota of 150MB.")
+                async for chunk in resp.aiter_bytes(chunk_size=65536):
+                    total_downloaded += len(chunk)
+                    if total_downloaded > MAX_MCP_DOWNLOAD_BYTES:
+                        raise ValueError(f"Download exceeded maximum quota of 150MB ({total_downloaded} bytes).")
+                    hasher.update(chunk)
+                    download_buffer.write(chunk)
+
+        actual_checksum = hasher.hexdigest().lower()
+
+        # 2. Checksum validation / TOFU
+        if expected_checksum and expected_checksum.strip():
+            clean_expected = expected_checksum.strip().lower()
+            if actual_checksum != clean_expected:
+                raise ValueError(f"SHA-256 checksum mismatch for {cmd_base}! Expected: {clean_expected}, Got: {actual_checksum}")
+            final_checksum = clean_expected
+        else:
+            final_checksum = actual_checksum
+            logger.info("TOFU: Auto-pinned SHA-256 for '%s': %s", cmd_base, final_checksum)
+
+        if progress_cb:
+            await progress_cb(f"Extracting and verifying {cmd_base}...", 60)
+
+        # 3. Archive extraction / Zero-Symlink & Quota Bounds
+        raw_bytes = download_buffer.getvalue()
+        extracted = False
+        tmp_target = staging_dir / f".tmp_{cmd_base}_{int(time.time())}"
+
+        try:
+            # A. Check for tar archive
+            is_tar = False
+            if raw_bytes.startswith(b"\x1f\x8b") or raw_bytes.startswith(b"BZh") or raw_bytes.startswith(b"\xfd7zXZ"):
+                is_tar = True
+            elif len(raw_bytes) > 262 and raw_bytes[257:262] == b"ustar":
+                is_tar = True
+
+            if is_tar:
+                try:
+                    with tarfile.open(fileobj=io.BytesIO(raw_bytes), mode="r:*") as tar:
+                        candidates: list[tarfile.TarInfo] = []
+                        total_uncompressed = 0
+                        for m in tar.getmembers():
+                            # Zero-Symlink Policy: reject symlinks, hardlinks, fifos, devices
+                            if m.issym() or m.islnk() or m.isfifo() or m.isdev() or m.ischr():
+                                continue
+                            if not m.isreg():
+                                continue
+                            total_uncompressed += m.size
+                            if total_uncompressed > MAX_MCP_UNCOMPRESSED_BYTES:
+                                raise ValueError(f"Archive uncompressed size exceeds maximum quota of 300MB.")
+                            # Exclude doc and metadata files
+                            m_name = Path(m.name).name
+                            m_lower = m_name.lower()
+                            if any(m_lower.endswith(ext) for ext in (".md", ".txt", ".json", ".yaml", ".yml", ".png", ".svg", ".html")):
+                                continue
+                            if any(m_lower.startswith(p) for p in ("license", "notice", "readme", "copying")):
+                                continue
+                            candidates.append(m)
+
+                        # Match exact basename or single regular candidate
+                        target_member = None
+                        for cand in candidates:
+                            if Path(cand.name).name == cmd_base:
+                                target_member = cand
+                                break
+                        if not target_member and len(candidates) == 1:
+                            target_member = candidates[0]
+
+                        if not target_member:
+                            raise ValueError(f"Could not find executable '{cmd_base}' inside archive (found {len(candidates)} candidates).")
+
+                        f_src = tar.extractfile(target_member)
+                        if not f_src:
+                            raise ValueError(f"Could not extract member '{target_member.name}'.")
+                        with open(tmp_target, "wb") as f_dst:
+                            shutil.copyfileobj(f_src, f_dst)
+                        extracted = True
+                except Exception as exc:
+                    if not isinstance(exc, ValueError):
+                        logger.debug("Tar open failed, trying zip: %s", exc)
+                    else:
+                        raise
+
+            # B. Check for zip archive
+            if not extracted and raw_bytes.startswith(b"PK\x03\x04"):
+                with zipfile.ZipFile(io.BytesIO(raw_bytes)) as z:
+                    candidates_zip: list[zipfile.ZipInfo] = []
+                    total_uncompressed = 0
+                    for zi in z.infolist():
+                        if zi.is_dir():
+                            continue
+                        if (zi.external_attr >> 16) & 0o120000 == 0o120000:
+                            continue
+                        if ".." in zi.filename or zi.filename.startswith("/"):
+                            continue
+                        total_uncompressed += zi.file_size
+                        if total_uncompressed > MAX_MCP_UNCOMPRESSED_BYTES:
+                            raise ValueError("Zip uncompressed size exceeds maximum quota of 300MB.")
+                        zi_name = Path(zi.filename).name
+                        zi_lower = zi_name.lower()
+                        if any(zi_lower.endswith(ext) for ext in (".md", ".txt", ".json", ".yaml", ".yml", ".png", ".svg")):
+                            continue
+                        if any(zi_lower.startswith(p) for p in ("license", "notice", "readme", "copying")):
+                            continue
+                        candidates_zip.append(zi)
+
+                    target_zip = None
+                    for cz in candidates_zip:
+                        if Path(cz.filename).name == cmd_base:
+                            target_zip = cz
+                            break
+                    if not target_zip and len(candidates_zip) == 1:
+                        target_zip = candidates_zip[0]
+
+                    if not target_zip:
+                        raise ValueError(f"Could not find executable '{cmd_base}' inside zip archive.")
+
+                    with z.open(target_zip) as z_src, open(tmp_target, "wb") as z_dst:
+                        shutil.copyfileobj(z_src, z_dst)
+                    extracted = True
+
+            # C. Raw binary fallback
+            if not extracted:
+                if total_downloaded > MAX_MCP_UNCOMPRESSED_BYTES:
+                    raise ValueError("Binary size exceeds maximum quota of 300MB.")
+                with open(tmp_target, "wb") as f_dst:
+                    f_dst.write(raw_bytes)
+                extracted = True
+
+            # 4. Comprehensive ELF Validation Gate
+            cls.validate_elf_binary(tmp_target)
+
+            # Atomic commit & chmod 0755
+            os.chmod(tmp_target, 0o755)
+            if target_bin.exists():
+                target_bin.unlink()
+            tmp_target.rename(target_bin)
+            os.chmod(target_bin, 0o755)
+
+            if progress_cb:
+                await progress_cb(f"Staged {cmd_base} successfully.", 100)
+
+            logger.info("Successfully provisioned Stdio MCP binary: %s", target_bin)
+            return target_bin, final_checksum
+
+        finally:
+            if tmp_target.exists():
+                try:
+                    tmp_target.unlink()
+                except Exception:
+                    pass
+
+
+_pending_oauth_sessions: dict[str, dict[str, Any]] = {}
+_oauth_refresh_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+
+class McpOAuth2Manager:
+    """Manages OAuth 2.1 PKCE discovery, authentication, Chrome Custom Tab auto-dismiss, and locked token refreshes."""
+
+    @staticmethod
+    async def discover_oauth_endpoints(upstream_url: str) -> dict[str, str]:
+        """Performs 3-tier discovery: RFC 9728 (resource_metadata), RFC 8414 (well-known), and static provider presets."""
+        parsed = urllib.parse.urlparse(upstream_url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        endpoints: dict[str, str] = {}
+
+        # 1. RFC 9728 Probe: Send GET to upstream_url and check WWW-Authenticate resource_metadata
+        try:
+            async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+                probe_resp = await client.get(upstream_url)
+                if probe_resp.status_code == 401:
+                    auth_hdr = probe_resp.headers.get("WWW-Authenticate", "")
+                    meta_match = re.search(r'resource_metadata="([^"]+)"', auth_hdr)
+                    if meta_match:
+                        meta_url = meta_match.group(1)
+                        if not meta_url.startswith("http"):
+                            meta_url = urllib.parse.urljoin(upstream_url, meta_url)
+                        meta_resp = await client.get(meta_url)
+                        if meta_resp.status_code == 200:
+                            meta_json = meta_resp.json()
+                            if "authorization_endpoint" in meta_json:
+                                endpoints["authorization_endpoint"] = meta_json["authorization_endpoint"]
+                            if "token_endpoint" in meta_json:
+                                endpoints["token_endpoint"] = meta_json["token_endpoint"]
+                            if "registration_endpoint" in meta_json:
+                                endpoints["registration_endpoint"] = meta_json["registration_endpoint"]
+                            auth_servers = meta_json.get("authorization_servers", [])
+                            if auth_servers and isinstance(auth_servers, list):
+                                origin = auth_servers[0].rstrip("/")
+        except Exception as exc:
+            logger.debug("RFC 9728 probe failed for %s: %s", upstream_url, exc)
+
+        if "authorization_endpoint" in endpoints and "token_endpoint" in endpoints:
+            return endpoints
+
+        # 2. RFC 8414 / OpenID Discovery
+        for well_known_path in (
+            "/.well-known/oauth-authorization-server",
+            "/.well-known/openid-configuration",
+        ):
+            try:
+                disc_url = f"{origin}{well_known_path}"
+                async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
+                    resp = await client.get(disc_url)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if "authorization_endpoint" in data:
+                            endpoints["authorization_endpoint"] = data["authorization_endpoint"]
+                        if "token_endpoint" in data:
+                            endpoints["token_endpoint"] = data["token_endpoint"]
+                        if "registration_endpoint" in data:
+                            endpoints["registration_endpoint"] = data["registration_endpoint"]
+                        if "authorization_endpoint" in endpoints and "token_endpoint" in endpoints:
+                            return endpoints
+            except Exception as exc:
+                logger.debug("Discovery on %s failed: %s", well_known_path, exc)
+
+        # 3. Known Static Provider Fallbacks
+        host_lower = parsed.netloc.lower()
+        if "github" in host_lower:
+            endpoints.setdefault("authorization_endpoint", "https://github.com/login/oauth/authorize")
+            endpoints.setdefault("token_endpoint", "https://github.com/login/oauth/access_token")
+        elif "google" in host_lower:
+            endpoints.setdefault("authorization_endpoint", "https://accounts.google.com/o/oauth2/v2/auth")
+            endpoints.setdefault("token_endpoint", "https://oauth2.googleapis.com/token")
+        elif "slack" in host_lower:
+            endpoints.setdefault("authorization_endpoint", "https://slack.com/oauth/v2/authorize")
+            endpoints.setdefault("token_endpoint", "https://slack.com/api/oauth.v2.access")
+
+        return endpoints
+
+    @classmethod
+    async def initiate_oauth_flow(cls, server_name: str, redirect_uri: str) -> str:
+        """Discovers endpoints, handles DCR if applicable, generates PKCE, and constructs the browser auth URL."""
+        vault = load_mcp_vault()
+        s_entry = vault.get(server_name)
+        if not s_entry:
+            raise ValueError(f"Server '{server_name}' not found in MCP vault.")
+
+        upstream_url = s_entry.get("upstreamUrl", "")
+        if not upstream_url:
+            raise ValueError(f"Server '{server_name}' has no upstream URL configured.")
+
+        endpoints = await cls.discover_oauth_endpoints(upstream_url)
+        auth_ep = endpoints.get("authorization_endpoint")
+        token_ep = endpoints.get("token_endpoint")
+        reg_ep = endpoints.get("registration_endpoint")
+
+        if not auth_ep or not token_ep:
+            raise ValueError(f"Could not discover OAuth authorization/token endpoints for {upstream_url}. Please configure Client ID manually.")
+
+        client_id = s_entry.get("client_id", "").strip()
+
+        # Dynamic Client Registration (RFC 7591)
+        if not client_id and reg_ep:
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    reg_payload = {
+                        "redirect_uris": [redirect_uri],
+                        "client_name": "Antigravity Studio",
+                        "token_endpoint_auth_method": "none",
+                        "grant_types": ["authorization_code", "refresh_token"],
+                        "response_types": ["code"],
+                    }
+                    reg_resp = await client.post(reg_ep, json=reg_payload)
+                    if reg_resp.status_code in (200, 201):
+                        reg_data = reg_resp.json()
+                        client_id = reg_data.get("client_id", "")
+                        if client_id:
+                            s_entry["client_id"] = client_id
+                            save_mcp_vault(vault)
+            except Exception as exc:
+                logger.warning("Dynamic Client Registration failed: %s", exc)
+
+        if not client_id:
+            raise ValueError(f"Client ID required for OAuth with {server_name}. Please specify Client ID in settings.")
+
+        # PKCE Generation: RFC 7636
+        code_verifier = secrets.token_urlsafe(64)
+        hashed = hashlib.sha256(code_verifier.encode("ascii")).digest()
+        code_challenge = base64.urlsafe_b64encode(hashed).decode("ascii").rstrip("=")
+        state = secrets.token_hex(24)
+
+        scopes = s_entry.get("scopes", "").strip()
+
+        _pending_oauth_sessions[state] = {
+            "server_name": server_name,
+            "code_verifier": code_verifier,
+            "token_endpoint": token_ep,
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "scopes": scopes,
+            "created_at": time.time(),
+        }
+
+        params = {
+            "response_type": "code",
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "state": state,
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
+        }
+        if scopes:
+            params["scope"] = scopes
+
+        sep = "&" if "?" in auth_ep else "?"
+        auth_url = f"{auth_ep}{sep}{urllib.parse.urlencode(params)}"
+        logger.info("Initiated OAuth 2.1 PKCE flow for %s (state=%s)", server_name, state[:8])
+        return auth_url
+
+    @classmethod
+    async def handle_oauth_callback(cls, request: Request, web_server: Any) -> Response:
+        """Processes /oauth/callback, exchanges authorization code for tokens, saves into Keystore, and returns auto-dismiss HTML."""
+        qs = request.path.split("?", 1)[1] if "?" in request.path else ""
+        query_map = urllib.parse.parse_qs(qs)
+
+        state = query_map.get("state", [""])[0]
+        code = query_map.get("code", [""])[0]
+        error = query_map.get("error", [""])[0]
+
+        if error:
+            error_desc = query_map.get("error_description", [error])[0]
+            return Response(
+                int(HTTPStatus.BAD_REQUEST),
+                "Bad Request",
+                Headers([("Content-Type", "text/html; charset=utf-8")]),
+                f"<html><body style='background:#121212;color:#ef4444;font-family:sans-serif;padding:30px;text-align:center;'><h2>Authentication Failed</h2><p>{error_desc}</p></body></html>".encode("utf-8"),
+            )
+
+        session = _pending_oauth_sessions.pop(state, None)
+        if not session or time.time() - session.get("created_at", 0) > 900:  # 15 min expiry
+            return Response(
+                int(HTTPStatus.BAD_REQUEST),
+                "Bad Request",
+                Headers([("Content-Type", "text/html; charset=utf-8")]),
+                b"<html><body style='background:#121212;color:#ef4444;font-family:sans-serif;padding:30px;text-align:center;'><h2>Authentication Session Expired</h2><p>Please return to the app and retry.</p></body></html>",
+            )
+
+        server_name = session["server_name"]
+        token_ep = session["token_endpoint"]
+        code_verifier = session["code_verifier"]
+        client_id = session["client_id"]
+        redirect_uri = session["redirect_uri"]
+
+        token_payload = {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "client_id": client_id,
+            "code_verifier": code_verifier,
+        }
+
+        # Token exchange
+        token_data: dict[str, Any] = {}
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                res = await client.post(
+                    token_ep,
+                    data=token_payload,
+                    headers={"Accept": "application/json"},
+                )
+                if res.status_code == 200:
+                    try:
+                        token_data = res.json()
+                    except Exception:
+                        token_data = dict(urllib.parse.parse_qsl(res.text))
+                else:
+                    logger.error("Token exchange failed: %s %s", res.status_code, res.text)
+                    return Response(
+                        int(HTTPStatus.BAD_REQUEST),
+                        "Bad Request",
+                        Headers([("Content-Type", "text/html; charset=utf-8")]),
+                        f"<html><body style='background:#121212;color:#ef4444;font-family:sans-serif;padding:30px;text-align:center;'><h2>Token Exchange Failed</h2><p>{res.text}</p></body></html>".encode("utf-8"),
+                    )
+        except Exception as exc:
+            logger.error("Token request exception: %s", exc)
+            return Response(
+                int(HTTPStatus.INTERNAL_SERVER_ERROR),
+                "Internal Server Error",
+                Headers([("Content-Type", "text/html; charset=utf-8")]),
+                f"<html><body style='background:#121212;color:#ef4444;font-family:sans-serif;padding:30px;text-align:center;'><h2>Connection Error</h2><p>{exc}</p></body></html>".encode("utf-8"),
+            )
+
+        access_token = token_data.get("access_token", "")
+        refresh_token = token_data.get("refresh_token", "")
+        expires_in = float(token_data.get("expires_in", 3600))
+        expires_at = time.time() + expires_in
+
+        if not access_token:
+            return Response(
+                int(HTTPStatus.BAD_REQUEST),
+                "Bad Request",
+                Headers([("Content-Type", "text/html; charset=utf-8")]),
+                b"<html><body style='background:#121212;color:#ef4444;font-family:sans-serif;padding:30px;text-align:center;'><h2>No Access Token Received</h2></body></html>",
+            )
+
+        # Store tokens securely in Android Keystore Vault
+        token_bundle = {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "expires_at": expires_at,
+            "token_endpoint": token_ep,
+            "client_id": client_id,
+            "scopes": session.get("scopes", ""),
+        }
+        vault_key = f"__MCP_OAUTH_{server_name}__"
+        query_keystore_vault("save_key", name=vault_key, value=json.dumps(token_bundle), description="OAuth 2.1 Token Bundle")
+
+        # Mark authenticated in MCP vault
+        vault = load_mcp_vault()
+        if server_name in vault:
+            vault[server_name]["authenticated"] = True
+            vault[server_name]["auth_mode"] = "oauth2"
+            save_mcp_vault(vault)
+
+        # Broadcast WebSocket notification and dismiss Custom Tab
+        await web_server.broadcast({
+            "type": "mcp_oauth_success",
+            "server": server_name,
+        })
+        await web_server.broadcast({
+            "type": "mcp_oauth_callback_completed",
+            "server": server_name,
+        })
+        await web_server.broadcast({
+            "type": "mcp_servers_list",
+            "servers": load_masked_mcp_servers(),
+        })
+
+        safe_sname = re.sub(r"[^a-zA-Z0-9_-]", "", server_name)
+        html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Authentication Successful</title>
+  <style>
+    body {{ background: #121212; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; text-align: center; }}
+    .card {{ background: #1e1e1e; border: 1px solid #333; border-radius: 12px; padding: 24px; max-width: 400px; width: 100%; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }}
+    .icon {{ font-size: 44px; color: #10b981; margin-bottom: 12px; }}
+    h2 {{ margin: 0 0 8px 0; font-size: 20px; color: #fff; }}
+    p {{ margin: 0 0 16px 0; font-size: 14px; color: #9ca3af; }}
+    .btn {{ background: #2563eb; color: #fff; border: none; padding: 10px 20px; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; text-decoration: none; display: inline-block; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">&#10003;</div>
+    <h2>Authentication Successful</h2>
+    <p>Connected to <b>{safe_sname}</b>. Returning to Antigravity Studio...</p>
+    <button class="btn" onclick="window.close()">Return to App</button>
+  </div>
+  <script>
+    setTimeout(function() {{
+      window.close();
+    }}, 600);
+  </script>
+</body>
+</html>"""
+        return Response(
+            int(HTTPStatus.OK),
+            "OK",
+            Headers([("Content-Type", "text/html; charset=utf-8")]),
+            html.encode("utf-8"),
+        )
+
+    @classmethod
+    async def get_valid_oauth_token(cls, server_name: str) -> Optional[str]:
+        """Double-checked locking pattern for OAuth token retrieval and auto-refresh."""
+        vault_key = f"__MCP_OAUTH_{server_name}__"
+        res = query_keystore_vault("get_key", name=vault_key)
+        raw_val = res.get("value")
+        if not raw_val:
+            return None
+
+        try:
+            bundle = json.loads(raw_val)
+        except Exception:
+            return None
+
+        access_token = bundle.get("access_token")
+        expires_at = float(bundle.get("expires_at", 0))
+
+        # Fast path: Token is still valid for > 60 seconds
+        if access_token and expires_at > time.time() + 60:
+            return access_token
+
+        # Slow path: Double-checked lock refresh
+        async with _oauth_refresh_locks[server_name]:
+            # Re-check after acquiring lock
+            res = query_keystore_vault("get_key", name=vault_key)
+            raw_val = res.get("value")
+            if raw_val:
+                try:
+                    bundle = json.loads(raw_val)
+                    access_token = bundle.get("access_token")
+                    expires_at = float(bundle.get("expires_at", 0))
+                    if access_token and expires_at > time.time() + 60:
+                        return access_token
+                except Exception:
+                    pass
+
+            refresh_token = bundle.get("refresh_token")
+            token_ep = bundle.get("token_endpoint")
+            client_id = bundle.get("client_id", "")
+
+            if not refresh_token or not token_ep:
+                logger.warning("No refresh token available for %s", server_name)
+                return access_token  # Return last known token as best effort
+
+            logger.info("Auto-refreshing OAuth 2.1 token for %s", server_name)
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    refresh_payload = {
+                        "grant_type": "refresh_token",
+                        "refresh_token": refresh_token,
+                        "client_id": client_id,
+                    }
+                    resp = await client.post(
+                        token_ep,
+                        data=refresh_payload,
+                        headers={"Accept": "application/json"},
+                    )
+                    if resp.status_code == 200:
+                        refreshed_data = resp.json()
+                        new_access = refreshed_data.get("access_token")
+                        if new_access:
+                            bundle["access_token"] = new_access
+                            if refreshed_data.get("refresh_token"):
+                                bundle["refresh_token"] = refreshed_data["refresh_token"]
+                            new_exp_in = float(refreshed_data.get("expires_in", 3600))
+                            bundle["expires_at"] = time.time() + new_exp_in
+                            query_keystore_vault("save_key", name=vault_key, value=json.dumps(bundle), description="OAuth 2.1 Token Bundle")
+                            logger.info("Successfully refreshed OAuth 2.1 token for %s", server_name)
+                            return new_access
+                    else:
+                        logger.error("Failed to refresh token for %s: %s %s", server_name, resp.status_code, resp.text)
+            except Exception as exc:
+                logger.error("Exception during token refresh for %s: %s", server_name, exc)
+
+            return access_token
+
+
 async def add_mcp_server(
     name: str,
     transport: str,
@@ -1733,6 +2427,11 @@ async def add_mcp_server(
     args: Optional[list[str]] = None,
     headers: Optional[dict[str, str]] = None,
     env: Optional[dict[str, str]] = None,
+    download_url: Optional[str] = None,
+    checksum: Optional[str] = None,
+    auth_mode: str = "api_key",
+    client_id: Optional[str] = None,
+    scopes: Optional[str] = None,
 ) -> dict[str, Any]:
     if not re.match(r"^[a-zA-Z0-9_-]+$", name):
         raise ValueError("Server name must be alphanumeric with hyphens or underscores")
@@ -1749,11 +2448,16 @@ async def add_mcp_server(
             else:
                 final_headers[hk] = hv
 
+        is_oauth = (auth_mode == "oauth2")
         vault[name] = {
             "enabled": True,
             "transport": "http",
             "upstreamUrl": url_or_command,
-            "headers": final_headers,
+            "auth_mode": "oauth2" if is_oauth else "api_key",
+            "client_id": client_id or "",
+            "scopes": scopes or "",
+            "authenticated": False if is_oauth else True,
+            "headers": {} if is_oauth else final_headers,
             "created_at": int(time.time()),
         }
         save_mcp_vault(vault)
@@ -1768,12 +2472,26 @@ async def add_mcp_server(
             else:
                 final_env[ek] = ev
 
+        staged_bin = None
+        pinned_csum = checksum
+        if download_url and download_url.strip():
+            staged_bin, pinned_csum = await McpBinaryProvisioner.provision_stdio_binary(
+                server_name=name,
+                command=url_or_command,
+                download_url=download_url.strip(),
+                expected_checksum=checksum,
+            )
+
         vault[name] = {
             "enabled": True,
             "transport": "stdio",
             "command": url_or_command,
+            "target_bin": str(staged_bin) if staged_bin else "",
             "args": args or [],
             "env": final_env,
+            "downloadUrl": download_url.strip() if download_url else "",
+            "checksum": pinned_csum or "",
+            "provisioned": bool(staged_bin),
             "created_at": int(time.time()),
         }
         save_mcp_vault(vault)
@@ -1790,7 +2508,18 @@ async def add_mcp_server(
         for ek, ev in merged_env.items():
             if ek and ev:
                 cmd.extend(["-e", f"{ek}={ev}"])
-        cmd.extend([name, url_or_command])
+
+        if staged_bin:
+            cmd.extend([
+                name,
+                str(USR_DIR / "bin" / "agy-sh"),
+                "-c",
+                f'exec "{staged_bin}" "$@"',
+                "--",
+            ])
+        else:
+            cmd.extend([name, url_or_command])
+
         if args:
             cmd.extend(args)
 
@@ -1801,12 +2530,24 @@ async def add_mcp_server(
     if proc.returncode != 0:
         raise RuntimeError(f"agy mcp add failed: {stderr.decode('utf-8', 'replace')}")
 
-    if trans == "http" and MCP_CONFIG_FILE.exists():
+    if MCP_CONFIG_FILE.exists():
         try:
             cdata = json.loads(MCP_CONFIG_FILE.read_text(encoding="utf-8"))
             if name in cdata.get("mcpServers", {}):
-                cdata["mcpServers"][name]["upstreamUrl"] = url_or_command
-                cdata["mcpServers"][name].pop("headers", None)
+                if trans == "http":
+                    cdata["mcpServers"][name]["upstreamUrl"] = url_or_command
+                    if is_oauth:
+                        cdata["mcpServers"][name]["auth_mode"] = "oauth2"
+                        if client_id:
+                            cdata["mcpServers"][name]["client_id"] = client_id
+                        if scopes:
+                            cdata["mcpServers"][name]["scopes"] = scopes
+                    cdata["mcpServers"][name].pop("headers", None)
+                else:
+                    if download_url:
+                        cdata["mcpServers"][name]["downloadUrl"] = download_url.strip()
+                    if pinned_csum:
+                        cdata["mcpServers"][name]["checksum"] = pinned_csum
                 atomic_write_secure(str(MCP_CONFIG_FILE), json.dumps(cdata, indent=2) + "\n", mode=0o600)
         except Exception:
             pass
@@ -2938,9 +3679,18 @@ async def generate_config_export_bundle(categories: list[str], password: str) ->
                     elif "/mcp-proxy/" in s_copy.get("serverUrl", ""):
                         s_copy["serverUrl"] = ""
 
-                    real_headers = dict(v_entry.get("headers") or sinfo.get("headers") or {})
-                    if real_headers:
-                        s_copy["headers"] = real_headers
+                    auth_mode = v_entry.get("auth_mode") or sinfo.get("auth_mode") or "api_key"
+                    if auth_mode == "oauth2":
+                        s_copy["auth_mode"] = "oauth2"
+                        if v_entry.get("client_id") or sinfo.get("client_id"):
+                            s_copy["client_id"] = v_entry.get("client_id") or sinfo.get("client_id")
+                        if v_entry.get("scopes") or sinfo.get("scopes"):
+                            s_copy["scopes"] = v_entry.get("scopes") or sinfo.get("scopes")
+                        s_copy.pop("headers", None)
+                    else:
+                        real_headers = dict(v_entry.get("headers") or sinfo.get("headers") or {})
+                        if real_headers:
+                            s_copy["headers"] = real_headers
                     s_copy.pop("upstreamUrl", None)
                 elif trans == "stdio":
                     real_cmd = v_entry.get("command") or sinfo.get("command") or ""
@@ -2952,6 +3702,10 @@ async def generate_config_export_bundle(categories: list[str], password: str) ->
                     real_env = dict(v_entry.get("env") or sinfo.get("env") or {})
                     if real_env:
                         s_copy["env"] = real_env
+                    if v_entry.get("downloadUrl") or sinfo.get("downloadUrl"):
+                        s_copy["downloadUrl"] = v_entry.get("downloadUrl") or sinfo.get("downloadUrl")
+                    if v_entry.get("checksum") or sinfo.get("checksum"):
+                        s_copy["checksum"] = v_entry.get("checksum") or sinfo.get("checksum")
 
                 if "disabled" in v_entry:
                     s_copy["disabled"] = not v_entry.get("enabled", True)
@@ -2965,11 +3719,19 @@ async def generate_config_export_bundle(categories: list[str], password: str) ->
                         or ("http" if ("upstreamUrl" in vinfo or "serverUrl" in vinfo) else "stdio")
                     ).lower()
                     if v_trans == "http":
+                        v_auth = vinfo.get("auth_mode", "api_key")
                         export_servers[vname] = {
                             "serverUrl": vinfo.get("upstreamUrl") or vinfo.get("serverUrl", ""),
-                            "headers": dict(vinfo.get("headers") or {}),
+                            "auth_mode": v_auth,
                             "disabled": not vinfo.get("enabled", True),
                         }
+                        if v_auth == "oauth2":
+                            if vinfo.get("client_id"):
+                                export_servers[vname]["client_id"] = vinfo["client_id"]
+                            if vinfo.get("scopes"):
+                                export_servers[vname]["scopes"] = vinfo["scopes"]
+                        else:
+                            export_servers[vname]["headers"] = dict(vinfo.get("headers") or {})
                     else:
                         export_servers[vname] = {
                             "command": vinfo.get("command", ""),
@@ -2977,6 +3739,10 @@ async def generate_config_export_bundle(categories: list[str], password: str) ->
                             "env": dict(vinfo.get("env") or {}),
                             "disabled": not vinfo.get("enabled", True),
                         }
+                        if vinfo.get("downloadUrl"):
+                            export_servers[vname]["downloadUrl"] = vinfo["downloadUrl"]
+                        if vinfo.get("checksum"):
+                            export_servers[vname]["checksum"] = vinfo["checksum"]
             if export_servers:
                 body_sections.append(
                     "## Section: MCP Servers\n\n"
@@ -3317,31 +4083,55 @@ async def restore_configurations_bundle(
                                 raw_url = mcfg_copy.get("upstreamUrl") or mcfg_copy.get("serverUrl") or mcfg_copy.get("url") or ""
                                 if f"/mcp-proxy/{mname}" in raw_url:
                                     raw_url = mcfg_copy.get("upstreamUrl") or ""
+                                auth_mode = mcfg_copy.get("auth_mode", "api_key")
                                 vault[mname] = {
                                     "enabled": not is_disabled,
                                     "transport": "http",
                                     "upstreamUrl": raw_url,
-                                    "headers": headers_dict,
+                                    "auth_mode": auth_mode,
+                                    "client_id": mcfg_copy.get("client_id", ""),
+                                    "scopes": mcfg_copy.get("scopes", ""),
+                                    "authenticated": False if auth_mode == "oauth2" else True,
+                                    "headers": {} if auth_mode == "oauth2" else headers_dict,
                                     "created_at": int(time.time()),
                                 }
                                 mcfg_copy["serverUrl"] = f"http://127.0.0.1:{PORT}/mcp-proxy/{mname}"
                                 if raw_url:
                                     mcfg_copy["upstreamUrl"] = raw_url
+                                if auth_mode == "oauth2":
+                                    mcfg_copy["auth_mode"] = "oauth2"
                                 mcfg_copy.pop("headers", None)
                                 mcfg_copy.pop("url", None)
                             else:
+                                d_url = mcfg_copy.get("downloadUrl")
+                                c_sum = mcfg_copy.get("checksum")
                                 vault[mname] = {
                                     "enabled": not is_disabled,
                                     "transport": "stdio",
                                     "command": mcfg_copy.get("command", "") if mcfg_copy.get("command") != "/bin/false" else "",
                                     "args": mcfg_copy.get("args", []),
                                     "env": dict(mcfg_copy.get("env") or {}),
+                                    "downloadUrl": d_url or "",
+                                    "checksum": c_sum or "",
+                                    "provisioned": False,
                                     "created_at": int(time.time()),
                                 }
                                 if is_disabled:
                                     mcfg_copy["command"] = "/bin/false"
                                     mcfg_copy["args"] = []
                                     mcfg_copy.pop("env", None)
+                                elif d_url:
+                                    async def _auto_prov(sn=mname, cmd=mcfg_copy.get("command", ""), url=d_url, csum=c_sum):
+                                        try:
+                                            await McpBinaryProvisioner.provision_stdio_binary(sn, cmd, url, csum)
+                                            v = load_mcp_vault()
+                                            if sn in v:
+                                                v[sn]["provisioned"] = True
+                                                save_mcp_vault(v)
+                                            logger.info("Auto-provisioned binary for %s", sn)
+                                        except Exception as e:
+                                            logger.warning("Failed auto-provisioning %s: %s", sn, e)
+                                    asyncio.create_task(_auto_prov())
 
                             servers[mname] = mcfg_copy
                             summary["mcps"]["restored"].append(mname)
@@ -9061,6 +9851,9 @@ class AgyWebServer:
 
         path = request.path.split("?", 1)[0]
 
+        if path == "/oauth/callback":
+            return await McpOAuth2Manager.handle_oauth_callback(request, self)
+
         if path == "/api/session/abort":
             if not is_request_authorized(request):
                 return Response(
@@ -9445,9 +10238,15 @@ class AgyWebServer:
             mcp_headers.pop("Content-Length", None)
 
             # In-Flight Secret Injection from Vault
-            vault_headers = server_meta.get("headers", {})
-            for hk, hv in vault_headers.items():
-                mcp_headers[hk] = resolve_secret_reference(hv)
+            auth_mode = server_meta.get("auth_mode", "api_key")
+            if auth_mode == "oauth2":
+                oauth_token = await McpOAuth2Manager.get_valid_oauth_token(server_name)
+                if oauth_token:
+                    mcp_headers["Authorization"] = f"Bearer {oauth_token}"
+            else:
+                vault_headers = server_meta.get("headers", {})
+                for hk, hv in vault_headers.items():
+                    mcp_headers[hk] = resolve_secret_reference(hv)
 
             mcp_headers["User-Agent"] = f"AntigravityStudio/{APP_VERSION} (MCP-Proxy)"
             req_body = getattr(request, "body", b"")
@@ -10290,8 +11089,25 @@ class AgyWebServer:
             args = data.get("args")
             headers = data.get("headers")
             env = data.get("env")
+            download_url = data.get("download_url") or data.get("downloadUrl")
+            checksum = data.get("checksum")
+            auth_mode = data.get("auth_mode") or data.get("authMode") or "api_key"
+            client_id = data.get("client_id") or data.get("clientId")
+            scopes = data.get("scopes")
             try:
-                res = await add_mcp_server(name, trans, url_cmd, args=args, headers=headers, env=env)
+                res = await add_mcp_server(
+                    name=name,
+                    transport=trans,
+                    url_or_command=url_cmd,
+                    args=args,
+                    headers=headers,
+                    env=env,
+                    download_url=download_url,
+                    checksum=checksum,
+                    auth_mode=auth_mode,
+                    client_id=client_id,
+                    scopes=scopes,
+                )
                 servers = load_masked_mcp_servers()
                 await self.broadcast({"type": "mcp_servers_list", "servers": servers})
                 await self.broadcast({"type": "mcp_server_added", "server": res})
@@ -10306,6 +11122,85 @@ class AgyWebServer:
                     "type": "system_card",
                     "title": "Add MCP Server Failed",
                     "markdown": f"Could not add MCP server: `{exc}`",
+                    "level": "error",
+                }))
+            return
+
+        if mtype == "initiate_mcp_oauth":
+            name = str(data.get("name") or "").strip()
+            try:
+                auth_url = await McpOAuth2Manager.initiate_oauth_flow(
+                    server_name=name,
+                    redirect_uri=f"http://127.0.0.1:{PORT}/oauth/callback",
+                )
+                await websocket.send(json.dumps({
+                    "type": "open_oauth_url",
+                    "url": auth_url,
+                    "server": name,
+                }))
+            except Exception as exc:
+                logger.error("Failed to initiate OAuth for %s: %s", name, exc)
+                await websocket.send(json.dumps({
+                    "type": "system_card",
+                    "title": "OAuth Initiation Failed",
+                    "markdown": f"Could not start OAuth flow for `{name}`: {exc}",
+                    "level": "error",
+                }))
+            return
+
+        if mtype == "disconnect_mcp_oauth":
+            name = str(data.get("name") or "").strip()
+            try:
+                query_keystore_vault("delete_key", name=f"__MCP_OAUTH_{name}__")
+                vault = load_mcp_vault()
+                if name in vault:
+                    vault[name]["authenticated"] = False
+                    save_mcp_vault(vault)
+                servers = load_masked_mcp_servers()
+                await self.broadcast({"type": "mcp_servers_list", "servers": servers})
+                await self.broadcast({
+                    "type": "system_card",
+                    "title": "Disconnected OAuth",
+                    "markdown": f"Disconnected OAuth session for **`{name}`**.",
+                    "level": "info",
+                })
+            except Exception as exc:
+                logger.error("Failed to disconnect OAuth for %s: %s", name, exc)
+            return
+
+        if mtype == "reprovision_mcp_binary":
+            name = str(data.get("name") or "").strip()
+            try:
+                vault = load_mcp_vault()
+                v_entry = vault.get(name, {})
+                d_url = v_entry.get("downloadUrl")
+                c_sum = v_entry.get("checksum")
+                cmd = v_entry.get("command") or name
+                if not d_url:
+                    raise ValueError(f"No download URL configured for Stdio server '{name}'")
+                await websocket.send(json.dumps({
+                    "type": "system_card",
+                    "title": "Provisioning Binary",
+                    "markdown": f"Re-downloading and validating ARM64 binary for **`{name}`**...",
+                    "level": "info",
+                }))
+                await McpBinaryProvisioner.provision_stdio_binary(name, cmd, d_url, c_sum)
+                v_entry["provisioned"] = True
+                save_mcp_vault(vault)
+                servers = load_masked_mcp_servers()
+                await self.broadcast({"type": "mcp_servers_list", "servers": servers})
+                await self.broadcast({
+                    "type": "system_card",
+                    "title": "Binary Staged",
+                    "markdown": f"Successfully staged and verified ARM64 binary for **`{name}`**.",
+                    "level": "info",
+                })
+            except Exception as exc:
+                logger.error("Failed to reprovision binary for %s: %s", name, exc)
+                await websocket.send(json.dumps({
+                    "type": "system_card",
+                    "title": "Provisioning Failed",
+                    "markdown": f"Failed to provision binary for `{name}`: {exc}",
                     "level": "error",
                 }))
             return

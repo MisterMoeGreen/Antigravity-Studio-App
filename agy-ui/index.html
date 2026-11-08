@@ -4873,21 +4873,41 @@
           <div id="mcpHttpFields">
             <label style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Endpoint URL:</label>
             <input type="url" id="inputMCPUrl" class="search-input" placeholder="https://api.example.com/mcp" />
-            <label style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Headers (JSON object or header:value):</label>
-            <textarea id="txtMCPHeaders" class="settings-prompt-textarea" style="min-height:80px;" placeholder='{"Authorization": "Bearer $TOKEN"}'></textarea>
-            <div style="font-size:11px;color:var(--text-secondary);margin-top:4px;display:flex;justify-content:space-between;align-items:center;">
-              <span>Reference API Key:</span>
-              <span style="color:var(--accent-emerald);font-size:10px;">● Resolved in-flight</span>
+            <label style="font-size:12px;color:var(--text-secondary);margin-top:6px;">Authentication Mode:</label>
+            <div class="prompts-tab-strip" style="margin-bottom:6px;">
+              <button type="button" class="prompts-tab-btn active" id="mcpAuthModeApiKey" data-val="api_key">API Key / Headers</button>
+              <button type="button" class="prompts-tab-btn" id="mcpAuthModeOAuth" data-val="oauth2">OAuth 2.1 (PKCE)</button>
             </div>
-            <div class="preset-chips-container" id="mcpHeaderKeyChips" style="margin-top:2px;display:flex;flex-wrap:wrap;gap:4px;"></div>
+            <div id="mcpAuthApiKeyFields">
+              <label style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Headers (JSON object or header:value):</label>
+              <textarea id="txtMCPHeaders" class="settings-prompt-textarea" style="min-height:80px;" placeholder='{"Authorization": "Bearer $TOKEN"}'></textarea>
+              <div style="font-size:11px;color:var(--text-secondary);margin-top:4px;display:flex;justify-content:space-between;align-items:center;">
+                <span>Reference API Key:</span>
+                <span style="color:var(--accent-emerald);font-size:10px;">● Resolved in-flight</span>
+              </div>
+              <div class="preset-chips-container" id="mcpHeaderKeyChips" style="margin-top:2px;display:flex;flex-wrap:wrap;gap:4px;"></div>
+            </div>
+            <div id="mcpAuthOAuthFields" style="display:none;">
+              <div class="settings-info-banner" style="margin-top:4px;">
+                <strong>🔐 Interactive OAuth 2.1 with PKCE:</strong> Automatically discovers RFC 9728 metadata or RFC 8414 authorization servers. Dynamic Client Registration is used if advertised.
+              </div>
+              <label style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Client ID (optional, for GitHub/Google/Slack):</label>
+              <input type="text" id="inputMCPOAuthClientId" class="search-input" placeholder="e.g. Iv1.xxx or app-client-id" />
+              <label style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Scopes (optional, space-separated):</label>
+              <input type="text" id="inputMCPOAuthScopes" class="search-input" placeholder="e.g. repo read:user or mcp" />
+            </div>
           </div>
           <div id="mcpStdioFields" style="display:none;">
-            <label style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Command (must be executable interpreter):</label>
-            <input type="text" id="inputMCPCommand" class="search-input" placeholder="python3 or bash" />
+            <label style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Command (executable or interpreter):</label>
+            <input type="text" id="inputMCPCommand" class="search-input" placeholder="github-mcp-server, npx, or python3" />
+            <label style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Download URL (Linux ARM64 .tar.gz / binary, optional):</label>
+            <input type="url" id="inputMCPDownloadUrl" class="search-input" placeholder="https://github.com/.../releases/...linux_arm64.tar.gz" />
+            <label style="font-size:12px;color:var(--text-secondary);margin-top:4px;">SHA-256 Checksum (optional, auto-pinned via TOFU):</label>
+            <input type="text" id="inputMCPChecksum" class="search-input" placeholder="Optional hex digest to verify download integrity" />
             <label style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Arguments (comma or space separated):</label>
-            <input type="text" id="inputMCPArgs" class="search-input" placeholder="/data/data/.../script.py" />
+            <input type="text" id="inputMCPArgs" class="search-input" placeholder="stdio or script argument" />
             <label style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Environment Variables (JSON object):</label>
-            <textarea id="txtMCPEnv" class="settings-prompt-textarea" style="min-height:80px;" placeholder='{"API_KEY": "..."}'></textarea>
+            <textarea id="txtMCPEnv" class="settings-prompt-textarea" style="min-height:80px;" placeholder='{"API_KEY": "$GITHUB_TOKEN"}'></textarea>
             <div style="font-size:11px;color:var(--text-secondary);margin-top:4px;display:flex;justify-content:space-between;align-items:center;">
               <span>Reference API Key:</span>
               <span style="color:var(--accent-emerald);font-size:10px;">● Injected into process env</span>
@@ -7316,6 +7336,31 @@
 
           case 'mcp_servers_list':
             renderMCP(msg.servers);
+            break;
+
+          case 'open_oauth_url':
+            if (msg.url) {
+              if (window.AndroidApp && typeof window.AndroidApp.openCustomTab === 'function') {
+                window.AndroidApp.openCustomTab(msg.url);
+              } else if (window.AndroidApp && typeof window.AndroidApp.openUrl === 'function') {
+                window.AndroidApp.openUrl(msg.url);
+              } else {
+                window.open(msg.url, '_blank');
+              }
+            }
+            break;
+
+          case 'mcp_oauth_callback_completed':
+            if (window.AndroidApp && typeof window.AndroidApp.dismissCustomTabAndFocusApp === 'function') {
+              window.AndroidApp.dismissCustomTabAndFocusApp();
+            }
+            showToast(`OAuth sign-in completed for ${msg.server || 'server'}`);
+            sendWs({ type: 'list_mcp_servers' });
+            break;
+
+          case 'mcp_oauth_success':
+            showToast(`Connected with OAuth to ${msg.server || 'server'}`);
+            sendWs({ type: 'list_mcp_servers' });
             break;
 
           case 'mcp_server_added':
@@ -10239,6 +10284,15 @@
       const mcpHttpFields = document.getElementById('mcpHttpFields');
       const mcpStdioFields = document.getElementById('mcpStdioFields');
 
+      const mcpAuthModeApiKey = document.getElementById('mcpAuthModeApiKey');
+      const mcpAuthModeOAuth = document.getElementById('mcpAuthModeOAuth');
+      const mcpAuthApiKeyFields = document.getElementById('mcpAuthApiKeyFields');
+      const mcpAuthOAuthFields = document.getElementById('mcpAuthOAuthFields');
+      const inputMCPOAuthClientId = document.getElementById('inputMCPOAuthClientId');
+      const inputMCPOAuthScopes = document.getElementById('inputMCPOAuthScopes');
+      const inputMCPDownloadUrl = document.getElementById('inputMCPDownloadUrl');
+      const inputMCPChecksum = document.getElementById('inputMCPChecksum');
+
       const inputMCPName = document.getElementById('inputMCPName');
       const inputMCPUrl = document.getElementById('inputMCPUrl');
       const txtMCPHeaders = document.getElementById('txtMCPHeaders');
@@ -10250,6 +10304,7 @@
 
       let currentMCPTransport = 'http';
       let currentMCPAddTab = 'manual';
+      let currentMCPAuthMode = 'api_key';
 
       if (tabBtnMCPManual && tabBtnMCPAI) {
         tabBtnMCPManual.addEventListener('click', () => {
@@ -10284,6 +10339,23 @@
           mcpTypeHttp.classList.remove('active');
           if (mcpHttpFields) mcpHttpFields.style.display = 'none';
           if (mcpStdioFields) mcpStdioFields.style.display = 'block';
+        });
+      }
+
+      if (mcpAuthModeApiKey && mcpAuthModeOAuth) {
+        mcpAuthModeApiKey.addEventListener('click', () => {
+          currentMCPAuthMode = 'api_key';
+          mcpAuthModeApiKey.classList.add('active');
+          mcpAuthModeOAuth.classList.remove('active');
+          if (mcpAuthApiKeyFields) mcpAuthApiKeyFields.style.display = 'block';
+          if (mcpAuthOAuthFields) mcpAuthOAuthFields.style.display = 'none';
+        });
+        mcpAuthModeOAuth.addEventListener('click', () => {
+          currentMCPAuthMode = 'oauth2';
+          mcpAuthModeOAuth.classList.add('active');
+          mcpAuthModeApiKey.classList.remove('active');
+          if (mcpAuthApiKeyFields) mcpAuthApiKeyFields.style.display = 'none';
+          if (mcpAuthOAuthFields) mcpAuthOAuthFields.style.display = 'block';
         });
       }
 
@@ -10377,10 +10449,15 @@
             if (inputMCPUrl) inputMCPUrl.value = '';
             if (txtMCPHeaders) txtMCPHeaders.value = '';
             if (inputMCPCommand) inputMCPCommand.value = '';
+            if (inputMCPDownloadUrl) inputMCPDownloadUrl.value = '';
+            if (inputMCPChecksum) inputMCPChecksum.value = '';
+            if (inputMCPOAuthClientId) inputMCPOAuthClientId.value = '';
+            if (inputMCPOAuthScopes) inputMCPOAuthScopes.value = '';
             if (inputMCPArgs) inputMCPArgs.value = '';
             if (txtMCPEnv) txtMCPEnv.value = '';
             if (inputAIMCPName) inputAIMCPName.value = '';
             if (txtAIMCPDetails) txtAIMCPDetails.value = '';
+            if (mcpAuthModeApiKey) mcpAuthModeApiKey.click();
             updateMCPKeyChips();
             if (!state.availableApiKeys || state.availableApiKeys.length === 0) {
               sendWs({ type: 'list_api_keys' });
@@ -10430,34 +10507,51 @@
               showToast('URL is required for HTTP transport');
               return;
             }
-            let headers = {};
-            if (txtMCPHeaders && txtMCPHeaders.value.trim()) {
-              try {
-                headers = JSON.parse(txtMCPHeaders.value.trim());
-              } catch (_) {
-                // simple header:value lines parser
-                txtMCPHeaders.value.split('\n').forEach(line => {
-                  if (line.includes(':')) {
-                    const idx = line.indexOf(':');
-                    headers[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
-                  }
-                });
+            if (currentMCPAuthMode === 'oauth2') {
+              const clientId = inputMCPOAuthClientId ? inputMCPOAuthClientId.value.trim() : '';
+              const scopes = inputMCPOAuthScopes ? inputMCPOAuthScopes.value.trim() : '';
+              sendWs({
+                type: 'add_mcp_server',
+                name: name,
+                transport: 'http',
+                url: url,
+                url_or_command: url,
+                auth_mode: 'oauth2',
+                client_id: clientId,
+                scopes: scopes
+              });
+            } else {
+              let headers = {};
+              if (txtMCPHeaders && txtMCPHeaders.value.trim()) {
+                try {
+                  headers = JSON.parse(txtMCPHeaders.value.trim());
+                } catch (_) {
+                  txtMCPHeaders.value.split('\n').forEach(line => {
+                    if (line.includes(':')) {
+                      const idx = line.indexOf(':');
+                      headers[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+                    }
+                  });
+                }
               }
+              sendWs({
+                type: 'add_mcp_server',
+                name: name,
+                transport: 'http',
+                url: url,
+                url_or_command: url,
+                auth_mode: 'api_key',
+                headers: headers
+              });
             }
-            sendWs({
-              type: 'add_mcp_server',
-              name: name,
-              transport: 'http',
-              url: url,
-              url_or_command: url,
-              headers: headers
-            });
           } else {
             const command = inputMCPCommand ? inputMCPCommand.value.trim() : '';
             if (!command) {
               showToast('Command is required for Stdio transport');
               return;
             }
+            const downloadUrl = inputMCPDownloadUrl ? inputMCPDownloadUrl.value.trim() : '';
+            const checksum = inputMCPChecksum ? inputMCPChecksum.value.trim() : '';
             const args = (inputMCPArgs && inputMCPArgs.value.trim())
               ? inputMCPArgs.value.trim().split(/\s+/)
               : [];
@@ -10481,7 +10575,9 @@
               command: command,
               url_or_command: command,
               args: args,
-              env: env
+              env: env,
+              download_url: downloadUrl,
+              checksum: checksum
             });
           }
           closeMCPModal();
@@ -10535,9 +10631,24 @@
             : '<span class="status-dot" style="background:var(--text-muted);"></span>';
           const badgeClass = s.transport === 'http' ? 'badge-http' : 'badge-stdio';
 
+          let subBadge = '';
+          let authActionButton = '';
+          if (s.transport === 'http' && s.auth_mode === 'oauth2') {
+            if (s.authenticated) {
+              subBadge = `<span class="card-badge" style="background:rgba(16,185,129,0.15);color:var(--accent-emerald);font-weight:600;">OAuth 2.1 ● Connected</span>`;
+              authActionButton = `<button class="card-action-btn" data-action="disconnect_oauth" data-name="${escapeHtml(s.name)}" style="height:28px;font-size:11px;">Disconnect OAuth</button>`;
+            } else {
+              subBadge = `<span class="card-badge" style="background:rgba(245,158,11,0.15);color:#f59e0b;font-weight:600;">OAuth 2.1 ● Re-Auth Required</span>`;
+              authActionButton = `<button class="card-action-btn primary" data-action="connect_oauth" data-name="${escapeHtml(s.name)}" style="height:28px;font-size:11px;background:#f59e0b;color:#000;font-weight:600;touch-action:manipulation;">Connect with OAuth</button>`;
+            }
+          } else if (s.transport === 'stdio' && s.downloadUrl) {
+            subBadge = `<span class="card-badge" style="background:rgba(59,130,246,0.15);color:#3b82f6;font-weight:600;">Binary: ${s.provisioned ? 'Staged' : 'On-Demand'}</span>`;
+            authActionButton = `<button class="card-action-btn" data-action="reprovision" data-name="${escapeHtml(s.name)}" style="height:28px;font-size:11px;touch-action:manipulation;">${s.provisioned ? 'Re-Download' : 'Stage Binary'}</button>`;
+          }
+
           card.innerHTML = `
             <div class="card-top-row">
-              <div class="card-main-title">${statusDot} ${escapeHtml(s.name)} <span class="card-badge ${badgeClass}">${escapeHtml((s.transport || 'http').toUpperCase())}</span></div>
+              <div class="card-main-title">${statusDot} ${escapeHtml(s.name)} <span class="card-badge ${badgeClass}">${escapeHtml((s.transport || 'http').toUpperCase())}</span> ${subBadge}</div>
               <button class="card-action-btn" data-action="toggle" style="height:28px;font-size:11px;">
                 ${isEnabled ? 'Disable' : 'Enable'}
               </button>
@@ -10547,6 +10658,7 @@
             ${s.env && Object.keys(s.env).length > 0 ? `<div class="card-meta-sub" style="font-size:11px;color:var(--text-secondary);margin-top:2px;font-family:var(--font-mono);word-break:break-all;">${Object.entries(s.env).map(([k,v]) => `${escapeHtml(k)}=${escapeHtml(v)}`).join(' · ')}</div>` : ''}
             <div class="card-health-msg" style="font-size:11px;margin-top:6px;line-height:1.4;display:none;"></div>
             <div class="card-actions-row">
+              ${authActionButton}
               <button class="card-action-btn" data-action="probe" data-name="${escapeHtml(s.name)}">
                 ${faIcon('arrows-rotate', '', 'width:12px;height:12px;')} Probe Health
               </button>
@@ -10583,14 +10695,48 @@
                 if (s.transport === 'http') {
                   if (mcpTypeHttp) mcpTypeHttp.click();
                   if (inputMCPUrl) inputMCPUrl.value = s.upstreamUrl || s.target || s.url || '';
-                  if (txtMCPHeaders) txtMCPHeaders.value = (s.headers && Object.keys(s.headers).length > 0) ? JSON.stringify(s.headers, null, 2) : '';
+                  if (s.auth_mode === 'oauth2') {
+                    if (mcpAuthModeOAuth) mcpAuthModeOAuth.click();
+                    if (inputMCPOAuthClientId) inputMCPOAuthClientId.value = s.client_id || '';
+                    if (inputMCPOAuthScopes) inputMCPOAuthScopes.value = s.scopes || '';
+                  } else {
+                    if (mcpAuthModeApiKey) mcpAuthModeApiKey.click();
+                    if (txtMCPHeaders) txtMCPHeaders.value = (s.headers && Object.keys(s.headers).length > 0) ? JSON.stringify(s.headers, null, 2) : '';
+                  }
                 } else {
                   if (mcpTypeStdio) mcpTypeStdio.click();
                   if (inputMCPCommand) inputMCPCommand.value = s.command || s.target || '';
+                  if (inputMCPDownloadUrl) inputMCPDownloadUrl.value = s.downloadUrl || '';
+                  if (inputMCPChecksum) inputMCPChecksum.value = s.checksum || '';
                   if (inputMCPArgs) inputMCPArgs.value = Array.isArray(s.args) ? s.args.join(' ') : (s.args || '');
                   if (txtMCPEnv) txtMCPEnv.value = (s.env && Object.keys(s.env).length > 0) ? JSON.stringify(s.env, null, 2) : '';
                 }
               }
+            });
+          }
+
+          const connectOAuthBtn = card.querySelector('[data-action="connect_oauth"]');
+          if (connectOAuthBtn) {
+            connectOAuthBtn.addEventListener('click', () => {
+              showToast(`Opening OAuth sign-in for ${s.name}...`);
+              sendWs({ type: 'initiate_mcp_oauth', name: s.name });
+            });
+          }
+
+          const disconnectOAuthBtn = card.querySelector('[data-action="disconnect_oauth"]');
+          if (disconnectOAuthBtn) {
+            disconnectOAuthBtn.addEventListener('click', () => {
+              if (confirm(`Disconnect OAuth session for "${s.name}"?`)) {
+                sendWs({ type: 'disconnect_mcp_oauth', name: s.name });
+              }
+            });
+          }
+
+          const reprovisionBtn = card.querySelector('[data-action="reprovision"]');
+          if (reprovisionBtn) {
+            reprovisionBtn.addEventListener('click', () => {
+              showToast(`Staging binary for ${s.name}...`);
+              sendWs({ type: 'reprovision_mcp_binary', name: s.name });
             });
           }
 
@@ -10646,7 +10792,17 @@
 
         const healthMsg = card.querySelector('.card-health-msg');
 
-        if (st === 'connected') {
+        if (st === 'auth_required') {
+          if (dot) dot.style.background = '#f59e0b';
+          healthBadge.textContent = 'AUTH REQUIRED';
+          healthBadge.style.color = '#f59e0b';
+          healthBadge.style.background = 'rgba(245, 158, 11, 0.15)';
+          if (healthMsg) {
+            healthMsg.style.display = 'block';
+            healthMsg.style.color = '#f59e0b';
+            healthMsg.innerHTML = `${faIcon('key', '', 'width:11px;height:11px;')} ${escapeHtml(message || 'Authentication required. Tap Connect to sign in.')}`;
+          }
+        } else if (st === 'connected') {
           if (dot) dot.style.background = 'var(--accent-emerald)';
           healthBadge.textContent = 'ONLINE';
           healthBadge.style.color = 'var(--accent-emerald)';

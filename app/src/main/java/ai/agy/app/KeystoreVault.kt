@@ -180,7 +180,7 @@ object KeystoreVault {
             val it = keysObj.keys()
             while (it.hasNext()) {
                 val name = it.next()
-                if (name == "__MCP_VAULT__") continue
+                if (name.startsWith("__")) continue
                 val entry = keysObj.optJSONObject(name) ?: continue
                 val iv = entry.optString("iv")
                 val ct = entry.optString("ciphertext")
@@ -214,7 +214,7 @@ object KeystoreVault {
             val it = keysObj.keys()
             while (it.hasNext()) {
                 val name = it.next()
-                if (name == "__MCP_VAULT__") continue
+                if (name.startsWith("__")) continue
                 val entry = keysObj.optJSONObject(name) ?: continue
                 val desc = entry.optString("description", "")
                 val ts = entry.optLong("updated_at", 0L)
