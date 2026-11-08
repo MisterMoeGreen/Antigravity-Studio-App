@@ -5541,15 +5541,12 @@ class AgyProcessOrchestrator:
                                     duration = 0.0
 
                             ctx = self._sessions.get(cid)
-                            spawned_turn_id = t_info.get("spawned_during_turn_id") if t_info else None
-                            current_turn_id = getattr(ctx, "current_turn_id", None) if ctx else None
-                            is_running_in_spawned_turn = bool(
-                                spawned_turn_id
-                                and current_turn_id
-                                and spawned_turn_id == current_turn_id
-                                and ctx
-                                and ctx.is_running
-                            )
+                            if not ctx and cid:
+                                for k, v in self._sessions.items():
+                                    if cid_matches(k, cid):
+                                        ctx = v
+                                        break
+                            is_agent_turn_running = bool(ctx and ctx.is_running)
 
                             is_user_stopped = bool(
                                 is_cancelled
@@ -5604,7 +5601,9 @@ class AgyProcessOrchestrator:
                                 or exit_code in (137, 143)
                             )
 
-                            if is_from_current_session and not is_user_stopped:
+                            # Only emit notification and schedule feedback if the task finished AFTER the turn (agent is idle).
+                            # Intermediate tasks completing while an agent turn is actively executing are ignored for feedback.
+                            if is_from_current_session and not is_user_stopped and not is_agent_turn_running:
                                 status_label = "Completed" if exit_code == 0 else f"Failed (exit code {exit_code})"
                                 emit_native_notif_event({
                                     "event": "task_completed",
@@ -5622,8 +5621,7 @@ class AgyProcessOrchestrator:
                                     "duration": duration,
                                     "output_snippet": output_snippet[:600],
                                 })
-                                if not is_running_in_spawned_turn:
-                                    self._schedule_background_feedback(cid)
+                                self._schedule_background_feedback(cid)
                         else:
                             if full_task_id not in self.active_background_tasks:
                                 try:
@@ -6175,6 +6173,11 @@ class AgyProcessOrchestrator:
         async with ctx.turn_lock:
             if is_background_feedback:
                 ctx.is_background_feedback_running = True
+            else:
+                if cid:
+                    matching_timers = [k for k in self._pending_task_timers if cid_matches(k, cid)]
+                    for k in matching_timers:
+                        self._pending_task_timers.pop(k).cancel()
             if cid and cid in self._spontaneous_turn_watchdogs:
                 self._spontaneous_turn_watchdogs.pop(cid).cancel()
             ctx.spontaneous_turn_id = None
@@ -6608,9 +6611,6 @@ class AgyProcessOrchestrator:
                         "unread_sessions": list(self.unread_sessions),
                     }
                 )
-                # Auto-trigger feedback for any background tasks that finished while this turn was active
-                if final_cid and any(cid_matches(k, final_cid) and self._pending_task_completions[k] for k in self._pending_task_completions):
-                    self._schedule_background_feedback(final_cid)
                 self._gc_idle_sessions()
 
     _SESSION_IDLE_TTL = 30 * 60  # 30 minutes
