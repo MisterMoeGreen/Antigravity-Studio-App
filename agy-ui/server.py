@@ -1377,6 +1377,7 @@ def delete_skill(target_path: str, workspace_dir: Optional[str] = None) -> bool:
 
 # 5. Model Context Protocol (MCP) Management
 def load_masked_mcp_servers() -> list[dict[str, Any]]:
+    sync_and_sanitize_mcp_vault_and_config()
     if not MCP_CONFIG_FILE.exists():
         atomic_write_secure(str(MCP_CONFIG_FILE), '{"mcpServers": {}}\n', mode=0o600)
         return []
@@ -8847,6 +8848,10 @@ class AgyWebServer:
 
             vault = load_mcp_vault()
             server_meta = vault.get(server_name)
+            if not server_meta:
+                sync_and_sanitize_mcp_vault_and_config()
+                vault = load_mcp_vault()
+                server_meta = vault.get(server_name)
 
             if not server_meta:
                 return _json_response(
