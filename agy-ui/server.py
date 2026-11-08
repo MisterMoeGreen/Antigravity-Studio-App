@@ -5755,6 +5755,11 @@ class AgyProcessOrchestrator:
         initial_title: Optional[str] = None,
         is_background_feedback: bool = False,
     ) -> None:
+        try:
+            sync_and_sanitize_mcp_vault_and_config()
+        except Exception as exc:
+            logger.debug("Pre-turn MCP sync failed: %s", exc)
+
         raw_cid = (conversation_id or "").strip()
         if raw_cid in self._migrated_cids:
             raw_cid = self._migrated_cids[raw_cid]
