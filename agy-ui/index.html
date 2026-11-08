@@ -11257,7 +11257,8 @@
         const dateStr = meta.exported_at ? new Date(meta.exported_at).toLocaleString() : 'Unknown';
         if (importMetaDate) importMetaDate.textContent = `Exported: ${dateStr}`;
         if (importMetaCategories) {
-          importMetaCategories.textContent = `Version: ${meta.source_app_version || '1.6.3'} (AES-256-GCM)`;
+          const vStr = meta.source_app_version ? (meta.source_app_version.startsWith('v') ? meta.source_app_version : `v${meta.source_app_version}`) : (state.appVersion ? `v${state.appVersion}` : 'v1.9.0');
+          importMetaCategories.textContent = `Version: ${vStr} (AES-256-GCM)`;
         }
 
         importPasswordSheet.classList.add('open');

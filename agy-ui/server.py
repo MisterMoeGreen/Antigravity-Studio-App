@@ -1881,7 +1881,7 @@ async def delete_mcp_server(name: str) -> dict[str, Any]:
 
 
 async def check_github_updates() -> dict[str, Any]:
-    installed_version = os.environ.get("AGY_APP_VERSION", "1.6.2")
+    installed_version = os.environ.get("AGY_APP_VERSION", APP_VERSION)
     installed_code = int(os.environ.get("AGY_APP_VERSION_CODE", "47"))
     url = "https://api.github.com/repos/MisterMoeGreen/Antigravity-Studio-App/releases/latest"
 
@@ -2626,11 +2626,12 @@ def encrypt_v2_bundle(
     plaintext_body: str,
     password: str,
     categories: list[str],
-    app_version: str = "1.6.3",
+    app_version: Optional[str] = None,
 ) -> tuple[str, str]:
     if not password or len(password.strip()) < 8:
         raise ValueError("Encryption password must be at least 8 characters.")
 
+    app_ver = app_version or APP_VERSION
     iso_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     salt = secrets.token_bytes(16)
     nonce = secrets.token_bytes(12)
@@ -2662,7 +2663,7 @@ def encrypt_v2_bundle(
         f'generator: "Antigravity Studio"\n'
         f'export_version: "2.0"\n'
         f'exported_at: "{iso_ts}"\n'
-        f'source_app_version: "{app_version}"\n'
+        f'source_app_version: "{app_ver}"\n'
         f"categories:\n{categories_yaml}\n"
         f'cipher: "AES-256-GCM"\n'
         f'kdf: "scrypt"\n'
@@ -2867,10 +2868,14 @@ async def generate_config_export_bundle(categories: list[str], password: str) ->
                 s_copy = dict(sinfo)
                 v_entry = vault.get(sname, {})
                 if v_entry.get("transport") == "http":
-                    if v_entry.get("upstreamUrl"):
-                        s_copy["serverUrl"] = v_entry["upstreamUrl"]
+                    real_url = v_entry.get("upstreamUrl") or sinfo.get("upstreamUrl") or ""
+                    if real_url:
+                        s_copy["serverUrl"] = real_url
+                    elif s_copy.get("serverUrl", "").startswith(f"http://127.0.0.1:{PORT}/mcp-proxy/"):
+                        s_copy["serverUrl"] = ""
                     if v_entry.get("headers"):
                         s_copy["headers"] = v_entry["headers"]
+                    s_copy.pop("upstreamUrl", None)
                 elif v_entry.get("transport") == "stdio":
                     if v_entry.get("command"):
                         s_copy["command"] = v_entry["command"]
@@ -2945,7 +2950,7 @@ async def generate_config_export_bundle(categories: list[str], password: str) ->
         f'generator: "Antigravity Studio"\n'
         f'export_version: "1.0"\n'
         f'exported_at: "{iso_ts}"\n'
-        f'source_app_version: "1.6.3"\n'
+        f'source_app_version: "{APP_VERSION}"\n'
         f"categories:\n" + "\n".join(f"  - {c}" for c in categories) + "\n"
         f'checksum: "sha256:{checksum}"\n'
         f"---\n\n"
@@ -2954,7 +2959,7 @@ async def generate_config_export_bundle(categories: list[str], password: str) ->
     full_content = header + post_frontmatter_body
 
     # Encrypt canonical bundle using AES-256-GCM + scrypt (Spec 03)
-    encrypted_envelope, _ = encrypt_v2_bundle(full_content, password, categories, app_version="1.6.3")
+    encrypted_envelope, _ = encrypt_v2_bundle(full_content, password, categories, app_version=APP_VERSION)
 
     download_dir = Path("/storage/emulated/0/Download")
     try:
@@ -3190,9 +3195,11 @@ async def restore_configurations_bundle(
                         else:
                             mcfg_copy = dict(mcfg) if isinstance(mcfg, dict) else {}
                             is_disabled = mcfg_copy.get("disabled", False)
-                            trans = "http" if ("serverUrl" in mcfg_copy or "url" in mcfg_copy) else "stdio"
+                            trans = "http" if ("serverUrl" in mcfg_copy or "url" in mcfg_copy or mcfg_copy.get("type") == "http") else "stdio"
                             if trans == "http":
-                                raw_url = mcfg_copy.get("serverUrl") or mcfg_copy.get("url") or ""
+                                raw_url = mcfg_copy.get("upstreamUrl") or mcfg_copy.get("serverUrl") or mcfg_copy.get("url") or ""
+                                if f"/mcp-proxy/{mname}" in raw_url:
+                                    raw_url = mcfg_copy.get("upstreamUrl") or ""
                                 vault[mname] = {
                                     "enabled": not is_disabled,
                                     "transport": "http",
@@ -3201,18 +3208,23 @@ async def restore_configurations_bundle(
                                     "created_at": int(time.time()),
                                 }
                                 mcfg_copy["serverUrl"] = f"http://127.0.0.1:{PORT}/mcp-proxy/{mname}"
+                                if raw_url:
+                                    mcfg_copy["upstreamUrl"] = raw_url
                                 mcfg_copy.pop("headers", None)
+                                mcfg_copy.pop("url", None)
                             else:
                                 vault[mname] = {
                                     "enabled": not is_disabled,
                                     "transport": "stdio",
-                                    "command": mcfg_copy.get("command", ""),
+                                    "command": mcfg_copy.get("command", "") if mcfg_copy.get("command") != "/bin/false" else "",
                                     "args": mcfg_copy.get("args", []),
                                     "env": mcfg_copy.get("env", {}),
                                     "created_at": int(time.time()),
                                 }
                                 if is_disabled:
                                     mcfg_copy["command"] = "/bin/false"
+                                    mcfg_copy["args"] = []
+                                    mcfg_copy.pop("env", None)
 
                             servers[mname] = mcfg_copy
                             summary["mcps"]["restored"].append(mname)
@@ -3220,6 +3232,7 @@ async def restore_configurations_bundle(
                     if has_new_mcp:
                         save_mcp_vault(vault)
                         atomic_write_secure(str(MCP_CONFIG_FILE), json.dumps(current_data, indent=2) + "\n", mode=0o600)
+                        sync_and_sanitize_mcp_vault_and_config(force=True)
             except Exception as exc:
                 logger.warning("Error parsing MCP servers section during restore: %s", exc)
 
@@ -10350,6 +10363,19 @@ class AgyWebServer:
                         ),
                         "level": "info" if not pkgs_failed else "warning",
                     })
+                    try:
+                        await self.broadcast({"type": "mcp_servers_list", "servers": load_masked_mcp_servers()})
+                        await self.broadcast({"type": "api_keys_list", "keys": load_api_keys_store()})
+                        await self.broadcast({"type": "skills_list", "skills": list_user_skills()})
+                        await self.broadcast({"type": "ssh_keys_list", "keys": await list_ssh_keys()})
+                        pkg_info = get_installed_packages()
+                        await self.broadcast({
+                            "type": "packages_list",
+                            "packages": pkg_info.get("packages", []),
+                            "apk_available": pkg_info.get("apk_available", True),
+                        })
+                    except Exception as exc:
+                        logger.warning("Error broadcasting post-import UI sync: %s", exc)
                 except Exception as exc:
                     logger.exception("Configuration restoration failed: %s", exc)
                     await websocket.send(json.dumps({

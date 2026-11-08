@@ -180,6 +180,7 @@ object KeystoreVault {
             val it = keysObj.keys()
             while (it.hasNext()) {
                 val name = it.next()
+                if (name == "__MCP_VAULT__") continue
                 val entry = keysObj.optJSONObject(name) ?: continue
                 val iv = entry.optString("iv")
                 val ct = entry.optString("ciphertext")
@@ -213,6 +214,7 @@ object KeystoreVault {
             val it = keysObj.keys()
             while (it.hasNext()) {
                 val name = it.next()
+                if (name == "__MCP_VAULT__") continue
                 val entry = keysObj.optJSONObject(name) ?: continue
                 val desc = entry.optString("description", "")
                 val ts = entry.optLong("updated_at", 0L)
@@ -282,29 +284,17 @@ object KeystoreVault {
                 }
             }
 
-            // Also migrate legacy mcp_vault.json if present
+            // Mirror mcp_vault.json into KeystoreVault if present, preserving Tier-3 disk fallback
             val legacyMcp = File(context.applicationInfo.dataDir, "files/home/.gemini/antigravity-cli/mcp_vault.json")
             if (legacyMcp.exists()) {
                 try {
                     val mcpContent = legacyMcp.readText(Charsets.UTF_8).trim()
                     if (mcpContent.isNotEmpty() && mcpContent != "{}") {
                         saveKey(context, "__MCP_VAULT__", mcpContent, "Encrypted MCP Vault")
-                        val readBack = getDecryptedKey(context, "__MCP_VAULT__")
-                        if (readBack == mcpContent) {
-                            val length = legacyMcp.length()
-                            if (length > 0) {
-                                legacyMcp.writeBytes(ByteArray(length.toInt()) { 0 })
-                            }
-                            legacyMcp.delete()
-                            Log.i(TAG, "Successfully migrated and wiped legacy mcp_vault.json")
-                        } else {
-                            Log.e(TAG, "Aborted wiping legacy mcp_vault.json: readback mismatch")
-                        }
-                    } else {
-                        legacyMcp.delete()
+                        Log.i(TAG, "Successfully synced mcp_vault.json into KeystoreVault")
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error migrating legacy mcp_vault.json", e)
+                    Log.e(TAG, "Error syncing mcp_vault.json", e)
                 }
             }
         }
