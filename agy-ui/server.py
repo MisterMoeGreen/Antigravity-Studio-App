@@ -9245,6 +9245,14 @@ class AgyWebServer:
                 except Exception as exc:
                     return _json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
+        if path == "/api/mcp/reload":
+            if request.method == "POST":
+                try:
+                    await self.orchestrator.recycle_acp_daemon()
+                    return _json_response({"status": "ok", "message": "Agent daemon reloaded successfully"})
+                except Exception as exc:
+                    return _json_response({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
         if path == "/api/engine/status":
             return _json_response(get_engine_status())
 
@@ -9931,17 +9939,13 @@ class AgyWebServer:
             env = data.get("env")
             try:
                 res = await add_mcp_server(name, trans, url_cmd, args=args, headers=headers, env=env)
-                try:
-                    await self.orchestrator.recycle_acp_daemon()
-                except Exception as rec_err:
-                    logger.warning("Error recycling ACP after add_mcp_server: %s", rec_err)
                 servers = load_masked_mcp_servers()
                 await self.broadcast({"type": "mcp_servers_list", "servers": servers})
                 await self.broadcast({"type": "mcp_server_added", "server": res})
                 await self.broadcast({
                     "type": "system_card",
-                    "title": "MCP Server Added",
-                    "markdown": f"Connected MCP server **`{name}`** ({trans.upper()}).",
+                    "title": "MCP Server Saved",
+                    "markdown": f"Saved MCP server **`{name}`** ({trans.upper()}). Changes take effect immediately for proxy requests.",
                     "level": "info",
                 })
             except Exception as exc:
@@ -9958,10 +9962,6 @@ class AgyWebServer:
             enabled = bool(data.get("enabled", True))
             try:
                 res = await toggle_mcp_server(name, enabled)
-                try:
-                    await self.orchestrator.recycle_acp_daemon()
-                except Exception as rec_err:
-                    logger.warning("Error recycling ACP after toggle_mcp_server: %s", rec_err)
                 servers = load_masked_mcp_servers()
                 await self.broadcast({"type": "mcp_servers_list", "servers": servers})
                 await self.broadcast({"type": "mcp_server_toggled", "server": res})
@@ -9978,10 +9978,6 @@ class AgyWebServer:
             name = str(data.get("name") or "").strip()
             try:
                 res = await delete_mcp_server(name)
-                try:
-                    await self.orchestrator.recycle_acp_daemon()
-                except Exception as rec_err:
-                    logger.warning("Error recycling ACP after delete_mcp_server: %s", rec_err)
                 servers = load_masked_mcp_servers()
                 await self.broadcast({"type": "mcp_servers_list", "servers": servers})
                 await self.broadcast({"type": "mcp_server_deleted", "server": res})
@@ -9990,6 +9986,26 @@ class AgyWebServer:
                     "type": "system_card",
                     "title": "Delete MCP Server Failed",
                     "markdown": f"Could not remove MCP server: `{exc}`",
+                    "level": "error",
+                }))
+            return
+
+        if mtype == "re_register_mcps":
+            try:
+                await self.orchestrator.recycle_acp_daemon()
+                servers = load_masked_mcp_servers()
+                await self.broadcast({"type": "mcp_servers_list", "servers": servers})
+                await self.broadcast({
+                    "type": "system_card",
+                    "title": "MCPs Re-Registered",
+                    "markdown": "Agent daemon reloaded. Tool schemas have been refreshed.",
+                    "level": "info",
+                })
+            except Exception as exc:
+                await websocket.send(json.dumps({
+                    "type": "system_card",
+                    "title": "Re-Register Failed",
+                    "markdown": f"Could not re-register MCPs: `{exc}`",
                     "level": "error",
                 }))
             return

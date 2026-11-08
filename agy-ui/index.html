@@ -4112,6 +4112,14 @@
           Model Context Protocol servers provide external tool execution to the agent. Configured in ~/.gemini/config/mcp_config.json.
         </div>
         <div id="mcpList" style="display:flex;flex-direction:column;gap:10px;"></div>
+        <div class="mcp-reregister-box" style="margin-top:16px;padding:14px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:12px;display:flex;flex-direction:column;gap:8px;">
+          <button id="btnReRegisterMCPs" class="settings-btn" style="width:100%;padding:10px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px;">
+            <span>🔄 Re-Register MCPs</span>
+          </button>
+          <div style="font-size:11px;color:var(--text-muted);line-height:1.4;text-align:center;">
+            ⚠️ <strong>Warning:</strong> Re-registering reloads the agent daemon and will abort any currently running sessions. Only use after adding or deleting servers when idle.
+          </div>
+        </div>
       </div>
     </div>
 
@@ -9796,6 +9804,7 @@
       // MCP Servers Logic
       // ---------------------------------------------------------------------
       const mcpList = document.getElementById('mcpList');
+      const btnReRegisterMCPs = document.getElementById('btnReRegisterMCPs');
       const btnOpenAddMCPModal = document.getElementById('btnOpenAddMCPModal');
       const modalAddMCP = document.getElementById('modalAddMCP');
       const btnCloseAddMCPModal = document.getElementById('btnCloseAddMCPModal');
@@ -9858,6 +9867,42 @@
         });
       }
 
+      // Track cursor position inside Headers and Env textareas for direct insertion
+      ['keyup', 'mouseup', 'touchend', 'select', 'input', 'blur'].forEach(evName => {
+        if (txtMCPHeaders) {
+          txtMCPHeaders.addEventListener(evName, () => {
+            txtMCPHeaders._selStart = txtMCPHeaders.selectionStart;
+            txtMCPHeaders._selEnd = txtMCPHeaders.selectionEnd;
+          });
+        }
+        if (txtMCPEnv) {
+          txtMCPEnv.addEventListener(evName, () => {
+            txtMCPEnv._selStart = txtMCPEnv.selectionStart;
+            txtMCPEnv._selEnd = txtMCPEnv.selectionEnd;
+          });
+        }
+      });
+
+      function insertTextAtCursor(target, textToInsert) {
+        if (!target) return;
+        target.focus();
+        let start = (typeof target._selStart === 'number') ? target._selStart : target.selectionStart;
+        let end = (typeof target._selEnd === 'number') ? target._selEnd : target.selectionEnd;
+        const val = target.value;
+        if (typeof start === 'number' && typeof end === 'number' && start <= val.length && end <= val.length && (start > 0 || end > 0 || val.length === 0 || document.activeElement === target)) {
+          target.value = val.slice(0, start) + textToInsert + val.slice(end);
+          const newPos = start + textToInsert.length;
+          target.selectionStart = target.selectionEnd = newPos;
+          target._selStart = target._selEnd = newPos;
+        } else {
+          const newPos = val.length + textToInsert.length;
+          target.value = val + textToInsert;
+          target.selectionStart = target.selectionEnd = newPos;
+          target._selStart = target._selEnd = newPos;
+        }
+        target.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+
       function updateMCPKeyChips() {
         const keys = state.availableApiKeys || [];
         const renderChipsInto = (container, onInsert) => {
@@ -9873,6 +9918,7 @@
             chip.style.fontSize = '11px';
             chip.style.padding = '3px 8px';
             chip.textContent = '$' + k;
+            chip.addEventListener('mousedown', (e) => e.preventDefault());
             chip.addEventListener('click', () => onInsert(k));
             container.appendChild(chip);
           });
@@ -9880,38 +9926,12 @@
 
         const mcpHeaderKeyChips = document.getElementById('mcpHeaderKeyChips');
         renderChipsInto(mcpHeaderKeyChips, (k) => {
-          if (!txtMCPHeaders) return;
-          const cur = txtMCPHeaders.value.trim();
-          if (!cur || cur === '{}') {
-            txtMCPHeaders.value = JSON.stringify({ "Authorization": "Bearer $" + k }, null, 2);
-          } else {
-            try {
-              const parsed = JSON.parse(cur);
-              parsed["X-API-Key"] = "$" + k;
-              txtMCPHeaders.value = JSON.stringify(parsed, null, 2);
-            } catch (_) {
-              txtMCPHeaders.value = cur + '\n' + '$' + k;
-            }
-          }
+          insertTextAtCursor(txtMCPHeaders, '$' + k);
         });
 
         const mcpEnvKeyChips = document.getElementById('mcpEnvKeyChips');
         renderChipsInto(mcpEnvKeyChips, (k) => {
-          if (!txtMCPEnv) return;
-          const cur = txtMCPEnv.value.trim();
-          if (!cur || cur === '{}') {
-            const obj = {};
-            obj[k] = "$" + k;
-            txtMCPEnv.value = JSON.stringify(obj, null, 2);
-          } else {
-            try {
-              const parsed = JSON.parse(cur);
-              parsed[k] = "$" + k;
-              txtMCPEnv.value = JSON.stringify(parsed, null, 2);
-            } catch (_) {
-              txtMCPEnv.value = cur + '\n' + k + '=$' + k;
-            }
-          }
+          insertTextAtCursor(txtMCPEnv, '$' + k);
         });
 
         const mcpAIKeyChips = document.getElementById('mcpAIKeyChips');
@@ -10045,6 +10065,23 @@
             });
           }
           closeMCPModal();
+        });
+      }
+
+      if (btnReRegisterMCPs) {
+        btnReRegisterMCPs.addEventListener('click', () => {
+          if (!confirm("Re-registering MCP servers will restart the agent daemon and abort any currently running sessions or subagents.\n\nAre you sure you want to proceed?")) {
+            return;
+          }
+          btnReRegisterMCPs.disabled = true;
+          const origHtml = btnReRegisterMCPs.innerHTML;
+          btnReRegisterMCPs.innerHTML = `${faIcon('arrows-rotate', 'fa-spin', 'width:14px;height:14px;')} Re-Registering...`;
+          showToast('Re-registering MCP servers with agent daemon...');
+          sendWs({ type: 're_register_mcps' });
+          setTimeout(() => {
+            btnReRegisterMCPs.disabled = false;
+            btnReRegisterMCPs.innerHTML = origHtml;
+          }, 3000);
         });
       }
 
