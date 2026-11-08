@@ -865,6 +865,11 @@ def sync_and_sanitize_mcp_vault_and_config(force: bool = False) -> dict[str, Any
             vault_changed = False
             config_changed = False
 
+            if not vault and servers:
+                # Vault failed to load or Keystore bridge not ready; never wipe existing state
+                logger.warning("MCP vault empty while mcpServers has %d servers; skipping sanitize overwrite", len(servers))
+                return vault
+
             for s_name, s_meta in list(servers.items()):
                 if not isinstance(s_meta, dict):
                     continue
@@ -1008,34 +1013,76 @@ def load_mcp_vault() -> dict[str, Any]:
     if _mcp_vault_cache:
         return _mcp_vault_cache
 
-    vault_res = query_keystore_vault("get_mcp_vault")
-    if vault_res.get("status") == "ok":
-        vault_data = vault_res.get("vault", {})
-        if vault_data:
-            _mcp_vault_cache = vault_data
-            try:
-                atomic_write_secure(str(MCP_VAULT_FILE), json.dumps(vault_data, indent=2) + "\n", mode=0o600)
-            except Exception:
-                pass
-            return _mcp_vault_cache
-
+    disk_vault: dict[str, Any] = {}
     if MCP_VAULT_FILE.exists():
         try:
             os.chmod(str(MCP_VAULT_FILE), 0o600)
-            disk_vault = json.loads(MCP_VAULT_FILE.read_text(encoding="utf-8"))
-            if disk_vault:
-                _mcp_vault_cache = disk_vault
-                # Sync back to Keystore Vault if Keystore Vault was empty
-                query_keystore_vault("save_mcp_vault", vault=_mcp_vault_cache)
-                return _mcp_vault_cache
+            parsed = json.loads(MCP_VAULT_FILE.read_text(encoding="utf-8"))
+            if isinstance(parsed, dict):
+                disk_vault = parsed
+        except Exception:
+            disk_vault = {}
+
+    vault_res = query_keystore_vault("get_mcp_vault")
+    kv_vault: dict[str, Any] = {}
+    if vault_res.get("status") == "ok":
+        raw_kv = vault_res.get("vault", {})
+        if isinstance(raw_kv, dict):
+            kv_vault = raw_kv
+
+    # Deep-merge kv_vault and disk_vault to ensure headers and endpoints are never lost
+    merged_vault = dict(disk_vault)
+    for sname, smeta in kv_vault.items():
+        if not isinstance(smeta, dict):
+            continue
+        if sname not in merged_vault:
+            merged_vault[sname] = smeta
+        else:
+            # Preserve headers from whichever store has them
+            existing_h = merged_vault[sname].get("headers") or {}
+            kv_h = smeta.get("headers") or {}
+            if kv_h and not existing_h:
+                merged_vault[sname]["headers"] = kv_h
+            # Preserve env from whichever store has them
+            existing_e = merged_vault[sname].get("env") or {}
+            kv_e = smeta.get("env") or {}
+            if kv_e and not existing_e:
+                merged_vault[sname]["env"] = kv_e
+            # Preserve upstreamUrl
+            if not merged_vault[sname].get("upstreamUrl") and smeta.get("upstreamUrl"):
+                merged_vault[sname]["upstreamUrl"] = smeta["upstreamUrl"]
+
+    if merged_vault:
+        _mcp_vault_cache = merged_vault
+        try:
+            atomic_write_secure(str(MCP_VAULT_FILE), json.dumps(merged_vault, indent=2) + "\n", mode=0o600)
         except Exception:
             pass
+        if merged_vault != kv_vault and os.environ.get("AGY_VAULT_PORT"):
+            query_keystore_vault("save_mcp_vault", vault=merged_vault)
+        return _mcp_vault_cache
 
     return {}
 
 
 def save_mcp_vault(vault: dict[str, Any]) -> None:
     global _mcp_vault_cache
+    if not vault and _mcp_vault_cache:
+        # Never allow wiping a populated vault with an empty dictionary
+        return
+
+    # Preserve existing headers/env if an incoming entry has empty headers
+    if _mcp_vault_cache:
+        for sname, sentry in vault.items():
+            if isinstance(sentry, dict):
+                trans = sentry.get("transport") or ("http" if "upstreamUrl" in sentry else "stdio")
+                if trans == "http":
+                    if not sentry.get("headers") and _mcp_vault_cache.get(sname, {}).get("headers"):
+                        sentry["headers"] = dict(_mcp_vault_cache[sname]["headers"])
+                elif trans == "stdio":
+                    if not sentry.get("env") and _mcp_vault_cache.get(sname, {}).get("env"):
+                        sentry["env"] = dict(_mcp_vault_cache[sname]["env"])
+
     _mcp_vault_cache = vault
     query_keystore_vault("save_mcp_vault", vault=vault)
     try:
