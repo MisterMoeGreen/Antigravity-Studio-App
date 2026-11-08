@@ -751,6 +751,22 @@ def redact_secrets_from_text(text: str, active_keys: dict[str, str]) -> str:
     return text
 
 
+def cid_matches(a: str | None, b: str | None) -> bool:
+    """Robust prefix-aware session ID matcher (ARGON-19-04)."""
+    if not a or not b:
+        return False
+    sa = str(a).strip().lower()
+    sb = str(b).strip().lower()
+    if sa == sb:
+        return True
+    if sa in ("default", "session-draft") or sb in ("default", "session-draft"):
+        return False
+    min_len = min(len(sa), len(sb))
+    if min_len < 6:
+        return False
+    return sa.startswith(sb) or sb.startswith(sa)
+
+
 class McpSecurityGate:
     @staticmethod
     def is_safe_upstream_url(url: str) -> bool:
@@ -10394,13 +10410,13 @@ class AgyWebServer:
                             "start_time": bg_info.get("start_time"),
                         }
                         for bg_id, bg_info in self.orchestrator.active_background_tasks.items()
-                        if bg_info.get("conversation_id") == cid
+                        if cid_matches(bg_info.get("conversation_id"), cid)
                         and bg_id not in self.orchestrator._seen_completed_tasks
                         and bg_id not in self.orchestrator._stopped_by_user_tasks
                     ],
                     "recent_completed_tasks": [
                         task for task in self.orchestrator.recently_completed_tasks.values()
-                        if task.get("conversation_id") == cid
+                        if cid_matches(task.get("conversation_id"), cid)
                         and (time.time() - task.get("completed_at", 0)) < 45.0
                     ],
                 }
@@ -10409,7 +10425,7 @@ class AgyWebServer:
             # Restore active background task indicators for this session (ARGON-18-03)
             for bg_id, bg_info in list(self.orchestrator.active_background_tasks.items()):
                 if (
-                    bg_info.get("conversation_id") == cid
+                    cid_matches(bg_info.get("conversation_id"), cid)
                     and bg_id not in self.orchestrator._seen_completed_tasks
                     and bg_id not in self.orchestrator._stopped_by_user_tasks
                 ):

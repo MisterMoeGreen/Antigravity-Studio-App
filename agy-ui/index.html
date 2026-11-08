@@ -5456,12 +5456,25 @@
         }
       }
 
-      function initiateSessionSwitch(newCid) {
+      function initiateSessionSwitch(newCid, forceRefresh = false) {
         if (!newCid || newCid === 'default' || newCid === 'null' || newCid === 'undefined') return;
         closeOverlays();
+        const now = Date.now();
         if (newCid === state.conversationId) {
+          if (!forceRefresh) {
+            return;
+          }
+          if ((now - (state.lastSessionSyncAtMs || 0)) < 1000) {
+            console.log('[Session] Debouncing rapid forceRefresh for', newCid);
+            return;
+          }
+          state.lastSessionSyncAtMs = now;
+          console.log('[Session] Force refreshing active session transcript for', newCid);
+          sendWs({ type: 'switch_session', conversation_id: newCid, force_refresh: true });
           return;
         }
+
+        state.lastSessionSyncAtMs = now;
 
         // 1. Preserve current draft prompt & attachments
         if (state.conversationId) {
@@ -5510,6 +5523,25 @@
         // 7. Request canonical transcript from server
         sendWs({ type: 'switch_session', conversation_id: newCid });
       }
+
+      window.onAppResume = function() {
+        console.log('[Lifecycle] onAppResume triggered');
+        const activeCid = state.conversationId;
+        if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+          console.log('[Lifecycle] WebSocket disconnected/connecting on resume, forcing reconnect');
+          try { connectWebSocket(); } catch (e) { console.error('Error reconnecting on resume', e); }
+          return;
+        }
+        if (activeCid && activeCid !== 'default' && activeCid !== 'session-draft') {
+          const curBuf = state.sessionBuffers.get(activeCid);
+          if (curBuf && curBuf.isRunning && curBuf.activeTurnId) {
+            console.log('[Lifecycle] Session currently has in-flight streaming turn, skipping full history wipe');
+            return;
+          }
+          console.log('[Lifecycle] Resuming active session, requesting fresh transcript:', activeCid);
+          initiateSessionSwitch(activeCid, true);
+        }
+      };
 
       window.loadSessionFromNotification = function(cid) {
         if (!cid) return false;
@@ -6189,8 +6221,13 @@
             state.pendingDeepLinkCid = null;
             if (pendingCid) {
               state.ignoreNextInitialHistory = true;
-              initiateSessionSwitch(pendingCid);
-            } else if (!state.conversationId && (!msg.config || !msg.config.conversation_id)) {
+              initiateSessionSwitch(pendingCid, true);
+            } else if (state.conversationId && state.conversationId !== 'default' && state.conversationId !== 'session-draft') {
+              console.log('[InitState] Syncing canonical transcript for active session:', state.conversationId);
+              initiateSessionSwitch(state.conversationId, true);
+            } else if (msg.config && msg.config.conversation_id && msg.config.conversation_id !== 'default' && msg.config.conversation_id !== 'session-draft') {
+              initiateSessionSwitch(msg.config.conversation_id, true);
+            } else {
               let restoredCid = null;
               try { restoredCid = localStorage.getItem('agy_last_active_cid'); } catch (_) {}
               if (restoredCid && (state.sessions || []).some(s => s.conversation_id === restoredCid)) {
@@ -7479,11 +7516,26 @@
         return `${m}:${s < 10 ? '0' : ''}${s}`;
       }
 
-      function isDraftOrMatchesSession(cid) {
-        if (!cid || cid === 'default' || cid === 'session-draft') {
-          return !state.conversationId || state.conversationId === 'default' || state.conversationId === 'session-draft';
+      function cidMatches(cidA, cidB) {
+        if (!cidA || !cidB) return false;
+        const a = String(cidA).trim().toLowerCase();
+        const b = String(cidB).trim().toLowerCase();
+        if (a === b) return true;
+        if (a === 'default' || a === 'session-draft' || b === 'default' || b === 'session-draft') {
+          return false;
         }
-        return state.conversationId === cid;
+        const minLen = Math.min(a.length, b.length);
+        if (minLen < 6) return false;
+        return a.startsWith(b) || b.startsWith(a);
+      }
+
+      function isDraftOrMatchesSession(cid) {
+        const isCidDraft = !cid || cid === 'default' || cid === 'session-draft';
+        const isStateDraft = !state.conversationId || state.conversationId === 'default' || state.conversationId === 'session-draft';
+        if (isCidDraft || isStateDraft) {
+          return isCidDraft && isStateDraft;
+        }
+        return cidMatches(state.conversationId, cid);
       }
 
       function getTasksForCurrentSession() {
@@ -7659,7 +7711,7 @@
         if (!Array.isArray(taskList)) return;
         const activeIds = new Set(taskList.map(t => canonicalTaskId(t.task_id)));
         for (const [tId, tObj] of activeBgTasks.entries()) {
-          const belongs = targetCid ? isDraftOrMatchesSession(tObj.cid) : true;
+          const belongs = targetCid ? (isDraftOrMatchesSession(tObj.cid) || cidMatches(targetCid, tObj.cid)) : true;
           if (belongs && !activeIds.has(tId)) {
             activeBgTasks.delete(tId);
           }

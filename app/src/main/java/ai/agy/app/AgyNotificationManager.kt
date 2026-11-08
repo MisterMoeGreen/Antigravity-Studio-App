@@ -24,10 +24,11 @@ import java.util.concurrent.ConcurrentHashMap
 object AgyNotificationManager {
     const val TAG = "AgyNotifMgr"
 
-    const val CHANNEL_ID_COMPLETION = "agy_completion_channel"
+    const val CHANNEL_ID_COMPLETION = "agy_completion_v2"
     const val CHANNEL_ID_PROGRESS = "agy_progress_channel_v2"
 
     const val NOTIF_ID_COMPLETION = 3001
+    const val NOTIF_ID_BG_TASK_COMPLETION = 3002
     const val NOTIF_ID_LIVE_PROGRESS = 4001
 
     const val ACTION_OPEN_SESSION = "ai.agy.app.action.OPEN_SESSION"
@@ -62,6 +63,7 @@ object AgyNotificationManager {
         var abortedByUser: Boolean = false,
         var lastNotifiedAtMs: Long = 0L,
         var lastCompletionNotifiedAtMs: Long = 0L,
+        var lastBgTaskCompletionNotifiedAtMs: Long = 0L,
         var lastSignature: String = ""
     )
 
@@ -78,15 +80,20 @@ object AgyNotificationManager {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val nm = context.getSystemService(NotificationManager::class.java) ?: return
 
+            try {
+                nm.deleteNotificationChannel("agy_completion_channel")
+            } catch (_: Exception) {}
+
             val compChannel = NotificationChannel(
                 CHANNEL_ID_COMPLETION,
-                "Agent Turn Completion",
-                NotificationManager.IMPORTANCE_DEFAULT
+                "Agent & Task Completions",
+                NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "Alerts when an AI agent finishes a turn in the background or an inactive session"
+                description = "High-priority heads-up alerts when an agent finishes a turn or a background task completes"
                 enableLights(true)
                 lightColor = Color.rgb(0, 163, 255)
                 enableVibration(true)
+                lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
                 setShowBadge(true)
             }
             nm.createNotificationChannel(compChannel)
@@ -120,12 +127,26 @@ object AgyNotificationManager {
         }
     }
 
+    fun resolveCanonicalCidLocked(cid: String): String {
+        val trimmed = cid.trim()
+        if (trimmed.isEmpty()) return trimmed
+        if (sessionStates.containsKey(trimmed)) return trimmed
+        val lower = trimmed.lowercase()
+        for (existingKey in sessionStates.keys) {
+            val existingLower = existingKey.lowercase()
+            if (existingLower == lower) return existingKey
+            val minLen = minOf(existingLower.length, lower.length)
+            if (minLen >= 6 && (existingLower.startsWith(lower) || lower.startsWith(existingLower))) {
+                return existingKey
+            }
+        }
+        return trimmed
+    }
+
     fun onActiveSessionChanged(context: Context, conversationId: String?) {
         val normalized = conversationId?.trim()?.ifEmpty { null }
         activeConversationId = normalized
-        if (normalized != null && isAppForeground) {
-            clearCompletionNotification(context, normalized)
-        }
+        // Do NOT auto-clear completion notifications; keep them in the tray until user taps or responds.
     }
 
     fun isPinned(conversationId: String): Boolean {
@@ -188,7 +209,13 @@ object AgyNotificationManager {
 
     fun clearCompletionNotification(context: Context, conversationId: String) {
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
-        nm.cancel(conversationId, NOTIF_ID_COMPLETION)
+        val canonicalCid = synchronized(stateLock) { resolveCanonicalCidLocked(conversationId) }
+        nm.cancel(canonicalCid, NOTIF_ID_COMPLETION)
+        nm.cancel(canonicalCid, NOTIF_ID_BG_TASK_COMPLETION)
+        if (canonicalCid != conversationId) {
+            nm.cancel(conversationId, NOTIF_ID_COMPLETION)
+            nm.cancel(conversationId, NOTIF_ID_BG_TASK_COMPLETION)
+        }
     }
 
     fun migrateSession(context: Context, oldConversationId: String, newConversationId: String) {
@@ -401,13 +428,8 @@ object AgyNotificationManager {
     }
 
     fun shouldSendCompletionNotification(conversationId: String, isBackgroundTask: Boolean = false): Boolean {
-        if (!isAppForeground) return true
-        if (isBackgroundTask) return true
-        val active = activeConversationId?.trim()
-        val target = conversationId.trim()
-        if (active != null && active.equals(target, ignoreCase = true)) {
-            return false
-        }
+        // Invariants: The user must NEVER miss a task or turn completion.
+        // Never suppress based on isAppForeground.
         return true
     }
 
@@ -419,32 +441,46 @@ object AgyNotificationManager {
         turnStatus: String = "COMPLETED",
         isBackgroundTask: Boolean = false
     ) {
+        val canonicalCid: String
         val wasAbortedByUser: Boolean
         val isDuplicateCompletion: Boolean
+        val now = SystemClock.elapsedRealtime()
+
         synchronized(stateLock) {
-            val now = SystemClock.elapsedRealtime()
-            val state = sessionStates.getOrPut(conversationId) { SessionLiveState(conversationId) }
+            canonicalCid = resolveCanonicalCidLocked(conversationId)
+            val state = sessionStates.getOrPut(canonicalCid) { SessionLiveState(canonicalCid) }
             wasAbortedByUser = state.abortedByUser
-            isDuplicateCompletion = !state.isRunning && (now - state.lastCompletionNotifiedAtMs) < 1500L
-            state.isRunning = false
-            state.isPinned = false
-            state.lastSignature = ""
-            state.lastCompletionNotifiedAtMs = now
-            val nm = context.getSystemService(NotificationManager::class.java)
-            nm?.cancel(conversationId, NOTIF_ID_LIVE_PROGRESS)
+
+            if (isBackgroundTask) {
+                isDuplicateCompletion = (now - state.lastBgTaskCompletionNotifiedAtMs) < 2500L
+                if (!isDuplicateCompletion) {
+                    state.lastBgTaskCompletionNotifiedAtMs = now
+                }
+            } else {
+                isDuplicateCompletion = (now - state.lastCompletionNotifiedAtMs) < 2500L
+                if (!isDuplicateCompletion) {
+                    state.lastCompletionNotifiedAtMs = now
+                }
+                state.isRunning = false
+                state.isPinned = false
+                state.lastSignature = ""
+                val nm = context.getSystemService(NotificationManager::class.java)
+                nm?.cancel(canonicalCid, NOTIF_ID_LIVE_PROGRESS)
+            }
+            Unit
         }
 
         if (wasAbortedByUser || isDuplicateCompletion || turnStatus.equals("INTERRUPTED", ignoreCase = true)) {
             return
         }
 
-        if (!shouldSendCompletionNotification(conversationId, isBackgroundTask) || !hasNotificationPermission(context)) {
+        if (!hasNotificationPermission(context)) {
             return
         }
 
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
         val cleanPreview = sanitizeMarkdownPreview(rawPreview)
-        val displayTitle = sessionTitle.trim().ifEmpty { "Session ${conversationId.take(6)}" }
+        val displayTitle = sessionTitle.trim().ifEmpty { "Session ${canonicalCid.take(6)}" }
         val statusHeading = if (isBackgroundTask) {
             if (turnStatus.equals("ERROR", ignoreCase = true)) "Background task failed" else "Background task finished"
         } else {
@@ -453,11 +489,12 @@ object AgyNotificationManager {
 
         val clickIntent = Intent(context, MainActivity::class.java).apply {
             action = ACTION_OPEN_SESSION
-            data = Uri.parse("agy://notif/complete/${Uri.encode(conversationId)}")
+            data = Uri.parse("agy://notif/complete/${Uri.encode(canonicalCid)}")
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            putExtra(EXTRA_CONVERSATION_ID, conversationId)
+            putExtra(EXTRA_CONVERSATION_ID, canonicalCid)
         }
-        val compReqCode = (conversationId.hashCode() and 0x0FFFFFFF) or 0x10000000
+        val notifId = if (isBackgroundTask) NOTIF_ID_BG_TASK_COMPLETION else NOTIF_ID_COMPLETION
+        val compReqCode = (canonicalCid.hashCode() and 0x0FFFFFFF) or (if (isBackgroundTask) 0x60000000 else 0x10000000)
         val contentPendingIntent = PendingIntent.getActivity(
             context,
             compReqCode,
@@ -466,8 +503,11 @@ object AgyNotificationManager {
         )
 
         val bodyText = cleanPreview.ifEmpty {
-            if (turnStatus.equals("ERROR", ignoreCase = true)) "Turn terminated with an error."
-            else "Turn execution completed."
+            if (turnStatus.equals("ERROR", ignoreCase = true)) {
+                if (isBackgroundTask) "Background task terminated with an error." else "Turn terminated with an error."
+            } else {
+                if (isBackgroundTask) "Background task completed successfully." else "Turn execution completed."
+            }
         }
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID_COMPLETION)
@@ -484,12 +524,14 @@ object AgyNotificationManager {
             .setContentIntent(contentPendingIntent)
             .setAutoCancel(true)
             .setOnlyAlertOnce(false)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .build()
 
         try {
-            nm.notify(conversationId, NOTIF_ID_COMPLETION, notification)
+            nm.notify(canonicalCid, notifId, notification)
         } catch (e: SecurityException) {
             Log.w(TAG, "POST_NOTIFICATIONS not granted: ${e.message}")
         }
@@ -505,7 +547,8 @@ object AgyNotificationManager {
             when (event) {
                 "turn_start" -> {
                     synchronized(stateLock) {
-                        val state = sessionStates.getOrPut(cid) { SessionLiveState(cid) }
+                        val canonicalCid = resolveCanonicalCidLocked(cid)
+                        val state = sessionStates.getOrPut(canonicalCid) { SessionLiveState(canonicalCid) }
                         state.isRunning = true
                         state.abortedByUser = false
                         state.startElapsedRealtimeMs = SystemClock.elapsedRealtime()

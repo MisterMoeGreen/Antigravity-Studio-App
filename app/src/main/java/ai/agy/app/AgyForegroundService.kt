@@ -64,6 +64,12 @@ class AgyForegroundService : Service() {
         return START_STICKY
     }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        Log.i(TAG, "Antigravity Studio task removed from Recents; retaining AgyForegroundService and daemon.")
+        refreshWakeLock()
+    }
+
     override fun onCreate() {
         super.onCreate()
         _readyPortFlow.value = null
@@ -91,9 +97,21 @@ class AgyForegroundService : Service() {
 
     private fun acquireWakeLock() {
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AgyStudio::DaemonWakeLock").apply {
-            setReferenceCounted(false)
-            acquire()
+        if (wakeLock == null) {
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AgyStudio::DaemonWakeLock").apply {
+                setReferenceCounted(false)
+            }
+        }
+        if (wakeLock?.isHeld != true) {
+            wakeLock?.acquire()
+        }
+    }
+
+    fun refreshWakeLock() {
+        try {
+            acquireWakeLock()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed refreshing partial wake lock: ${e.message}")
         }
     }
 
@@ -245,6 +263,7 @@ class AgyForegroundService : Service() {
                             val currentLine = line ?: continue
                             if (currentLine.startsWith("__AGY_NOTIFY__:")) {
                                 val jsonPayload = currentLine.removePrefix("__AGY_NOTIFY__:").trim()
+                                refreshWakeLock()
                                 AgyNotificationManager.handleDaemonEvent(this@AgyForegroundService, jsonPayload)
                                 continue
                             }
