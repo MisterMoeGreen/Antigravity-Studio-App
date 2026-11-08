@@ -16,42 +16,34 @@ This document defines the architecture, environment requirements, upstream binar
     git config core.fileMode false
     git config --global --add safe.directory /storage/emulated/0/Documents/AgyStudio
     ```
-  - **Temporary Files & Sockets**: FUSE blocks `symlink()` and `AF_UNIX` domain socket creation. All compilation staging, virtual environments, and IPC sockets must reside in Termux internal ext4 storage (`$TMPDIR` or `/data/data/com.termux/files/usr/tmp`), never inside the repo tree on shared storage.
+  - **Temporary Files & Sockets**: FUSE blocks `symlink()` and `AF_UNIX` domain socket creation. All compilation staging, virtual environments, and IPC sockets must reside in internal ext4 storage (`$TMPDIR` or `/data/data/ai.agy.app/files/usr/tmp`), never inside the repo tree on shared storage.
   - Private app storage resides inside `/data/data/ai.agy.app/files/` with separate ext4 sandboxed permissions for internal tokens and sockets.
 
 ---
 
-## 2. Preconditions & Host Packages (Termux Environment)
+## 2. Preconditions & Subsystem Environment (Alpine Linux Subsystem)
 
-To build Antigravity Studio locally on an Android device running Termux, the following packages and configurations are required:
+To build Antigravity Studio locally on an Android device, builds must be executed inside the integrated Alpine Linux container subsystem via the **`agy-sh`** bridge:
 
-### 2.1 Required Termux Packages
-Ensure the following tools are installed:
+### 2.1 Subsystem Developer Packages
+The Alpine subsystem container provides the necessary build tools:
+- `openjdk-21` (JVM launcher and compiler)
+- `aapt2` (`/usr/bin/aapt2`, native ARM64 Android asset packaging tool)
+- `patchelf` (>= 0.19.2)
+- `zstd`, `tar`, `bash`, `git`, `python3`
+
+If any tool is missing in the container, it can be installed via:
 ```bash
-pkg install -y \
-  openjdk-17 \
-  aapt2 \
-  patchelf \
-  llvm \
-  binutils \
-  python3 \
-  zstd \
-  tar \
-  bash \
-  git \
-  apksigner
+agy-sh -c "apk add --no-cache openjdk21-jre-headless aapt2 patchelf bash git python3"
 ```
-
-> [!IMPORTANT]
-> **Mandatory `patchelf` version**: Version `0.19.2` or later is mandatory. Older versions (such as `0.18.0`) corrupt the `DT_STRTAB` section on 200MB+ Go/ELF binaries when adjusting 16KB page alignment, causing instant `SIGSEGV` (exit code -11).
 
 ### 2.2 Android SDK Configuration
 Create or verify `local.properties` in the project root:
 ```properties
-sdk.dir=/data/data/com.termux/files/home/android-sdk
+sdk.dir=/storage/emulated/0/Documents/AgyStudio/.android-sdk
 ```
 
-The Android SDK must contain:
+The Android SDK contains:
 - Platforms: `android-35` (compileSdk 35 / targetSdk 35)
 - Build-Tools: `35.0.0` or compatible
 
@@ -63,13 +55,13 @@ org.gradle.daemon=false
 android.useAndroidX=true
 kotlin.code.style=official
 android.nonTransitiveRClass=true
-android.aapt2FromMavenOverride=/data/data/com.termux/files/usr/bin/aapt2
+android.aapt2FromMavenOverride=/usr/bin/aapt2
 android.suppressUnsupportedCompileSdk=35
 ```
 
 > **Why `org.gradle.daemon=false` is required**: In the Android/PRoot container environment, persistent background Gradle daemons keep pipe descriptors open, which causes subshells and terminal sessions to hang indefinitely after builds finish. Disabling the daemon forces Gradle to run in single-use mode and exit immediately upon completion.
 >
-> **Why `android.aapt2FromMavenOverride` is required**: The Google Maven-distributed `aapt2` x86_64/glibc binary cannot run on native Android ARM64 Termux. Pointing Gradle to the native Termux `aapt2` package ensures fast, native resource compilation.
+> **Why `android.aapt2FromMavenOverride=/usr/bin/aapt2` is required**: The Google Maven-distributed `aapt2` x86_64 binary cannot run on native Android ARM64. Pointing Gradle to `/usr/bin/aapt2` inside the Alpine container rootfs ensures fast, native resource compilation. **Note**: `/usr/bin/aapt2` exists inside the `agy-sh` container, NOT on the Android host filesystem!
 
 ### 2.4 Signing Keystore
 Release APKs are signed with a persistent `debug.keystore`:
@@ -133,11 +125,14 @@ AGY_SHA256=...
 
 ### Step 3: Run the Gradle Release Build
 > [!IMPORTANT]
-> **Always invoke via `bash ./gradlew`!**
-> Because the repository is located on Android FUSE shared storage, running bare `./gradlew` will fail with `Permission denied`. Always use `bash ./gradlew`. Bound max workers and disable the background daemon to avoid hangs and triggering Android's Phantom Process Killer:
+> **Mandatory Subsystem Invocation via `agy-sh`!**
+> Gradle, OpenJDK 21, and native ARM64 `aapt2` reside inside the Alpine Linux container subsystem (`agy-sh`).
+> Furthermore, because the repository is located on Android FUSE shared storage (`/storage/emulated/0`), running bare `./gradlew` on the host will fail with `Permission denied` and missing toolchains.
+> **Always execute the build through the `agy-sh` container bridge using `bash ./gradlew`!**
+> Bound max workers and disable the background daemon to avoid hangs and triggering Android's Phantom Process Killer:
 
 ```bash
-bash ./gradlew assembleRelease --max-workers=2 --no-daemon
+agy-sh -c "cd /storage/emulated/0/Documents/AgyStudio && bash ./gradlew assembleRelease --max-workers=2 --no-daemon"
 ```
 
 During this build, Gradle will automatically:
@@ -148,9 +143,9 @@ During this build, Gradle will automatically:
 5. Sign the APK using the persistent keystore.
 
 ### Step 4: Verify & Stage the Output APK
-Verify that the APK generated successfully:
+Verify that the APK generated successfully (inside `agy-sh` or host):
 ```bash
-aapt dump badging app/build/outputs/apk/release/app-release.apk | head -n 3
+agy-sh -c "aapt dump badging /storage/emulated/0/Documents/AgyStudio/app/build/outputs/apk/release/app-release.apk | head -n 3"
 ```
 
 Stage the APK to the user's **Downloads** folder for one-tap installation:
@@ -165,12 +160,12 @@ cp -f app/build/outputs/apk/release/app-release.apk /storage/emulated/0/Download
 
 | Issue | Cause | Fix |
 | :--- | :--- | :--- |
-| **`./gradlew: Permission denied`** | Shared storage (`/storage/emulated/0`) lacks POSIX execution bits (`noexec`). | Always run through the bash interpreter: `bash ./gradlew <tasks>`. |
-| **Git reports every file modified or "dubious ownership"** | Android FUSE assigns fixed permissions and non-Termux UID. | Run `git config core.fileMode false` and `git config --global --add safe.directory /storage/emulated/0/Documents/AgyStudio`. |
+| **`./gradlew: Permission denied`** | Shared storage (`/storage/emulated/0`) lacks POSIX execution bits (`noexec`), or ran on host without `agy-sh`. | Always run through the container bridge: `agy-sh -c "cd /storage/emulated/0/Documents/AgyStudio && bash ./gradlew <tasks>"`. |
+| **Git reports every file modified or "dubious ownership"** | Android FUSE assigns fixed permissions. | Run `git config core.fileMode false` and `git config --global --add safe.directory /storage/emulated/0/Documents/AgyStudio`. |
 | **"CLI Engine Missing / Required" on launch** | The CLI engine is decoupled from the APK (v1.7.0+) to minimize APK footprint. | Open **Settings [⚙] → Software Updates → Antigravity CLI Engine** to download and setup the engine (~58MB). |
-| **AAPT2 daemon crash / `ExecException`** | Google's x86_64 AAPT2 was invoked instead of native ARM64 AAPT2. | Ensure `android.aapt2FromMavenOverride=/usr/bin/aapt2` is set in `gradle.properties`. |
+| **AAPT2 `No such file or directory` or crash** | Gradle was executed directly on the host shell where `/usr/bin/aapt2` is absent. Inside the `agy-sh` container, `/usr/bin/aapt2` is pre-installed. | Execute the build inside the container: `agy-sh -c "cd /storage/emulated/0/Documents/AgyStudio && bash ./gradlew assembleRelease --max-workers=2 --no-daemon"`. |
 | **"App not installed as package appears to be invalid"** | `VERSION_CODE` was not incremented, or signature keystore differed from previous installation. | Bump `VERSION_CODE` in `version.properties` and verify `.android/debug.keystore` is used. |
-| **Build process killed abruptly / Termux crashes** | Android Phantom Process Killer killed high-concurrency Gradle worker pool. | Pass `--max-workers=2` or `--no-daemon` to `bash ./gradlew`. |
+| **Build process killed abruptly / Out of Memory** | Android Phantom Process Killer killed high-concurrency Gradle worker pool. | Pass `--max-workers=2` or `--no-daemon` to `bash ./gradlew`. |
 | **`Permission denied` when creating sockets or symlinks** | Attempted to create UNIX domain sockets or symlinks on FUSE storage. | Use internal ext4 storage (`$TMPDIR` or `/data/data/ai.agy.app/files/usr/tmp`). |
 
 ---
