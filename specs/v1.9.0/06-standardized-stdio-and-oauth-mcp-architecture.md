@@ -21,6 +21,7 @@ In Antigravity Studio v1.8.x and v1.9.0, Model Context Protocol (MCP) server man
 - **Zero Prebundled Bloat**: Native binaries (such as `github-mcp-server`) are **never prebundled in the APK**. They are fetched on demand to keep the application footprint compact (~35MB) and decouple MCP server updates from APK releases.
 - **Self-Contained Export & Restore**: Any Stdio binary download metadata is preserved in encrypted export bundles, enabling new devices to autonomously re-provision dependencies without manual user intervention.
 - **Hardware-Backed Secret Vaulting**: All OAuth access/refresh tokens and API keys reside exclusively in the Android Keystore Vault, never in plaintext configuration files.
+- **Hardened Subsystem Execution**: Downloaded binaries run through containerized wrappers (`agy-sh`) with `/etc/resolv.conf` (DNS) and CA roots to satisfy Android 15 SELinux `W^X` and Go/Rust runtime invariants.
 
 ---
 
@@ -35,13 +36,14 @@ flowchart TD
     end
 
     subgraph Backend["Antigravity Server (server.py)"]
-        ProvMgr["On-Demand Binary Provisioner\n- Fetch & Extract (tar.gz/zip/raw)\n- Validate ARM64 ELF\n- Stage to usr/bin (0755)"]
+        ProvMgr["On-Demand Binary Provisioner\n- Fetch & Extract (tar.gz/zip/raw)\n- Zero-Symlink & Quota Checks\n- Validate ARM64 ELF\n- Stage to usr/opt/mcp-bin (0755)"]
         LoopProxy["Loopback Proxy Gatekeeper\n(/mcp-proxy/<name>)"]
-        OAuthMgr["OAuth 2.1 Engine (PKCE)\n- RFC 9728 Discovery\n- Loopback Callback (:8081)\n- Token Auto-Refresh"]
+        OAuthMgr["OAuth 2.1 Engine (PKCE)\n- RFC 9728 / 8414 Discovery\n- RFC 7591 DCR / Client ID\n- Loopback Callback (:8081)\n- Double-Checked Refresh Lock"]
     end
 
     subgraph Native["Android Host (MainActivity.kt)"]
         CCT["Chrome Custom Tabs\n(Secure Auth Flow)"]
+        FocusBridge["Foreground Bridge\n(dismissCustomTabAndFocusApp)"]
         Vault["Android Keystore Vault\n(Hardware-Backed Encrypted)"]
     end
 
@@ -65,6 +67,7 @@ flowchart TD
     CCT -->|Redirect Auth Code| OAuthMgr
     OAuthMgr -->|Exchange Token| AuthServer
     OAuthMgr -->|Store Tokens| Vault
+    OAuthMgr -->|Dismiss Tab| FocusBridge
 
     LoopProxy -->|Inject Bearer / Key| RemoteMCP
     LoopProxy -->|Read Active Token| Vault
@@ -82,31 +85,41 @@ In **Settings → MCP Servers → Add Server (Stdio)**, the modal is augmented w
 | **Server Name** | `inputMCPName` | Text | Unique identifier (e.g. `github`). |
 | **Command** | `inputMCPCommand` | Text | Executable name in `$PATH` (e.g. `github-mcp-server`, `npx`, `python3`). |
 | **Download URL** | `inputMCPDownloadUrl` | URL (Optional) | HTTPS link to a compiled Linux ARM64 binary or archive (`.tar.gz`, `.zip`). |
-| **SHA-256 Checksum** | `inputMCPChecksum` | Text (Optional) | Hexadecimal digest for cryptographic validation. |
+| **SHA-256 Checksum** | `inputMCPChecksum` | Text (Optional) | Hexadecimal digest (auto-pinned via TOFU if omitted). |
 | **Arguments** | `inputMCPArgs` | Text | Positional command-line arguments (e.g. `stdio` or `-y @pkg`). |
 | **Environment** | `txtMCPEnv` | JSON | Key-value environment variables with `$KEY_NAME` injection. |
 
-### 3.2 Binary Staging & Execution Security
-- **Staging Target**: Binaries are installed to `/data/data/ai.agy.app/files/usr/bin/<command>`.
-  - *Storage Invariant*: Internal ext4 storage is mandatory. Shared storage (`/storage/emulated/0/`) is mounted `noexec` by Android and will fail execution with `EACCES`.
+### 3.2 Isolated Staging & Containerized Execution Security
+- **Isolated Staging Target**: Downloaded third-party binaries are installed strictly into an isolated path:
+  ```text
+  /data/data/ai.agy.app/files/usr/opt/mcp-bin/<sanitized_server_name>/<sanitized_command>
+  ```
+  - *System Binary Protection*: A reserved system binaries denylist (`agy`, `agy-sh`, `sh`, `bash`, `python`, `python3`, `node`, `npm`, `npx`, `git`, `curl`, `tar`, `zstd`, `patchelf`) prevents third-party packages from clobbering core toolchains in `$usr/bin/`.
+  - *Execution Security & Android 15 W^X*: Pure Linux ARM64 binaries (Go/Rust/C++) are invoked via the `agy-sh` container bridge:
+    `agy-sh -c "exec /data/data/ai.agy.app/files/usr/opt/mcp-bin/<server_name>/<command> \"\$@\""`
+    This satisfies Android 15 SELinux `W^X` policies and ensures `/etc/resolv.conf` (DNS) and `/etc/ssl/certs` (CA root certificates) are present.
   - *Permissions*: Automatically set to `0755` (`-rwxr-xr-x`).
-- **Archive Extraction Protocol**:
-  - Supports `.tar.gz`, `.tgz`, and `.zip` archives or raw ELF binaries.
-  - Path Traversal Guard: Any archive entry containing leading slashes (`/`), parent traversal (`../`), or attempting to write outside the staging directory is rejected immediately.
-- **ARM64 ELF Validation Gate**:
-  - Before moving a downloaded file into `$usr/bin/`, the backend reads the initial 20 bytes to verify:
-    1. Magic Bytes: `\x7fELF` (ELF header).
-    2. Class: `0x02` (64-bit ELF).
-    3. Data: `0x01` (2's complement, little endian).
-    4. Machine: `0xB7` (`EM_AARCH64`, ARM64 architecture).
-  - If a user inadvertently points to an `x86_64` or `Darwin` binary, provisioning aborts with a user-friendly error card rather than failing silently at runtime.
 
-### 3.3 Export and Import Lifecycle
-1. **Export Serialization**:
-   - `generate_config_export_bundle()` embeds `downloadUrl` and optional `checksum` into the server's JSON payload in the encrypted bundle.
-2. **Autonomous Restoration**:
-   - During `import_config_bundle()`, the backend checks whether `command` exists in `$PATH`.
-   - If missing and `downloadUrl` is provided, a non-blocking background task fetches, verifies, and stages the binary before marking the server as ready.
+### 3.3 Safe Archive Extraction (Zero-Symlink & Quota Bounds)
+- **Quota Enforcements**: Enforce a strict 150 MB download cap (`MAX_MCP_DOWNLOAD_BYTES`) and 300 MB uncompressed cap (`MAX_MCP_UNCOMPRESSED_BYTES`).
+- **Zero-Symlink Policy**: Never call `tar.extractall()` or `zip.extractall()`. All archive entries are inspected in memory prior to extracting:
+  - Reject symlinks (`issym()`), hardlinks (`islnk()`), named pipes/FIFOs (`isfifo()`), and device nodes (`isdev()`).
+- **Binary Resolution Algorithm**:
+  1. Enumerate all regular file members (`isreg()`).
+  2. Filter out documentation/metadata files (`.md`, `.txt`, `.json`, `.yaml`, `LICENSE*`, `NOTICE*`).
+  3. Match exact basename against `<command>`. If not found and exactly one candidate regular ELF file remains, select it.
+  4. Stream target member directly to staging path without filesystem directory traversal.
+
+### 3.4 Comprehensive ELF Validation Gate
+Before committing a staged binary, inspect ELF headers and Program Headers:
+1. **OS Check**: Reject macOS Mach-O (`0xFEEDFACF`, `0xCAFEBABE`) with actionable user error: *"macOS binary detected. Please select the Linux ARM64 release URL."* Reject Windows PE (`MZ`).
+2. **Architecture Check**: Verify `EI_CLASS == 2` (64-bit), `EI_DATA == 1` (Little-Endian), and `e_machine == 0xB7` (`EM_AARCH64`). Reject `x86_64` (`0x3E`) and 32-bit ARM (`0x28`).
+3. **Executable Type Check**: Verify `e_type in (2, 3)` (`ET_EXEC` or `ET_DYN` PIE).
+4. **Android 15 16KB Page Alignment**: On 16KB page-size kernels (`SC_PAGESIZE >= 16384`), verify `PT_LOAD` segments declare `p_align >= 0x4000`.
+
+### 3.5 Export, Import, and TOFU Pinning
+- **Trust On First Use (TOFU)**: If `inputMCPChecksum` is left blank during setup, the provisioner computes the SHA-256 of the downloaded artifact and automatically pins `"checksum": "<hash>"` in `mcp_config.json`.
+- **Deterministic Export**: Backups include `downloadUrl` and `checksum`. When imported on a new device, the binary is automatically retrieved and strictly validated against the pinned hash.
 
 ---
 
@@ -120,7 +133,7 @@ The standard API Key / Personal Access Token flow remains the default:
 
 ### 4.2 OAuth 2.1 PKCE Flow Specification (`auth_mode: "oauth2"`)
 
-When connecting to OAuth-protected MCP servers, Antigravity Studio operates as an **OAuth 2.1 Public Client** adhering to `RFC 9728`, `RFC 8414`, and `RFC 7636`:
+When connecting to OAuth-protected MCP servers, Antigravity Studio operates as an **OAuth 2.1 Public Client** adhering to `RFC 9728`, `RFC 8414`, `RFC 7591`, and `RFC 7636`:
 
 ```mermaid
 sequenceDiagram
@@ -138,6 +151,12 @@ sequenceDiagram
     UI->>Srv: WS: initiate_mcp_oauth { server: "github-remote", url: "https://..." }
     Srv->>Upstream: Probe GET/POST (Detect RFC 9728 Resource Metadata)
     Upstream-->>Srv: 401 Unauthorized (WWW-Authenticate: resource_metadata=...)
+    Srv->>Srv: 3-Tier Discovery (RFC 9728 -> RFC 8414)
+    alt DCR Supported (registration_endpoint present)
+        Srv->>IdP: POST /register (RFC 7591 DCR) -> Receive client_id
+    else Static Provider (GitHub / Google / Slack)
+        Srv->>Srv: Use configured client_id from UI
+    end
     Srv->>Srv: Generate PKCE (code_verifier + code_challenge S256)
     Srv->>UI: WS: open_auth_url { authUrl: "https://idp/auth?code_challenge=..." }
     UI->>Nat: NativeBridge.openCustomTab(authUrl)
@@ -148,34 +167,51 @@ sequenceDiagram
     Srv->>IdP: POST /token (code + code_verifier)
     IdP-->>Srv: 200 OK { access_token, refresh_token, expires_in }
     Srv->>Vault: Save encrypted tokens (__MCP_OAUTH_github-remote__)
+    Srv->>Nat: NativeBridge.dismissCustomTabAndFocusApp()
+    Nat->>UI: Return focus to MainActivity
     Srv->>UI: WS: mcp_oauth_success { server: "github-remote" }
     UI-->>User: Show Green "Connected & Authenticated" Badge
 ```
 
-### 4.3 Native Android WebView Bridge Invariant (ARGON-07)
-Under Android WebView security rules, JavaScript cannot reliably manage multi-window OAuth popups or handle loopback navigation without sandbox corruption.
-- **Directive**: The OAuth launch must route through `MainActivity.kt`:
+### 4.3 Native Android WebView Bridge & Auto-Dismiss (ARGON-07)
+Under Android WebView security rules, JavaScript cannot reliably manage multi-window OAuth popups.
+- **Directive**: The OAuth launch routes through `MainActivity.kt`:
   ```kotlin
   @JavascriptInterface
   fun openCustomTab(url: String) {
-      mainHandler.post {
-          val customTabsIntent = CustomTabsIntent.Builder()
-              .setShowTitle(true)
-              .build()
-          customTabsIntent.launchUrl(this, Uri.parse(url))
+      runOnUiThread {
+          try {
+              val uri = Uri.parse(url)
+              if (uri.scheme != "https" && uri.scheme != "http") return@runOnUiThread
+              val customTabsIntent = CustomTabsIntent.Builder()
+                  .setShowTitle(true)
+                  .setShareState(CustomTabsIntent.SHARE_STATE_OFF)
+                  .build()
+              customTabsIntent.launchUrl(this@MainActivity, uri)
+          } catch (e: Exception) {
+              startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+          }
+      }
+  }
+
+  @JavascriptInterface
+  fun dismissCustomTabAndFocusApp() {
+      runOnUiThread {
+          val intent = Intent(this@MainActivity, MainActivity::class.java).apply {
+              addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+          }
+          startActivity(intent)
       }
   }
   ```
-- **Loopback Handling**: The local server listens on `http://127.0.0.1:8081/oauth/callback`. Upon receiving the redirect, it displays an HTML success card instructing the user to return to the app, while closing the tab or letting the user swipe it down.
+- **Auto-Dismiss UX**: When `/oauth/callback` completes token exchange, calling `dismissCustomTabAndFocusApp()` pops the Chrome Custom Tab off the stack and returns the user directly to the app without stranding them on a static browser page.
 
-### 4.4 Automated Token Refresh in the Reverse Proxy Gatekeeper
-When the loopback proxy (`/mcp-proxy/<server_name>`) receives a JSON-RPC request:
-1. It queries the Keystore Vault for `__MCP_OAUTH_<server_name>__`.
-2. It evaluates `expires_at`:
-   - If `current_time + 60s >= expires_at`: It executes a synchronous background refresh using `refresh_token` against the provider's token endpoint.
-   - The newly minted `access_token` and updated expiration are committed to the Keystore Vault.
-3. The proxy injects `Authorization: Bearer <valid_access_token>` into the outbound HTTPS request.
-4. Upstream requests never fail due to token expiration.
+### 4.4 Double-Checked Locked Token Refresh
+To eliminate **Refresh Token Rotation Stampedes** (where concurrent parallel tool calls trigger duplicate refreshes, tripping RFC 6819 reuse detection and invalidating user sessions):
+1. Use an asynchronous double-checked lock pattern (`asyncio.Lock` per `server_name`).
+2. Coroutines check `expires_at` outside the lock (fast path).
+3. If expired, coroutines acquire the lock and **re-check `expires_at`**. If another task already refreshed the token, return immediately without network calls.
+4. Outbound refresh requests are executed via `aiohttp` with non-blocking timeouts.
 
 ---
 
@@ -183,12 +219,15 @@ When the loopback proxy (`/mcp-proxy/<server_name>`) receives a JSON-RPC request
 
 | Invariant ID | Severity | Constraint Description | Technical Mitigation |
 | :--- | :--- | :--- | :--- |
-| **SYS-01** | CRITICAL | Malicious or corrupt binary execution in container | Validate ARM64 ELF magic bytes (`0xB7`) and verify SHA-256 before `chmod 0755`. Staging path restricted to internal ext4 `$usr/bin/`. |
-| **SYS-03** | HIGH | Broken symlinks or missing files across device backups | Self-contained download metadata transferred in encrypted export; automated on-demand fetch on import. |
-| **SYS-05** | CRITICAL | CSRF / Token Interception during OAuth redirect | Enforce PKCE with `S256` hashing and cryptographically random `state` parameter bound to session secret. |
-| **SYS-07** | HIGH | WebView popup crash or navigation interception | Route all OAuth browser authorizations through native `CustomTabsIntent` on Android `MainLooper`. |
-| **SYS-08** | HIGH | Class scoping integrity in `server.py` | All new provisioner and OAuth methods must be encapsulated inside `AgyWebServer` or `AgyProcessOrchestrator` to pass AST verification. |
-| **SYS-09** | MEDIUM | Mobile touch targets in MCP modal | Ensure "Connect with OAuth" and "Download" buttons maintain at least 44px × 44px touch boundaries with `touch-action: manipulation`. |
+| **SYS-01** | CRITICAL | Android 15 SELinux `W^X` & Go/Rust DNS/TLS | Stage to isolated `/usr/opt/mcp-bin/<server>/<cmd>` and execute via `agy-sh` container bridge with `/etc/resolv.conf` and CA certificates mounted. |
+| **SYS-02** | HIGH | System binary overwrite in `$usr/bin` | Enforce reserved system binaries denylist (`agy`, `python3`, `git`, `sh`, etc.) and isolate third-party executables. |
+| **SYS-03** | CRITICAL | ZipSlip, symlink poisoning, archive bombs | Block symlinks, hardlinks, FIFOs; enforce 150MB download / 300MB uncompressed quotas; extract target binary directly. |
+| **SYS-04** | HIGH | Token refresh stampede & session revocation | Double-checked locking via per-server `asyncio.Lock` during token rotation. |
+| **SYS-05** | CRITICAL | CSRF / Token Interception during OAuth redirect | Enforce PKCE `S256` hashing and cryptographically random `state` parameter bound to session secret. |
+| **SYS-06** | MEDIUM | Android 15 16KB memory page size compatibility | Verify ELF Program Header `PT_LOAD` segments declare `p_align >= 0x4000` on 16KB kernels. |
+| **SYS-07** | HIGH | Chrome Custom Tab stranded or blocked popup | Route browser auth through native `openCustomTab` and auto-dismiss via `dismissCustomTabAndFocusApp` upon callback completion. |
+| **SYS-08** | HIGH | Class scoping integrity in `server.py` | Encapsulate provisioner and OAuth routines inside `AgyWebServer` or `AgyProcessOrchestrator` to pass pre-build AST gates. |
+| **SYS-09** | MEDIUM | Mobile touch targets in MCP modal | Ensure segmented toggles and action buttons maintain 44px × 44px min touch targets with `touch-action: manipulation`. |
 
 ---
 
@@ -200,3 +239,7 @@ When the loopback proxy (`/mcp-proxy/<server_name>`) receives a JSON-RPC request
 - [ ] **AC-06.4 (OAuth 2.1 Discovery & Login)**: Initiating OAuth discovers RFC 9728 metadata, launches Android Chrome Custom Tabs, completes loopback callback on `127.0.0.1:8081`, and stores credentials in Keystore Vault.
 - [ ] **AC-06.5 (In-Flight Auto Refresh)**: The reverse proxy automatically refreshes expired OAuth tokens in the background without dropping or failing in-flight tool calls.
 - [ ] **AC-06.6 (Zero-Script Cleanup)**: Existing `github-mcp` installations can be smoothly migrated to either the official Go binary (`github-mcp-server`) or `npx`, completely retiring `~/.gemini/scripts/github_mcp.py`.
+- [ ] **AC-06.7 (Containerized Execution & Isolated Staging)**: Provisioned Stdio binaries are staged to `/data/data/ai.agy.app/files/usr/opt/mcp-bin/<server_name>/<command>` (never overwriting `$usr/bin` system binaries) and executed via the `agy-sh` container bridge (with `/etc/resolv.conf` and `SSL_CERT_FILE` mounted) to satisfy Android 15 SELinux `W^X` and Go/Rust DNS/TLS requirements.
+- [ ] **AC-06.8 (Zero-Symlink & Quota-Bounded Extraction)**: Archive decompression inspects headers prior to extraction, blocks symlinks/hardlinks/FIFOs/devices, enforces a 150 MB download / 300 MB uncompressed quota, and automatically pins the SHA-256 checksum in `mcp_config.json` (TOFU) for deterministic export verification.
+- [ ] **AC-06.9 (OAuth 2.1 DCR + Manual `client_id` Fallback)**: The OAuth 2.1 engine automatically executes RFC 7591 Dynamic Client Registration when `registration_endpoint` is advertised, and exposes an optional `Client ID` and `Scopes` input in the UI for static providers (GitHub, Google, Slack).
+- [ ] **AC-06.10 (Double-Checked Refresh Locking & Custom Tab Auto-Dismiss)**: Concurrent requests hitting an expired OAuth token serialize through a per-server `asyncio.Lock` to prevent OAuth 2.1 refresh token reuse revocation, and completing `/oauth/callback` automatically returns `MainActivity` to the foreground without stranding the user in Chrome Custom Tabs.
