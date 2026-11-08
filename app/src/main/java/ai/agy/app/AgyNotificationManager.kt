@@ -146,7 +146,9 @@ object AgyNotificationManager {
     fun onActiveSessionChanged(context: Context, conversationId: String?) {
         val normalized = conversationId?.trim()?.ifEmpty { null }
         activeConversationId = normalized
-        // Do NOT auto-clear completion notifications; keep them in the tray until user taps or responds.
+        if (normalized != null && isAppForeground) {
+            clearCompletionNotification(context, normalized)
+        }
     }
 
     fun isPinned(conversationId: String): Boolean {

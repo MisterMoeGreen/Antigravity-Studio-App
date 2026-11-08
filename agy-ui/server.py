@@ -767,6 +767,27 @@ def cid_matches(a: str | None, b: str | None) -> bool:
     return sa.startswith(sb) or sb.startswith(sa)
 
 
+def resolve_brain_dir(cid: str) -> Optional[Path]:
+    """Resolves short or full session CID to the actual on-disk brain directory."""
+    if not cid or cid in ("default", "session-draft"):
+        return None
+    direct = BRAIN_DIR / cid
+    if direct.is_dir() and (direct / ".system_generated").is_dir():
+        return direct
+    target = cid.strip().lower()
+    if len(target) >= 6 and BRAIN_DIR.is_dir():
+        try:
+            for d in BRAIN_DIR.iterdir():
+                if d.is_dir():
+                    d_name = d.name.lower()
+                    if d_name.startswith(target) or target.startswith(d_name):
+                        if (d / ".system_generated").is_dir():
+                            return d
+        except Exception:
+            pass
+    return None
+
+
 class McpSecurityGate:
     @staticmethod
     def is_safe_upstream_url(url: str) -> bool:
@@ -4135,9 +4156,9 @@ class AntigravityStorageEngine:
         Loads the full conversation history from transcript.jsonl, with automatic
         fallback to conversations/<conversation_id>.db if transcript.jsonl is missing.
         """
+        brain_path = resolve_brain_dir(conversation_id) or (BRAIN_DIR / conversation_id)
         transcript_path = (
-            BRAIN_DIR
-            / conversation_id
+            brain_path
             / ".system_generated"
             / "logs"
             / "transcript.jsonl"
@@ -4154,6 +4175,15 @@ class AntigravityStorageEngine:
 
         # Fallback: inspect ~/.gemini/antigravity-cli/conversations/<id>.db
         conv_db_path = CONVERSATIONS_DIR / f"{conversation_id}.db"
+        if not conv_db_path.exists() and len(conversation_id) >= 6 and CONVERSATIONS_DIR.is_dir():
+            target = conversation_id.strip().lower()
+            try:
+                for db_f in CONVERSATIONS_DIR.glob("*.db"):
+                    if db_f.stem.lower().startswith(target) or target.startswith(db_f.stem.lower()):
+                        conv_db_path = db_f
+                        break
+            except Exception:
+                pass
         if conv_db_path.exists():
             try:
                 messages = self._parse_conversation_db(conv_db_path)
@@ -5068,7 +5098,8 @@ class AgyProcessOrchestrator:
                         cids_to_check.add(t_cid)
 
                 for cid in list(cids_to_check):
-                    sg_dir = BRAIN_DIR / cid / ".system_generated"
+                    brain_dir = resolve_brain_dir(cid) or (BRAIN_DIR / cid)
+                    sg_dir = brain_dir / ".system_generated"
                     tasks_dir = sg_dir / "tasks"
                     msgs_dir = sg_dir / "messages"
 
@@ -5356,7 +5387,7 @@ class AgyProcessOrchestrator:
                                 # Extract exact task command from transcript.jsonl
                                 task_cmd = ""
                                 try:
-                                    transcript_file = BRAIN_DIR / cid / ".system_generated" / "logs" / "transcript.jsonl"
+                                    transcript_file = brain_dir / ".system_generated" / "logs" / "transcript.jsonl"
                                     if transcript_file.exists():
                                         with transcript_file.open("r", encoding="utf-8", errors="replace") as tf:
                                             for tline in tf:

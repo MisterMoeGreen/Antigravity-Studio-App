@@ -101,6 +101,9 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         activeInstance = this
         AgyNotificationManager.isAppForeground = true
+        AgyNotificationManager.activeConversationId?.let { cid ->
+            AgyNotificationManager.clearCompletionNotification(this, cid)
+        }
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 refreshForegroundNotification()
