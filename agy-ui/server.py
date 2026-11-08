@@ -7861,6 +7861,169 @@ class AgyProcessOrchestrator:
     async def abort_current_turn(self, conversation_id: Optional[str] = None) -> bool:
         return await self.abort_turn(conversation_id)
 
+    # -----------------------------------------------------------------------
+    # In-App Read-Only File Preview & Line Navigation (Module 07)
+    # -----------------------------------------------------------------------
+    MAX_PREVIEW_BYTES = 2 * 1024 * 1024        # 2 MB hard cap for file read
+    MAX_HIGHLIGHT_BYTES = 256 * 1024           # 256 KB cap for client syntax highlighting
+    MAX_CLIPBOARD_BYTES = 512 * 1024           # 512 KB cap for Android Binder clipboard
+
+    ALLOWED_ROOT_PREFIXES = (
+        "/storage/emulated/0",
+        "/data/media/0",
+        "/data/data/ai.agy.app/files",
+    )
+
+    DENIED_PATH_SEGMENTS = {
+        ".ssh", ".gnupg", ".gemini", ".aws", ".kube",
+        "shared_prefs", "databases", "keystore",
+    }
+    DENIED_FILENAMES = {
+        ".env", ".env.local", ".env.production", ".netrc", ".git-credentials",
+    }
+
+    IMAGE_MIME_MAP = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
+        ".svg": "image/svg+xml",
+    }
+
+    def _resolve_and_validate_preview_path(self, raw_path: str, client_workspace: Optional[str] = None) -> tuple[bool, str, str]:
+        """Returns (is_valid, resolved_path, error_message)."""
+        if not raw_path or not isinstance(raw_path, str):
+            return False, "", "Empty or invalid file path."
+
+        clean = raw_path.strip()
+        if clean.lower().startswith("file://"):
+            clean = clean[7:]
+            if clean.startswith("localhost/"):
+                clean = clean[9:]
+
+        # Normalize Android /sdcard symlink aliases before realpath
+        if clean.startswith("/sdcard/"):
+            clean = "/storage/emulated/0/" + clean[8:]
+        elif clean.startswith("/storage/self/primary/"):
+            clean = "/storage/emulated/0/" + clean[22:]
+
+        clean = os.path.expanduser(clean)
+        if not os.path.isabs(clean):
+            base_ws = client_workspace or getattr(self, "active_workspace", None) or os.getcwd()
+            clean = os.path.join(base_ws, clean)
+
+        real_path = os.path.realpath(clean)
+
+        # 1. Block pseudo-filesystems (/proc, /sys, /dev) unconditionally
+        if real_path.startswith(("/proc/", "/sys/", "/dev/")):
+            return False, real_path, "Access to system pseudo-filesystems is restricted."
+
+        # 2. Enforce allowed root prefixes using os.path.commonpath
+        allowed = False
+        for prefix in self.ALLOWED_ROOT_PREFIXES:
+            real_prefix = os.path.realpath(prefix)
+            try:
+                if os.path.commonpath([real_path, real_prefix]) == real_prefix:
+                    allowed = True
+                    break
+            except ValueError:
+                continue
+
+        if not allowed:
+            return False, real_path, "Path is outside permitted workspace and storage roots."
+
+        # 3. Block sensitive credential directories & secret files
+        parts = set(real_path.split(os.sep))
+        if parts.intersection(self.DENIED_PATH_SEGMENTS):
+            return False, real_path, "Access to protected credential or configuration directories is denied."
+
+        basename = os.path.basename(real_path)
+        if basename in self.DENIED_FILENAMES or basename.startswith(".env."):
+            return False, real_path, "Access to sensitive environment secret files is denied."
+
+        return True, real_path, ""
+
+    def _read_preview_file_sync(self, real_path: str, has_line_anchor: bool = False) -> dict:
+        """Executes in worker thread via asyncio.to_thread to avoid blocking event loop on FUSE."""
+        import stat
+        import base64
+
+        fd = None
+        try:
+            fd = os.open(real_path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                return {"success": False, "error": "Target is not a regular file (directory or special device)."}
+            if st.st_size > self.MAX_PREVIEW_BYTES:
+                return {
+                    "success": False,
+                    "error": f"File size ({st.st_size / (1024*1024):.2f} MB) exceeds the 2.00 MB preview limit.",
+                    "too_large": True,
+                    "file_size": st.st_size,
+                }
+
+            with os.fdopen(fd, "rb") as f:
+                fd = None  # fdopen takes ownership
+                raw_bytes = f.read(self.MAX_PREVIEW_BYTES + 1)
+
+            if len(raw_bytes) > self.MAX_PREVIEW_BYTES:
+                return {
+                    "success": False,
+                    "error": "File stream exceeds the 2.00 MB preview limit.",
+                    "too_large": True,
+                    "file_size": len(raw_bytes),
+                }
+
+            ext = os.path.splitext(real_path)[1].lower()
+            # Render SVG as source code if a line anchor (#L10) was explicitly requested
+            if ext in self.IMAGE_MIME_MAP and not (ext == ".svg" and has_line_anchor):
+                mime = self.IMAGE_MIME_MAP[ext]
+                b64 = base64.b64encode(raw_bytes).decode("ascii")
+                return {
+                    "success": True,
+                    "is_image": True,
+                    "is_svg": ext == ".svg",
+                    "content": f"data:{mime};base64,{b64}",
+                    "svg_source": raw_bytes.decode("utf-8", errors="replace") if ext == ".svg" else None,
+                    "file_size": len(raw_bytes),
+                    "total_lines": 0,
+                    "language": "image",
+                }
+
+            # Check first 4KB for null bytes (binary detection)
+            if b"\x00" in raw_bytes[:4096]:
+                return {
+                    "success": False,
+                    "is_binary": True,
+                    "file_size": len(raw_bytes),
+                    "error": "Binary file cannot be previewed as text.",
+                }
+
+            text = raw_bytes.decode("utf-8", errors="replace")
+            total_lines = text.count("\n") + 1 if text else 0
+            return {
+                "success": True,
+                "is_image": False,
+                "content": text,
+                "file_size": len(raw_bytes),
+                "total_lines": total_lines,
+                "highlight_safe": len(raw_bytes) <= self.MAX_HIGHLIGHT_BYTES and total_lines <= 5000,
+                "clipboard_safe": len(raw_bytes) <= self.MAX_CLIPBOARD_BYTES,
+            }
+        except FileNotFoundError:
+            return {"success": False, "error": "File does not exist or cannot be accessed."}
+        except PermissionError:
+            return {"success": False, "error": "Permission denied reading file."}
+        except Exception as e:
+            return {"success": False, "error": f"Failed to read file: {str(e)}"}
+        finally:
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+
 
 # ---------------------------------------------------------------------------
 # System Utilities & Slash Command Executor
@@ -11405,6 +11568,63 @@ class AgyWebServer:
             cmd_id = str(data.get("command_id") or "").strip()
             if cmd_id:
                 self.terminal_mgr.abort_command(cmd_id)
+            return
+
+        # In-App Read-Only File Preview & Line Navigation (Module 07, AC-PREV-01..15)
+        if mtype == "preview_file":
+            req_id = str(data.get("request_id") or f"prev_{int(time.time()*1000)}")
+            raw_path = str(data.get("path") or "").strip()
+            ws_path = str(data.get("workspace_path") or getattr(self.orchestrator, "default_workspace", None) or self.default_workspace or "").strip()
+            line_start = data.get("line_start")
+            line_end = data.get("line_end")
+            has_line_anchor = line_start is not None
+
+            is_valid, real_path, err = self.orchestrator._resolve_and_validate_preview_path(
+                raw_path, client_workspace=ws_path
+            )
+            if not is_valid:
+                await websocket.send(
+                    json.dumps(
+                        {
+                            "type": "preview_file_result",
+                            "request_id": req_id,
+                            "success": False,
+                            "path": raw_path,
+                            "error": err,
+                        }
+                    )
+                )
+                return
+
+            res = await asyncio.to_thread(
+                self.orchestrator._read_preview_file_sync,
+                real_path,
+                has_line_anchor=has_line_anchor,
+            )
+            res["type"] = "preview_file_result"
+            res["request_id"] = req_id
+            res["path"] = real_path
+            res["filename"] = os.path.basename(real_path)
+            res["line_start"] = line_start
+            res["line_end"] = line_end
+
+            # Guess language from extension for syntax highlighting
+            ext = os.path.splitext(real_path)[1].lower()
+            lang_map = {
+                ".py": "python", ".js": "javascript", ".ts": "typescript",
+                ".jsx": "javascript", ".tsx": "typescript", ".kt": "kotlin",
+                ".java": "java", ".c": "c", ".cpp": "cpp", ".h": "c",
+                ".hpp": "cpp", ".rs": "rust", ".go": "go", ".sh": "bash",
+                ".bash": "bash", ".zsh": "bash", ".json": "json",
+                ".yaml": "yaml", ".yml": "yaml", ".toml": "toml",
+                ".xml": "xml", ".html": "html", ".css": "css",
+                ".scss": "scss", ".md": "markdown", ".sql": "sql",
+                ".gradle": "gradle", ".properties": "properties",
+            }
+            if not res.get("language"):
+                res["language"] = lang_map.get(ext, ext.lstrip("."))
+
+            await websocket.send(json.dumps(res))
             return
 
 

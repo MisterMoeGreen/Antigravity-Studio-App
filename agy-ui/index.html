@@ -3361,6 +3361,271 @@
       border: 1px solid rgba(239, 68, 68, 0.4);
     }
 
+    /* In-App Read-Only File Preview Dialog (Module 07) */
+    .file-preview-dialog {
+      z-index: 1350 !important;
+      padding: calc(12px + var(--safe-top)) 12px calc(12px + var(--safe-bottom)) 12px;
+    }
+    .file-preview-card {
+      max-width: min(96vw, 920px);
+      width: 100%;
+      height: 86vh;
+      max-height: 86vh;
+      padding: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      border-radius: 16px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      box-shadow: 0 20px 48px rgba(0, 0, 0, 0.65);
+    }
+    html.light .file-preview-card {
+      background: #ffffff;
+      border-color: rgba(15, 23, 42, 0.14);
+      box-shadow: 0 20px 48px rgba(0, 0, 0, 0.18);
+    }
+    .file-preview-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border-subtle);
+      background: rgba(17, 24, 39, 0.6);
+      flex-shrink: 0;
+      gap: 8px;
+    }
+    html.light .file-preview-header {
+      background: #f8fafc;
+    }
+    .file-preview-title-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      flex: 1;
+    }
+    .file-preview-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: #818cf8;
+      flex-shrink: 0;
+    }
+    .file-preview-meta {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      flex: 1;
+    }
+    .file-preview-name {
+      font-weight: 700;
+      font-size: 14px;
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-family: var(--font-sans);
+    }
+    .file-preview-path {
+      font-size: 11px;
+      color: var(--text-secondary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-family: ui-monospace, monospace;
+      opacity: 0.8;
+    }
+    .file-preview-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+    .preview-action-btn {
+      width: 44px;
+      height: 44px;
+      min-width: 44px;
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: none;
+      border-radius: 8px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      touch-action: manipulation;
+      transition: background 0.15s, color 0.15s;
+    }
+    .preview-action-btn:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-primary);
+    }
+    .preview-action-btn:active {
+      background: rgba(255, 255, 255, 0.16);
+    }
+    .preview-action-btn.close:hover {
+      color: #ef4444;
+      background: rgba(239, 68, 68, 0.12);
+    }
+    .file-preview-status-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      font-size: 11.5px;
+      background: rgba(15, 23, 42, 0.4);
+      border-bottom: 1px solid var(--border-subtle);
+      flex-shrink: 0;
+      overflow-x: auto;
+      white-space: nowrap;
+    }
+    html.light .file-preview-status-bar {
+      background: #f1f5f9;
+    }
+    .preview-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 500;
+      background: rgba(148, 163, 184, 0.12);
+      color: var(--text-secondary);
+    }
+    .preview-badge.target-range {
+      background: rgba(99, 102, 241, 0.18);
+      color: #a5b4fc;
+      font-weight: 600;
+    }
+    .preview-badge.warn {
+      background: rgba(245, 158, 11, 0.15);
+      color: #fbbf24;
+    }
+    .file-preview-body {
+      flex: 1;
+      overflow: hidden;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      background: #090d16;
+    }
+    html.light .file-preview-body {
+      background: #ffffff;
+    }
+    .preview-loading-spinner {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      color: var(--text-secondary);
+      font-size: 13px;
+    }
+    .preview-notice-box {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 24px;
+      text-align: center;
+      color: var(--text-secondary);
+    }
+    .preview-notice-icon {
+      font-size: 32px;
+      color: #94a3b8;
+    }
+    .preview-notice-text {
+      font-size: 13px;
+      max-width: 420px;
+      line-height: 1.5;
+    }
+    .preview-image-container {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: auto;
+      padding: 16px;
+      background: rgba(0, 0, 0, 0.2);
+    }
+    .preview-image-container img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      border-radius: 6px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    }
+    .preview-code-container {
+      display: flex;
+      overflow: auto;
+      height: 100%;
+      font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12.5px;
+      line-height: 20px;
+      -webkit-overflow-scrolling: touch;
+      position: relative;
+    }
+    .code-gutter {
+      position: sticky;
+      left: 0;
+      z-index: 5;
+      flex-shrink: 0;
+      user-select: none;
+      background: #0d131f;
+      border-right: 1px solid rgba(148, 163, 184, 0.12);
+      padding: 12px 0;
+      text-align: right;
+    }
+    html.light .code-gutter {
+      background: #f8fafc;
+      border-right-color: rgba(15, 23, 42, 0.08);
+    }
+    .gutter-line {
+      height: 20px;
+      line-height: 20px;
+      padding: 0 10px 0 12px;
+      color: rgba(148, 163, 184, 0.5);
+      min-width: 38px;
+      box-sizing: border-box;
+    }
+    .gutter-line.gutter-highlight {
+      color: #a5b4fc;
+      font-weight: 700;
+      background: rgba(99, 102, 241, 0.2);
+    }
+    .code-viewport {
+      margin: 0;
+      padding: 12px 0;
+      flex-grow: 1;
+      overflow: visible;
+      background: transparent;
+      border: none;
+    }
+    .code-viewport code {
+      display: block;
+      padding: 0;
+      background: transparent;
+      font-family: inherit;
+      font-size: inherit;
+      line-height: inherit;
+    }
+    .code-line {
+      display: block;
+      height: 20px;
+      line-height: 20px;
+      padding: 0 16px 0 12px;
+      white-space: pre;
+      box-sizing: border-box;
+    }
+    .code-line.line-highlight {
+      background: rgba(99, 102, 241, 0.22);
+      box-shadow: inset 3px 0 0 #818cf8;
+    }
+
   </style>
 </head>
 <body>
@@ -4723,6 +4988,65 @@
     </div>
   </div>
 
+  <!-- Modal: In-App Read-Only File Preview (Module 07) -->
+  <div class="modal-dialog file-preview-dialog" id="modalFilePreview" style="display:none;" aria-hidden="true">
+    <div class="modal-card file-preview-card">
+      <div class="file-preview-header">
+        <div class="file-preview-title-group">
+          <span class="file-preview-icon" id="previewFileIcon">
+            <svg class="fa-icon" style="width:16px;height:16px;" viewBox="0 0 384 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M64 0C28.7 0 0 28.7 0 64L0 448c0 35.3 28.7 64 64 64l256 0c35.3 0 64-28.7 64-64l0-288-128 0c-17.7 0-32-14.3-32-32L224 0 64 0zM256 0l0 128 128 0L256 0z"/></svg>
+          </span>
+          <div class="file-preview-meta">
+            <span class="file-preview-name" id="previewFileName">filename.txt</span>
+            <span class="file-preview-path" id="previewFilePath">/path/to/filename.txt</span>
+          </div>
+        </div>
+        <div class="file-preview-actions">
+          <button class="preview-action-btn" id="btnPreviewCopyPath" title="Copy Path" aria-label="Copy Path">
+            <svg class="fa-icon" style="width:15px;height:15px;" viewBox="0 0 512 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M384 96L384 0 64 0C28.7 0 0 28.7 0 64L0 352l96 0 0-64-32 0 0-224 256 0 0 32 64 0zM160 160c-17.7 0-32 14.3-32 32l0 256c0 17.7 14.3 32 32 32l256 0c17.7 0 32-14.3 32-32l0-256c0-17.7-14.3-32-32-32l-256 0zm0 64l256 0 0 256-256 0 0-256z"/></svg>
+          </button>
+          <button class="preview-action-btn" id="btnPreviewCopyContent" title="Copy Content" aria-label="Copy Content">
+            <svg class="fa-icon" style="width:15px;height:15px;" viewBox="0 0 448 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M208 0L332.1 0c12.7 0 24.9 5.1 33.9 14.1l67.9 67.9c9 9 14.1 21.2 14.1 33.9L448 336c0 26.5-21.5 48-48 48l-192 0c-26.5 0-48-21.5-48-48l0-288c0-26.5 21.5-48 48-48zM48 128l80 0 0 64-64 0 0 256 192 0 0-32 64 0 0 48c0 26.5-21.5 48-48 48L48 512c-26.5 0-48-21.5-48-48L0 176c0-26.5 21.5-48 48-48z"/></svg>
+          </button>
+          <button class="preview-action-btn close" id="btnCloseFilePreview" title="Close" aria-label="Close">
+            <svg class="fa-icon" style="width:14px;height:14px;" viewBox="0 0 384 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M342.6 150.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L192 210.7 86.6 105.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L146.7 256 41.4 361.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192 301.3 297.4 406.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L237.3 256 342.6 150.6z"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="file-preview-status-bar" id="previewStatusBar">
+        <span class="preview-badge" id="previewBadgeLang">TEXT</span>
+        <span class="preview-badge" id="previewBadgeLines">0 lines</span>
+        <span class="preview-badge" id="previewBadgeSize">0 B</span>
+        <span class="preview-badge target-range" id="previewBadgeRange" style="display:none;"></span>
+        <span class="preview-badge warn" id="previewBadgeWarn" style="display:none;"></span>
+      </div>
+
+      <div class="file-preview-body" id="previewBody">
+        <div class="preview-loading-spinner" id="previewLoading">
+          <svg class="fa-icon fa-spin" style="width:16px;height:16px;" viewBox="0 0 512 512" aria-hidden="true"><path fill="currentColor" d="M222.7 32.1c5 16.9-4.6 34.8-21.5 39.8C121.8 95.6 64 169.1 64 256c0 106 86 192 192 192s192-86 192-192c0-86.9-57.8-160.4-137.1-184.1c-16.9-5-26.6-22.9-21.5-39.8s22.9-26.6 39.8-21.5C434.9 42.1 512 139.9 512 256c0 141.4-114.6 256-256 256S0 397.4 0 256C0 139.9 77.1 42.1 182.9 10.6c16.9-5 34.8 4.6 39.8 21.5z"/></svg>
+          <span>Loading file...</span>
+        </div>
+
+        <div class="preview-code-container" id="previewCodeContainer" style="display:none;">
+          <div class="code-gutter" id="previewGutter"></div>
+          <pre class="code-viewport" id="previewCodeViewport"><code id="previewCodeElement"></code></pre>
+        </div>
+
+        <div class="preview-image-container" id="previewImageContainer" style="display:none;">
+          <img id="previewImageElement" src="" alt="File Preview" />
+        </div>
+
+        <div class="preview-notice-box" id="previewNoticeBox" style="display:none;">
+          <div class="preview-notice-icon" id="previewNoticeIcon">
+            <svg class="fa-icon" style="width:36px;height:36px;" viewBox="0 0 512 512" aria-hidden="true"><path fill="currentColor" d="M256 32c14.2 0 27.3 7.5 34.5 19.8l216 368c7.3 12.4 7.3 27.7 .2 40.1S486.3 480 472 480L40 480c-14.3 0-27.6-7.7-34.7-20.1s-7-27.8 .2-40.1l216-368C228.7 39.5 241.8 32 256 32zm0 128c-13.3 0-24 10.7-24 24l0 112c0 13.3 10.7 24 24 24s24-10.7 24-24l0-112c0-13.3-10.7-24-24-24zm32 224a32 32 0 1 0 -64 0 32 32 0 1 0 64 0z"/></svg>
+          </div>
+          <div class="preview-notice-text" id="previewNoticeText"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Floating Toast Notification -->
   <div id="toast" class="toast"></div>
 
@@ -4824,6 +5148,7 @@
         isAuthenticating: false,
         isAuthenticated: false,
         conversationId: null,
+        activePreviewRequestId: null,
         model: localStorage.getItem('agy_user_model') || 'gemini-3.8-flash',
         mode: 'default',
         effort: localStorage.getItem('agy_user_effort') || 'high',
@@ -5201,6 +5526,11 @@
       async function copyTextToClipboard(text) {
         if (!text) return;
         try {
+          if (window.AndroidApp && typeof window.AndroidApp.setClipboardText === 'function') {
+            window.AndroidApp.setClipboardText(text);
+            showToast('Copied to clipboard');
+            return;
+          }
           if (navigator.clipboard && navigator.clipboard.writeText) {
             await navigator.clipboard.writeText(text);
           } else {
@@ -7158,6 +7488,10 @@
             break;
           }
 
+          case 'preview_file_result':
+            handlePreviewFileResult(msg);
+            break;
+
         }
       }
 
@@ -8429,6 +8763,8 @@
         actionBackdrop.classList.remove('open');
         renameModal.style.display = 'none';
         deleteModal.style.display = 'none';
+        const filePreviewModal = document.getElementById('modalFilePreview');
+        if (filePreviewModal) filePreviewModal.style.display = 'none';
         backdrop.classList.remove('open');
         targetBubbleInfo = null;
       }
@@ -11899,6 +12235,345 @@
         });
       }
 
+      // ---------------------------------------------------------------------
+      // In-App Read-Only File Preview & Line Navigation (Module 07)
+      // ---------------------------------------------------------------------
+      const NON_FILE_SCHEMES = /^(https?:|mailto:|tel:|javascript:|data:|blob:|about:|intent:|market:|ws:|wss:)/i;
+      const KNOWN_FILE_EXT = /\.(py|js|ts|tsx|jsx|kt|java|c|cpp|h|hpp|rs|go|rb|php|sh|bash|zsh|json|yaml|yml|toml|xml|html|css|scss|md|txt|log|sql|gradle|properties|pro|mk|cmake|dockerfile|gitignore|svg|png|jpg|jpeg|webp|gif)$/i;
+
+      function isLocalFileLink(rawHref) {
+        if (!rawHref || typeof rawHref !== 'string') return false;
+        const href = rawHref.trim();
+        if (!href || href.startsWith('#')) return false;
+        if (NON_FILE_SCHEMES.test(href)) return false;
+        if (/^file:\/\//i.test(href)) return true;
+        if (href.startsWith('/storage/') || href.startsWith('/sdcard/') || href.startsWith('/data/data/ai.agy.app/')) {
+          return true;
+        }
+        const [pathPart, frag] = href.split('#');
+        const cleanPath = pathPart.replace(/:(\d+)(?:[-:](\d+))?$/, '');
+        if (KNOWN_FILE_EXT.test(cleanPath) || (frag && /^L?\d+(?:[-:]L?\d+)?$/i.test(frag))) {
+          return true;
+        }
+        return false;
+      }
+
+      function parseFileLink(rawHref) {
+        let [rawPath, fragment] = (rawHref || '').trim().split('#');
+        let cleanPath = rawPath.replace(/^file:\/\/(localhost)?/i, '');
+        try {
+          cleanPath = decodeURIComponent(cleanPath);
+        } catch (_) {}
+
+        let lineStart = null;
+        let lineEnd = null;
+
+        if (fragment) {
+          const rangeMatch = fragment.match(/^L?(\d+)(?:[-:]L?(\d+))?$/i);
+          if (rangeMatch) {
+            lineStart = parseInt(rangeMatch[1], 10);
+            lineEnd = rangeMatch[2] ? parseInt(rangeMatch[2], 10) : lineStart;
+          }
+        }
+
+        if (!lineStart) {
+          const colonMatch = cleanPath.match(/:(\d+)(?:[-:]L?(\d+))?$/i);
+          if (colonMatch) {
+            lineStart = parseInt(colonMatch[1], 10);
+            lineEnd = colonMatch[2] ? parseInt(colonMatch[2], 10) : lineStart;
+            cleanPath = cleanPath.slice(0, colonMatch.index);
+          }
+        }
+
+        if (lineStart && lineEnd && lineEnd < lineStart) {
+          const tmp = lineStart;
+          lineStart = lineEnd;
+          lineEnd = tmp;
+        }
+
+        return { path: cleanPath, lineStart, lineEnd };
+      }
+
+      function splitHighlightedHtmlIntoLines(highlightedHtml) {
+        const rawLines = highlightedHtml.split('\n');
+        const openTags = [];
+        return rawLines.map((lineHtml) => {
+          const prefix = openTags.join('');
+          const tagRegex = /<\/?span[^>]*>/gi;
+          let match;
+          while ((match = tagRegex.exec(lineHtml)) !== null) {
+            if (match[0].startsWith('</')) {
+              openTags.pop();
+            } else if (!match[0].endsWith('/>')) {
+              openTags.push(match[0]);
+            }
+          }
+          const suffix = '</span>'.repeat(openTags.length);
+          return prefix + (lineHtml || ' ') + suffix;
+        });
+      }
+
+      let activePreviewData = null;
+
+      function openFilePreviewFromLink(rawHref, displayName) {
+        const parsed = parseFileLink(rawHref);
+        if (!parsed.path) return;
+
+        // Dismiss mobile soft keyboard
+        if (document.activeElement && typeof document.activeElement.blur === 'function') {
+          document.activeElement.blur();
+        }
+
+        const modal = document.getElementById('modalFilePreview');
+        const nameEl = document.getElementById('previewFileName');
+        const pathEl = document.getElementById('previewFilePath');
+        const loadingEl = document.getElementById('previewLoading');
+        const codeCont = document.getElementById('previewCodeContainer');
+        const imgCont = document.getElementById('previewImageContainer');
+        const noticeBox = document.getElementById('previewNoticeBox');
+        const rangeBadge = document.getElementById('previewBadgeRange');
+        const warnBadge = document.getElementById('previewBadgeWarn');
+
+        if (!modal) return;
+
+        const requestId = `prev_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+        state.activePreviewRequestId = requestId;
+
+        activePreviewData = {
+          rawPath: parsed.path,
+          lineStart: parsed.lineStart,
+          lineEnd: parsed.lineEnd,
+          content: '',
+          resolvedPath: parsed.path,
+        };
+
+        const shortName = displayName || parsed.path.split('/').pop() || parsed.path;
+        if (nameEl) nameEl.textContent = shortName;
+        if (pathEl) pathEl.textContent = parsed.path;
+
+        if (rangeBadge) {
+          if (parsed.lineStart) {
+            rangeBadge.textContent = parsed.lineEnd && parsed.lineEnd !== parsed.lineStart
+              ? `Lines ${parsed.lineStart}–${parsed.lineEnd}`
+              : `Line ${parsed.lineStart}`;
+            rangeBadge.style.display = 'inline-flex';
+          } else {
+            rangeBadge.style.display = 'none';
+          }
+        }
+        if (warnBadge) warnBadge.style.display = 'none';
+
+        if (loadingEl) loadingEl.style.display = 'flex';
+        if (codeCont) codeCont.style.display = 'none';
+        if (imgCont) imgCont.style.display = 'none';
+        if (noticeBox) noticeBox.style.display = 'none';
+
+        modal.style.display = 'flex';
+        modal.setAttribute('aria-hidden', 'false');
+
+        try {
+          history.pushState({ modal: 'filePreview' }, '');
+        } catch (_) {}
+
+        const currentWs = (state.workspace && state.workspace !== '~/workspace') ? state.workspace : (state.defaultWorkspace || '');
+        sendWs({
+          type: 'preview_file',
+          request_id: requestId,
+          path: parsed.path,
+          workspace_path: currentWs,
+          line_start: parsed.lineStart,
+          line_end: parsed.lineEnd,
+        });
+      }
+      window.openFilePreviewFromLink = openFilePreviewFromLink;
+
+      function closeFilePreview(fromPopState) {
+        const modal = document.getElementById('modalFilePreview');
+        if (modal && modal.style.display !== 'none') {
+          modal.style.display = 'none';
+          modal.setAttribute('aria-hidden', 'true');
+          state.activePreviewRequestId = null;
+          activePreviewData = null;
+          if (!fromPopState) {
+            if (history.state && history.state.modal === 'filePreview') {
+              try { history.back(); } catch (_) {}
+            }
+          }
+        }
+      }
+
+      function handlePreviewFileResult(msg) {
+        if (!msg || msg.request_id !== state.activePreviewRequestId) {
+          return;
+        }
+
+        const modal = document.getElementById('modalFilePreview');
+        if (!modal || modal.style.display === 'none') return;
+
+        const loadingEl = document.getElementById('previewLoading');
+        const codeCont = document.getElementById('previewCodeContainer');
+        const imgCont = document.getElementById('previewImageContainer');
+        const imgEl = document.getElementById('previewImageElement');
+        const noticeBox = document.getElementById('previewNoticeBox');
+        const noticeText = document.getElementById('previewNoticeText');
+        const pathEl = document.getElementById('previewFilePath');
+        const nameEl = document.getElementById('previewFileName');
+        const langBadge = document.getElementById('previewBadgeLang');
+        const linesBadge = document.getElementById('previewBadgeLines');
+        const sizeBadge = document.getElementById('previewBadgeSize');
+        const warnBadge = document.getElementById('previewBadgeWarn');
+        const gutterEl = document.getElementById('previewGutter');
+        const codeEl = document.getElementById('previewCodeElement');
+
+        if (loadingEl) loadingEl.style.display = 'none';
+
+        if (msg.path && pathEl) pathEl.textContent = msg.path;
+        if (msg.filename && nameEl) nameEl.textContent = msg.filename;
+
+        if (!msg.success) {
+          if (noticeBox) {
+            noticeBox.style.display = 'flex';
+            if (noticeText) noticeText.textContent = msg.error || 'Failed to open file.';
+          }
+          if (langBadge) langBadge.textContent = 'ERROR';
+          if (linesBadge) linesBadge.textContent = '0 lines';
+          if (sizeBadge) sizeBadge.textContent = msg.file_size ? formatBytes(msg.file_size) : '0 B';
+          return;
+        }
+
+        if (activePreviewData) {
+          activePreviewData.resolvedPath = msg.path || activePreviewData.rawPath;
+          activePreviewData.content = msg.content || '';
+        }
+
+        if (langBadge) langBadge.textContent = (msg.language || 'text').toUpperCase();
+        if (linesBadge) linesBadge.textContent = `${msg.total_lines || 0} lines`;
+        if (sizeBadge) sizeBadge.textContent = formatBytes(msg.file_size || 0);
+
+        if (msg.is_image) {
+          if (imgCont && imgEl) {
+            imgEl.src = msg.content;
+            imgCont.style.display = 'flex';
+          }
+          return;
+        }
+
+        if (codeCont && gutterEl && codeEl) {
+          codeCont.style.display = 'flex';
+          const totalLines = msg.total_lines || 1;
+          const lineStart = msg.line_start;
+          const lineEnd = msg.line_end;
+
+          let gutterHtml = '';
+          for (let i = 1; i <= totalLines; i++) {
+            const isHighlight = (lineStart && i >= lineStart && (!lineEnd || i <= lineEnd));
+            gutterHtml += `<div class="gutter-line ${isHighlight ? 'gutter-highlight' : ''}">${i}</div>`;
+          }
+          gutterEl.innerHTML = gutterHtml;
+
+          let linesHtml = [];
+          if (msg.highlight_safe && window.hljs && msg.content) {
+            try {
+              let highlighted = '';
+              if (msg.language && hljs.getLanguage(msg.language)) {
+                highlighted = hljs.highlight(msg.content, { language: msg.language, ignoreIllegals: true }).value;
+              } else {
+                highlighted = hljs.highlightAuto(msg.content).value;
+              }
+              linesHtml = splitHighlightedHtmlIntoLines(highlighted);
+            } catch (_) {
+              linesHtml = escapeHtml(msg.content || '').split('\n');
+            }
+          } else {
+            if (warnBadge && !msg.highlight_safe && msg.file_size > 262144) {
+              warnBadge.textContent = 'Syntax highlighting disabled (>256 KB)';
+              warnBadge.style.display = 'inline-flex';
+            }
+            linesHtml = escapeHtml(msg.content || '').split('\n');
+          }
+
+          let bodyHtml = '';
+          for (let i = 0; i < linesHtml.length; i++) {
+            const lineNum = i + 1;
+            const isHighlight = (lineStart && lineNum >= lineStart && (!lineEnd || lineNum <= lineEnd));
+            bodyHtml += `<div class="code-line ${isHighlight ? 'line-highlight' : ''}" data-line="${lineNum}">${linesHtml[i] || ' '}</div>`;
+          }
+          codeEl.innerHTML = bodyHtml;
+
+          if (lineStart) {
+            requestAnimationFrame(() => {
+              const targetLine = codeEl.querySelector(`[data-line="${lineStart}"]`);
+              if (targetLine) {
+                targetLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              }
+            });
+          } else {
+            codeCont.scrollTop = 0;
+            codeCont.scrollLeft = 0;
+          }
+        }
+      }
+
+      // Intercept file links globally
+      document.addEventListener('click', (e) => {
+        const anchor = e.target.closest('a');
+        if (!anchor) return;
+        const href = (anchor.getAttribute('href') || '').trim();
+        if (isLocalFileLink(href)) {
+          e.preventDefault();
+          e.stopPropagation();
+          openFilePreviewFromLink(href, anchor.textContent);
+        }
+      });
+
+      // Bind Preview Action Buttons
+      const btnPreviewCopyPath = document.getElementById('btnPreviewCopyPath');
+      if (btnPreviewCopyPath) {
+        btnPreviewCopyPath.addEventListener('click', () => {
+          if (!activePreviewData || !activePreviewData.resolvedPath) return;
+          copyTextToClipboard(activePreviewData.resolvedPath);
+          showToast('File path copied to clipboard');
+        });
+      }
+
+      const btnPreviewCopyContent = document.getElementById('btnPreviewCopyContent');
+      if (btnPreviewCopyContent) {
+        btnPreviewCopyContent.addEventListener('click', () => {
+          if (!activePreviewData || !activePreviewData.content) {
+            showToast('No content to copy');
+            return;
+          }
+          const text = activePreviewData.content;
+          if (text.length > 524288) {
+            copyTextToClipboard(text.substring(0, 524288));
+            showToast('Copied first 512 KB (Android clipboard limit)');
+          } else {
+            copyTextToClipboard(text);
+            showToast('File content copied to clipboard');
+          }
+        });
+      }
+
+      const btnCloseFilePreview = document.getElementById('btnCloseFilePreview');
+      if (btnCloseFilePreview) {
+        btnCloseFilePreview.addEventListener('click', () => {
+          closeFilePreview();
+        });
+      }
+
+      const modalFilePreview = document.getElementById('modalFilePreview');
+      if (modalFilePreview) {
+        modalFilePreview.addEventListener('click', (e) => {
+          if (e.target === modalFilePreview) {
+            closeFilePreview();
+          }
+        });
+      }
+
+      window.addEventListener('popstate', () => {
+        closeFilePreview(true);
+      });
+
       // Standard Android Back Gesture Dispatcher
       window.handleAndroidBack = function() {
         // 0. Intercept active question bottom-sheet (v1.2.0: Treat Back as deliberate Skip)
@@ -11911,6 +12586,13 @@
         // 0b. Dismiss auth overlay if user was already authenticated and manually opened /login
         if (authOverlay && authOverlay.el && authOverlay.el.style.display !== 'none' && state.isAuthenticated) {
           authOverlay.hide();
+          return true;
+        }
+
+        // 0c. Dismiss in-app file preview modal (Module 07)
+        const filePreviewModal = document.getElementById('modalFilePreview');
+        if (filePreviewModal && filePreviewModal.style.display !== 'none' && filePreviewModal.style.display !== '') {
+          closeFilePreview();
           return true;
         }
 

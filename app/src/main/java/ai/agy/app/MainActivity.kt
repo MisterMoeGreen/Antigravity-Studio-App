@@ -192,6 +192,17 @@ class MainActivity : AppCompatActivity() {
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                     val uri = request?.url ?: return false
+                    val uriString = uri.toString()
+
+                    // Intercept local file links and forward to in-app previewer if dispatched to WebView
+                    if (uriString.startsWith("file://", ignoreCase = true)) {
+                        val escaped = org.json.JSONObject.quote(uriString)
+                        view?.post {
+                            view.evaluateJavascript("if(window.openFilePreviewFromLink) window.openFilePreviewFromLink($escaped);", null)
+                        }
+                        return true
+                    }
+
                     val host = uri.host ?: ""
                     // Strictly allow local daemon navigation within the WebView
                     if (host == "127.0.0.1" || host == "localhost") {
@@ -454,15 +465,16 @@ class MainActivity : AppCompatActivity() {
 
         @JavascriptInterface
         fun setClipboardText(text: String): Boolean {
+            val safeText = if (text.length > 524288) text.substring(0, 524288) else text
             return try {
                 runOnUiThread {
                     try {
                         val clipboard = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
-                        val clip = android.content.ClipData.newPlainText("AgyStudio", text)
+                        val clip = android.content.ClipData.newPlainText("AgyStudio", safeText)
                         clipboard?.setPrimaryClip(clip)
                     } catch (_: Exception) {}
                 }
-                true
+                text.length <= 524288
             } catch (_: Exception) {
                 false
             }
