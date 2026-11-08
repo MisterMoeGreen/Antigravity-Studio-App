@@ -117,7 +117,7 @@ Before committing a staged binary, inspect ELF headers and Program Headers:
 3. **Executable Type Check**: Verify `e_type in (2, 3)` (`ET_EXEC` or `ET_DYN` PIE).
 4. **Android 15 16KB Page Alignment**: On 16KB page-size kernels (`SC_PAGESIZE >= 16384`), verify `PT_LOAD` segments declare `p_align >= 0x4000`.
 
-### 3.5 Export, Import, and TOFU Pinning
+### 3.5 Export, Import, and TOFU Pinning for Stdio Provisioning
 - **Trust On First Use (TOFU)**: If `inputMCPChecksum` is left blank during setup, the provisioner computes the SHA-256 of the downloaded artifact and automatically pins `"checksum": "<hash>"` in `mcp_config.json`.
 - **Deterministic Export**: Backups include `downloadUrl` and `checksum`. When imported on a new device, the binary is automatically retrieved and strictly validated against the pinned hash.
 
@@ -213,6 +213,23 @@ To eliminate **Refresh Token Rotation Stampedes** (where concurrent parallel too
 3. If expired, coroutines acquire the lock and **re-check `expires_at`**. If another task already refreshed the token, return immediately without network calls.
 4. Outbound refresh requests are executed via `aiohttp` with non-blocking timeouts.
 
+### 4.5 Export, Import, and Re-Auth Strategy for OAuth 2.1 Servers (Device-Isolated Sessions)
+Under OAuth 2.1 with Refresh Token Rotation (`RFC 6819` §5.2.2.3), refresh tokens are single-use credentials tied to a single active client stream. If multiple devices share and attempt to refresh the exact same refresh token concurrently, the Authorization Server detects token reuse, invalidates the entire token family, and terminates the user session across all devices.
+
+To completely prevent token rotation collisions, multi-device desynchronization, and silent session invalidation:
+1. **Config-Only Export**:
+   - For HTTP servers operating in OAuth 2.1 mode (`auth_mode: "oauth2"`), the backup export bundle serializes only the server configuration parameters:
+     - `upstreamUrl` (or `serverUrl`)
+     - `auth_mode: "oauth2"`
+     - `client_id` (if configured)
+     - `scopes` (if configured)
+     - `disabled` state
+   - Active bearer tokens and refresh tokens in Android Keystore (`__MCP_OAUTH_<server>__`) are **explicitly excluded** from the export bundle.
+2. **Device-Isolated Import & Re-Authentication**:
+   - When importing an OAuth 2.1 server, the target device registers the server configuration in `mcp_config.json` and `mcp_vault.json` with `authenticated: false`.
+   - The UI immediately renders a distinct yellow **"Re-Authenticate"** button in Settings → MCP Servers.
+   - When the user taps "Re-Authenticate", an independent OAuth 2.1 PKCE exchange is executed for the new device, obtaining an isolated refresh token family without interfering with any other device.
+
 ---
 
 ## 5. Architectural Invariants & Threat Hardening Matrix
@@ -228,6 +245,7 @@ To eliminate **Refresh Token Rotation Stampedes** (where concurrent parallel too
 | **SYS-07** | HIGH | Chrome Custom Tab stranded or blocked popup | Route browser auth through native `openCustomTab` and auto-dismiss via `dismissCustomTabAndFocusApp` upon callback completion. |
 | **SYS-08** | HIGH | Class scoping integrity in `server.py` | Encapsulate provisioner and OAuth routines inside `AgyWebServer` or `AgyProcessOrchestrator` to pass pre-build AST gates. |
 | **SYS-09** | MEDIUM | Mobile touch targets in MCP modal | Ensure segmented toggles and action buttons maintain 44px × 44px min touch targets with `touch-action: manipulation`. |
+| **SYS-10** | HIGH | Refresh token reuse invalidation across devices | Config-only export for OAuth 2.1; exclude active tokens from backup; require single-tap re-auth on target device. |
 
 ---
 
@@ -243,3 +261,4 @@ To eliminate **Refresh Token Rotation Stampedes** (where concurrent parallel too
 - [ ] **AC-06.8 (Zero-Symlink & Quota-Bounded Extraction)**: Archive decompression inspects headers prior to extraction, blocks symlinks/hardlinks/FIFOs/devices, enforces a 150 MB download / 300 MB uncompressed quota, and automatically pins the SHA-256 checksum in `mcp_config.json` (TOFU) for deterministic export verification.
 - [ ] **AC-06.9 (OAuth 2.1 DCR + Manual `client_id` Fallback)**: The OAuth 2.1 engine automatically executes RFC 7591 Dynamic Client Registration when `registration_endpoint` is advertised, and exposes an optional `Client ID` and `Scopes` input in the UI for static providers (GitHub, Google, Slack).
 - [ ] **AC-06.10 (Double-Checked Refresh Locking & Custom Tab Auto-Dismiss)**: Concurrent requests hitting an expired OAuth token serialize through a per-server `asyncio.Lock` to prevent OAuth 2.1 refresh token reuse revocation, and completing `/oauth/callback` automatically returns `MainActivity` to the foreground without stranding the user in Chrome Custom Tabs.
+- [ ] **AC-06.11 (Device-Isolated OAuth Export/Import)**: Backups export OAuth 2.1 configuration metadata (`auth_mode`, `client_id`, `scopes`) without leaking or sharing active tokens; restored servers prompt clean single-tap re-authentication to prevent RFC 6819 token reuse revocation across devices.
