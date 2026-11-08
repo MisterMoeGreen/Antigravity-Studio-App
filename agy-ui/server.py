@@ -4140,9 +4140,28 @@ class AntigravityStorageEngine:
                 dst_db.unlink()
             raise RuntimeError(f"Failed to clone conversation database for branch: {exc}") from exc
 
-        # 2. Clone brain directory (logs, transcripts, scratch)
+        # 2. Clone brain directory (logs, transcripts, scratch) - excluding ephemeral tasks and messages
         try:
-            shutil.copytree(src_brain, dst_brain, symlinks=True, ignore_dangling_symlinks=True)
+            shutil.copytree(
+                src_brain,
+                dst_brain,
+                symlinks=True,
+                ignore_dangling_symlinks=True,
+                ignore=shutil.ignore_patterns("tasks", "messages"),
+            )
+            # Ensure clean, empty task and message directories for the new branch (ARGON-V19-BRANCH)
+            (dst_brain / ".system_generated" / "tasks").mkdir(parents=True, exist_ok=True)
+            (dst_brain / ".system_generated" / "messages").mkdir(parents=True, exist_ok=True)
+            for f in (dst_brain / ".system_generated" / "tasks").glob("*"):
+                try:
+                    f.unlink()
+                except Exception:
+                    pass
+            for f in (dst_brain / ".system_generated" / "messages").glob("*"):
+                try:
+                    f.unlink()
+                except Exception:
+                    pass
         except Exception as exc:
             if dst_db.exists():
                 dst_db.unlink()
@@ -11001,6 +11020,11 @@ class AgyWebServer:
                         mode=branch_mode,
                         effort=branch_effort,
                     )
+                    # Clear any task completion queues and feedback timers for the new branch
+                    self.orchestrator._pop_pending_task_completions(new_cid)
+                    matching_timers = [k for k in self.orchestrator._pending_task_timers if cid_matches(k, new_cid)]
+                    for k in matching_timers:
+                        self.orchestrator._pending_task_timers.pop(k).cancel()
                     self.orchestrator.active_view_cid = new_cid
                     sessions = self.storage.list_conversations(limit=100)
                     await self.broadcast({"type": "session_list", "sessions": sessions})
@@ -11453,6 +11477,11 @@ class AgyWebServer:
                     mode=branch_mode,
                     effort=branch_effort,
                 )
+                # Clear any task completion queues and feedback timers for the new branch
+                self.orchestrator._pop_pending_task_completions(new_cid)
+                matching_timers = [k for k in self.orchestrator._pending_task_timers if cid_matches(k, new_cid)]
+                for k in matching_timers:
+                    self.orchestrator._pending_task_timers.pop(k).cancel()
                 self.orchestrator.active_view_cid = new_cid
                 sessions = self.storage.list_conversations(limit=100)
                 await self.broadcast({"type": "session_list", "sessions": sessions})
