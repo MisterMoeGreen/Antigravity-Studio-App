@@ -4810,6 +4810,7 @@
         { cmd: '/quota', desc: 'Display subscription quotas remaining & context window', direct: true },
         { cmd: '/login', desc: 'Sign in with Google to authenticate CLI & refresh models', action: () => { authOverlay.show('required'); sendWs({ type: 'request_auth_url' }); } },
         { cmd: '/status', desc: 'Inspect device hardware & CLI diagnostics', direct: true },
+        { cmd: '/terminal', desc: 'Toggle direct bash terminal command execution', action: () => toggleTerminalMode(!state.terminalMode) },
         { cmd: '/version', desc: 'Display application and AGY CLI runtime versions', direct: true },
         { cmd: '/clear', desc: 'Start a fresh conversation session', direct: true },
         { cmd: '/help', desc: 'Show interactive command reference card', direct: true },
@@ -5554,6 +5555,11 @@
           .replace(/</g, '&lt;')
           .replace(/>/g, '&gt;')
           .replace(/"/g, '&quot;');
+      }
+
+      function stripAnsiCodes(str) {
+        if (!str) return '';
+        return String(str).replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '');
       }
 
       function configureMarked() {
@@ -6734,13 +6740,6 @@
             sendWs({ type: 'list_ssh_keys' });
             break;
 
-          case 'api_key_raw':
-            if (msg.value) {
-              copyTextToClipboard(msg.value);
-              showToast(`API key "${msg.name}" copied to clipboard`);
-            }
-            break;
-
           case 'mcp_health_update':
             if (msg.status_map && typeof updateMCPHealth === 'function') {
               updateMCPHealth(msg.status_map);
@@ -6927,7 +6926,7 @@
               const preEl = cardEl.querySelector('.terminal-output-viewport');
               if (codeEl && preEl) {
                 const wasNearBottom = (preEl.scrollHeight - preEl.scrollTop - preEl.clientHeight) < 40;
-                codeEl.textContent += msg.delta;
+                codeEl.textContent += stripAnsiCodes(msg.delta);
                 if (wasNearBottom) {
                   preEl.scrollTop = preEl.scrollHeight;
                 }
@@ -6936,6 +6935,10 @@
             }
             break;
           }
+
+          case 'toggle_terminal_mode':
+            toggleTerminalMode(!state.terminalMode);
+            break;
 
           case 'terminal_complete': {
             const cardEl = document.getElementById(`term-card-${msg.command_id}`);
@@ -8090,17 +8093,24 @@
       }
 
       function renderStoredTerminalCard(m) {
+        const extra = m.extra || {};
+        const cmdText = extra.command || m.command || '';
+        const exitCode = (extra.exit_code !== undefined) ? extra.exit_code : ((m.exit_code !== undefined) ? m.exit_code : 0);
+        const duration = (extra.duration_ms !== undefined) ? extra.duration_ms : (m.duration_ms || 0);
+        const rawOutput = m.output || m.content || extra.output || '';
+        const cleanOutput = stripAnsiCodes(rawOutput);
+
         const pRow = document.createElement('div');
         pRow.className = 'msg-row user terminal-prompt-row';
         pRow.innerHTML = `
           <div class="user-bubble terminal-user-bubble">
             <span class="terminal-prompt-badge">$</span>
-            <span class="terminal-prompt-text">${escapeHtml(m.command || '')}</span>
+            <span class="terminal-prompt-text">${escapeHtml(cmdText)}</span>
           </div>
         `;
         chatViewport.appendChild(pRow);
 
-        const isSuccess = (m.exit_code === 0);
+        const isSuccess = (exitCode === 0);
         const cardRow = document.createElement('div');
         cardRow.className = 'msg-row assistant terminal-card-row';
         cardRow.innerHTML = `
@@ -8108,28 +8118,28 @@
             <div class="terminal-card-header">
               <div class="terminal-card-title">
                 ${faIcon('terminal', '', 'width:13px;height:13px;')}
-                <span>Terminal: ${escapeHtml(m.command || '')}</span>
+                <span>Terminal: ${escapeHtml(cmdText)}</span>
               </div>
               <div class="terminal-card-status ${isSuccess ? 'success' : 'error'}">
                 <span class="terminal-badge ${isSuccess ? 'success' : 'error'}">
-                  ${isSuccess ? '✓ Exit 0' : `✗ Exit ${m.exit_code}`}
+                  ${isSuccess ? '✓ Exit 0' : `✗ Exit ${exitCode}`}
                 </span>
               </div>
             </div>
-            <pre class="terminal-output-viewport"><code>${escapeHtml(m.output || m.content || '')}</code></pre>
+            <pre class="terminal-output-viewport"><code>${escapeHtml(cleanOutput)}</code></pre>
             <div class="terminal-card-footer">
               <button class="btn-copy-terminal" title="Copy output">
                 ${faIcon('copy', '', 'width:11px;height:11px;')}
                 <span>Copy Output</span>
               </button>
-              <span class="terminal-card-timing">${m.duration_ms || 0}ms</span>
+              <span class="terminal-card-timing">${duration}ms</span>
             </div>
           </div>
         `;
         const copyBtn = cardRow.querySelector('.btn-copy-terminal');
         if (copyBtn) {
           copyBtn.addEventListener('click', () => {
-            copyTextToClipboard(m.output || m.content || '');
+            copyTextToClipboard(cleanOutput);
             showToast('Terminal output copied');
           });
         }
@@ -9363,7 +9373,7 @@
                 return;
               }
             }
-            sendWs({ type: 'get_api_key_raw', name: k.name });
+            showToast('Secure copy is only available on native device interface');
           });
 
           card.querySelector('[data-action="delete"]').addEventListener('click', () => {

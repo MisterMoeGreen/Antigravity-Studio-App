@@ -17,9 +17,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONObject
 import kotlin.concurrent.thread
 import java.io.BufferedReader
+import java.io.BufferedWriter
 import java.io.File
 import java.io.InputStreamReader
+import java.io.OutputStreamWriter
+import java.net.InetAddress
 import java.net.ServerSocket
+import java.net.Socket
 
 class AgyForegroundService : Service() {
 
@@ -28,6 +32,7 @@ class AgyForegroundService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var batteryReceiver: BroadcastReceiver? = null
+    private var vaultServerSocket: ServerSocket? = null
 
     companion object {
         const val TAG = "AgyService"
@@ -186,6 +191,8 @@ class AgyForegroundService : Service() {
         // Clean up any stale orphaned server processes before spawning
         cleanupStaleDaemonProcesses()
 
+        val vaultPort = startVaultBridgeServer(token)
+
         val pb = ProcessBuilder(
             "$usr/bin/python3",
             "$usr/share/agy-ui/server.py"
@@ -206,6 +213,7 @@ class AgyForegroundService : Service() {
         env["AGY_WEB_HOST"] = "127.0.0.1"
         env["AGY_AUTH_TOKEN"] = token
         env["AGY_INTERNAL_VAULT_TOKEN"] = token
+        env["AGY_VAULT_PORT"] = vaultPort.toString()
         env["GODEBUG"] = "netdns=cgo"
         env["LD_LIBRARY_PATH"] = "$usr/lib:$nativeDir"
         env["LD_PRELOAD"] = "$usr/lib/libagy_shim.so"
@@ -388,6 +396,10 @@ class AgyForegroundService : Service() {
             try { unregisterReceiver(it) } catch (_: Exception) {}
             batteryReceiver = null
         }
+        vaultServerSocket?.let {
+            try { it.close() } catch (_: Exception) {}
+            vaultServerSocket = null
+        }
         wakeLock?.let {
             if (it.isHeld) it.release()
             wakeLock = null
@@ -399,6 +411,92 @@ class AgyForegroundService : Service() {
             stopForeground(true)
         }
         stopSelf()
+    }
+
+    private fun startVaultBridgeServer(token: String): Int {
+        val serverSocket = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
+        vaultServerSocket = serverSocket
+        val vaultPort = serverSocket.localPort
+
+        serviceScope.launch(Dispatchers.IO) {
+            while (isActive && !serverSocket.isClosed) {
+                try {
+                    val client = serverSocket.accept()
+                    launch(Dispatchers.IO) {
+                        handleVaultClient(client, token)
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+        return vaultPort
+    }
+
+    private fun handleVaultClient(socket: Socket, expectedToken: String) {
+        try {
+            socket.soTimeout = 5000
+            val reader = BufferedReader(InputStreamReader(socket.getInputStream(), Charsets.UTF_8))
+            val writer = BufferedWriter(OutputStreamWriter(socket.getOutputStream(), Charsets.UTF_8))
+
+            val line = reader.readLine() ?: return
+            val req = JSONObject(line)
+            val token = req.optString("token")
+            if (token != expectedToken) {
+                val err = JSONObject().apply {
+                    put("status", "error")
+                    put("message", "Unauthorized")
+                }
+                writer.write(err.toString() + "\n")
+                writer.flush()
+                return
+            }
+
+            val action = req.optString("action")
+            val res = JSONObject()
+            when (action) {
+                "get_all" -> {
+                    res.put("status", "ok")
+                    val keysObj = JSONObject()
+                    KeystoreVault.getAllDecryptedKeys(this@AgyForegroundService).forEach { (k, v) ->
+                        if (k != "__MCP_VAULT__") {
+                            keysObj.put(k, v)
+                        }
+                    }
+                    res.put("keys", keysObj)
+                }
+                "save_key" -> {
+                    val name = req.getString("name")
+                    val value = req.getString("value")
+                    val desc = req.optString("description", "")
+                    KeystoreVault.saveKey(this@AgyForegroundService, name, value, desc)
+                    res.put("status", "ok")
+                }
+                "delete_key" -> {
+                    val name = req.getString("name")
+                    val ok = KeystoreVault.deleteKey(this@AgyForegroundService, name)
+                    res.put("status", if (ok) "ok" else "not_found")
+                }
+                "get_mcp_vault" -> {
+                    val mcpJson = KeystoreVault.getDecryptedKey(this@AgyForegroundService, "__MCP_VAULT__") ?: "{}"
+                    res.put("status", "ok")
+                    res.put("vault", JSONObject(mcpJson))
+                }
+                "save_mcp_vault" -> {
+                    val vaultObj = req.getJSONObject("vault")
+                    KeystoreVault.saveKey(this@AgyForegroundService, "__MCP_VAULT__", vaultObj.toString(), "Encrypted MCP Vault")
+                    res.put("status", "ok")
+                }
+                else -> {
+                    res.put("status", "error")
+                    res.put("message", "Unknown action")
+                }
+            }
+            writer.write(res.toString() + "\n")
+            writer.flush()
+        } catch (e: Exception) {
+            Log.w(TAG, "Vault client error: ${e.message}")
+        } finally {
+            try { socket.close() } catch (_: Exception) {}
+        }
     }
 
     fun reconcileSymlinkFarmAndLock(context: Context) {

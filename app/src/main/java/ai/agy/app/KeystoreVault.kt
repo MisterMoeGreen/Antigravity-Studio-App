@@ -230,43 +230,65 @@ object KeystoreVault {
         }
     }
 
-    // ARCH-V19-04: Atomic Migration & Cryptographic Wipe of Plaintext api_keys.json
+    // ARCH-V19-04: Atomic Migration & Cryptographic Wipe of Plaintext api_keys.json & mcp_vault.json
     fun migrateLegacyApiKeysIfPresent(context: Context) {
-        val legacyFile = File(context.applicationInfo.dataDir, "files/home/.gemini/config/api_keys.json")
-        if (!legacyFile.exists()) return
+        val candidates = listOf(
+            File(context.applicationInfo.dataDir, "files/home/.gemini/config/api_keys.json"),
+            File(context.applicationInfo.dataDir, "files/home/.gemini/antigravity-cli/keystore_vault.json")
+        )
 
         synchronized(lock) {
-            try {
-                val content = legacyFile.readText(Charsets.UTF_8)
-                val json = JSONObject(content)
-                val keys = json.optJSONObject("keys")
-                if (keys != null) {
-                    val it = keys.keys()
-                    while (it.hasNext()) {
-                        val keyName = it.next()
-                        val keyObj = keys.optJSONObject(keyName)
-                        val value = keyObj?.optString("value") ?: ""
-                        val desc = keyObj?.optString("description") ?: ""
-                        if (value.isNotEmpty()) {
-                            saveKey(context, keyName, value, desc)
-                            // Verify read-back
-                            val readBack = getDecryptedKey(context, keyName)
-                            if (readBack != value) {
-                                Log.e(TAG, "Migration readback verification failed for $keyName")
-                                return
+            for (legacyFile in candidates) {
+                if (!legacyFile.exists()) continue
+                try {
+                    val content = legacyFile.readText(Charsets.UTF_8)
+                    val json = JSONObject(content)
+                    val keys = json.optJSONObject("keys")
+                    if (keys != null) {
+                        val it = keys.keys()
+                        while (it.hasNext()) {
+                            val keyName = it.next()
+                            val keyObj = keys.optJSONObject(keyName)
+                            val value = keyObj?.optString("value") ?: ""
+                            val desc = keyObj?.optString("description") ?: ""
+                            if (value.isNotEmpty()) {
+                                saveKey(context, keyName, value, desc)
+                                val readBack = getDecryptedKey(context, keyName)
+                                if (readBack != value) {
+                                    Log.e(TAG, "Migration readback verification failed for $keyName")
+                                    continue
+                                }
                             }
                         }
                     }
+                    val length = legacyFile.length()
+                    if (length > 0) {
+                        legacyFile.writeBytes(ByteArray(length.toInt()) { 0 })
+                    }
+                    legacyFile.delete()
+                    Log.i(TAG, "Successfully migrated and wiped legacy file: ${legacyFile.name}")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error during migration of ${legacyFile.name}", e)
                 }
-                // Cryptographic wipe: overwrite with zero bytes then unlink
-                val length = legacyFile.length()
-                if (length > 0) {
-                    legacyFile.writeBytes(ByteArray(length.toInt()) { 0 })
+            }
+
+            // Also migrate legacy mcp_vault.json if present
+            val legacyMcp = File(context.applicationInfo.dataDir, "files/home/.gemini/antigravity-cli/mcp_vault.json")
+            if (legacyMcp.exists()) {
+                try {
+                    val mcpContent = legacyMcp.readText(Charsets.UTF_8).trim()
+                    if (mcpContent.isNotEmpty() && mcpContent != "{}") {
+                        saveKey(context, "__MCP_VAULT__", mcpContent, "Encrypted MCP Vault")
+                    }
+                    val length = legacyMcp.length()
+                    if (length > 0) {
+                        legacyMcp.writeBytes(ByteArray(length.toInt()) { 0 })
+                    }
+                    legacyMcp.delete()
+                    Log.i(TAG, "Successfully migrated and wiped legacy mcp_vault.json")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error migrating legacy mcp_vault.json", e)
                 }
-                legacyFile.delete()
-                Log.i(TAG, "Successfully migrated and securely wiped legacy api_keys.json")
-            } catch (e: Exception) {
-                Log.e(TAG, "Error during legacy api_keys.json migration", e)
             }
         }
     }

@@ -505,6 +505,7 @@ class MainActivity : AppCompatActivity() {
             val list = KeystoreVault.listKeysMasked(this@MainActivity)
             val arr = org.json.JSONArray()
             for (k in list) {
+                if (k.name == "__MCP_VAULT__") continue
                 val obj = org.json.JSONObject().apply {
                     put("name", k.name)
                     put("masked_value", k.masked)

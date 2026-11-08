@@ -45,8 +45,9 @@ from websockets.asyncio.server import ServerConnection, serve
 from websockets.datastructures import Headers
 from websockets.http11 import Request, Response, parse_line, parse_headers
 
-# Monkeypatch websockets Request.parse to support arbitrary HTTP methods and read request bodies
+# Monkeypatch websockets Request.parse to support arbitrary HTTP methods, chunked bodies, and bounded body sizes
 _orig_request_parse = Request.parse
+MAX_REQUEST_BODY_SIZE = 16 * 1024 * 1024
 
 @classmethod
 def _patched_request_parse(cls, read_line):
@@ -62,14 +63,34 @@ def _patched_request_parse(cls, read_line):
     headers = yield from parse_headers(read_line)
 
     body = b""
+    reader = getattr(read_line, "__self__", None)
     cl = headers.get("Content-Length")
+    te = headers.get("Transfer-Encoding", "").lower()
+
     if cl:
         try:
             length = int(cl)
-            reader = getattr(read_line, "__self__", None)
-            if reader and hasattr(reader, "read_exact"):
-                body_bytes = yield from reader.read_exact(length)
-                body = bytes(body_bytes)
+            if 0 < length <= MAX_REQUEST_BODY_SIZE:
+                if reader and hasattr(reader, "read_exact"):
+                    body_bytes = yield from reader.read_exact(length)
+                    body = bytes(body_bytes)
+        except Exception:
+            pass
+    elif te == "chunked" and reader and hasattr(reader, "read_exact"):
+        try:
+            chunks = []
+            total_size = 0
+            while total_size < MAX_REQUEST_BODY_SIZE:
+                size_line = yield from parse_line(read_line)
+                chunk_size = int(size_line.split(b";")[0].strip(), 16)
+                if chunk_size == 0:
+                    yield from parse_line(read_line)
+                    break
+                chunk_data = yield from reader.read_exact(chunk_size)
+                chunks.append(bytes(chunk_data))
+                total_size += chunk_size
+                yield from parse_line(read_line)
+            body = b"".join(chunks)
         except Exception:
             pass
 
@@ -742,12 +763,14 @@ class McpSecurityGate:
             for family, _, _, _, sockaddr in addr_info:
                 ip_str = sockaddr[0]
                 ip_obj = ipaddress.ip_address(ip_str)
+                if isinstance(ip_obj, ipaddress.IPv6Address) and ip_obj.ipv4_mapped:
+                    ip_obj = ip_obj.ipv4_mapped
                 if (
                     ip_obj.is_loopback
                     or ip_obj.is_unspecified
                     or ip_obj.is_link_local
                     or ip_obj.is_multicast
-                    or (isinstance(ip_obj, ipaddress.IPv6Address) and ip_obj.ipv4_mapped and ip_obj.ipv4_mapped.is_loopback)
+                    or ip_obj.is_private
                 ):
                     return False
             return True
@@ -755,18 +778,33 @@ class McpSecurityGate:
             return False
 
 
+def query_keystore_vault(action: str, **kwargs) -> dict[str, Any]:
+    """Interacts with Android Keystore Vault via local IPC bridge in volatile memory (RAM only)."""
+    port = os.environ.get("AGY_VAULT_PORT")
+    token = os.environ.get("AGY_INTERNAL_VAULT_TOKEN")
+    if not port or not token:
+        return {}
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=3.0) as s:
+            payload = {"token": token, "action": action, **kwargs}
+            s.sendall(json.dumps(payload).encode("utf-8") + b"\n")
+            res_line = s.makefile("r", encoding="utf-8").readline()
+            if res_line:
+                return json.loads(res_line)
+    except Exception as exc:
+        logger.debug("query_keystore_vault failed (%s): %s", action, exc)
+    return {}
+
+
+_mcp_vault_cache: dict[str, Any] = {}
+
+
 def sync_and_sanitize_mcp_vault_and_config() -> dict[str, Any]:
-    """Sanitizes mcp_config.json, migrates plaintext auth headers and remote URLs into mcp_vault.json,
-    enforces loopback proxy routing, and quarantines disabled MCP tool schemas away from the engine.
+    """Sanitizes mcp_config.json, migrates plaintext auth headers and remote URLs into Keystore Vault,
+    enforces loopback proxy routing, and quarantines disabled MCP tool schemas and env secrets away from the engine.
     """
-    vault: dict[str, Any] = {}
-    if MCP_VAULT_FILE.exists():
-        try:
-            os.chmod(str(MCP_VAULT_FILE), 0o600)
-            vault = json.loads(MCP_VAULT_FILE.read_text(encoding="utf-8"))
-        except Exception as exc:
-            logger.warning("Error reading %s: %s", MCP_VAULT_FILE, exc)
-            vault = {}
+    global _mcp_vault_cache
+    vault: dict[str, Any] = load_mcp_vault()
 
     MCP_DISABLED_DIR.mkdir(parents=True, exist_ok=True)
     MCP_DIR.mkdir(parents=True, exist_ok=True)
@@ -836,8 +874,14 @@ def sync_and_sanitize_mcp_vault_and_config() -> dict[str, Any]:
                         if s_meta.get("command") != "/bin/false":
                             if s_meta.get("command"):
                                 v_entry["command"] = s_meta.get("command")
-                                vault_changed = True
+                            if s_meta.get("args"):
+                                v_entry["args"] = s_meta.get("args")
+                            if s_meta.get("env"):
+                                v_entry["env"] = s_meta.get("env")
+                            vault_changed = True
                             s_meta["command"] = "/bin/false"
+                            s_meta["args"] = []
+                            s_meta.pop("env", None)
                             config_changed = True
                         if not s_meta.get("disabled"):
                             s_meta["disabled"] = True
@@ -845,6 +889,9 @@ def sync_and_sanitize_mcp_vault_and_config() -> dict[str, Any]:
                     else:
                         if s_meta.get("command") == "/bin/false":
                             s_meta["command"] = v_entry.get("command", "")
+                            s_meta["args"] = v_entry.get("args", [])
+                            if v_entry.get("env"):
+                                s_meta["env"] = v_entry.get("env")
                             config_changed = True
                         if s_meta.get("disabled"):
                             s_meta["disabled"] = False
@@ -888,53 +935,91 @@ def sync_and_sanitize_mcp_vault_and_config() -> dict[str, Any]:
         except Exception as exc:
             logger.warning("Error during sync_and_sanitize_mcp_vault_and_config: %s", exc)
 
+    _mcp_vault_cache = vault
     return vault
 
 
 def load_mcp_vault() -> dict[str, Any]:
-    if not MCP_VAULT_FILE.exists():
-        return sync_and_sanitize_mcp_vault_and_config()
-    try:
-        os.chmod(str(MCP_VAULT_FILE), 0o600)
-        return json.loads(MCP_VAULT_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return sync_and_sanitize_mcp_vault_and_config()
+    global _mcp_vault_cache
+    if _mcp_vault_cache:
+        return _mcp_vault_cache
+
+    vault_res = query_keystore_vault("get_mcp_vault")
+    if vault_res.get("status") == "ok":
+        _mcp_vault_cache = vault_res.get("vault", {})
+        if MCP_VAULT_FILE.exists():
+            try:
+                sz = MCP_VAULT_FILE.stat().st_size
+                if sz > 0:
+                    MCP_VAULT_FILE.write_bytes(b"\x00" * sz)
+                MCP_VAULT_FILE.unlink()
+            except Exception:
+                pass
+        return _mcp_vault_cache
+
+    if MCP_VAULT_FILE.exists():
+        try:
+            os.chmod(str(MCP_VAULT_FILE), 0o600)
+            _mcp_vault_cache = json.loads(MCP_VAULT_FILE.read_text(encoding="utf-8"))
+            return _mcp_vault_cache
+        except Exception:
+            pass
+
+    return {}
 
 
 def save_mcp_vault(vault: dict[str, Any]) -> None:
-    atomic_write_secure(str(MCP_VAULT_FILE), json.dumps(vault, indent=2) + "\n", mode=0o600)
+    global _mcp_vault_cache
+    _mcp_vault_cache = vault
+    query_keystore_vault("save_mcp_vault", vault=vault)
+    if not os.environ.get("AGY_VAULT_PORT"):
+        atomic_write_secure(str(MCP_VAULT_FILE), json.dumps(vault, indent=2) + "\n", mode=0o600)
 
 
 _decrypted_keys_cache: dict[str, Any] = {}
 
 
 def migrate_legacy_api_keys_store() -> None:
-    """ARCH-V19-04: Atomic Migration & Cryptographic Wipe of Plaintext api_keys.json."""
+    """ARCH-V19-04: Atomic Migration & Cryptographic Wipe of Plaintext api_keys.json to Keystore Vault."""
     if not API_KEYS_FILE.exists():
+        return
+    if not os.environ.get("AGY_VAULT_PORT"):
+        # Running without Keystore Vault bridge (e.g. CLI/standalone); preserve plaintext file securely
+        try:
+            os.chmod(str(API_KEYS_FILE), 0o600)
+        except Exception:
+            pass
         return
     try:
         data = json.loads(API_KEYS_FILE.read_text(encoding="utf-8"))
-        store = {"version": 1, "updated_at": int(time.time()), "keys": {}}
-        if KEYSTORE_VAULT_FILE.exists():
-            try:
-                store = json.loads(KEYSTORE_VAULT_FILE.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-        keys = store.setdefault("keys", {})
-        for kname, kval in data.get("keys", {}).items():
-            if isinstance(kval, dict) and kname not in keys:
-                keys[kname] = kval
-        save_api_keys_store(store)
-        verify_data = json.loads(KEYSTORE_VAULT_FILE.read_text(encoding="utf-8"))
-        for kname in data.get("keys", {}):
-            if kname not in verify_data.get("keys", {}):
-                logger.error("Migration verification failed for %s", kname)
-                return
-        sz = API_KEYS_FILE.stat().st_size
-        if sz > 0:
-            API_KEYS_FILE.write_bytes(b"\x00" * sz)
-        API_KEYS_FILE.unlink()
-        logger.info("Successfully migrated legacy api_keys.json to Keystore Vault and wiped plaintext file.")
+        keys = data.get("keys", {})
+        if not keys:
+            return
+        migrated_all = True
+        for kname, kval in keys.items():
+            if isinstance(kval, dict):
+                v_str = kval.get("value", "")
+                d_str = kval.get("description", "")
+                if v_str:
+                    res = query_keystore_vault("save_key", name=kname, value=v_str, description=d_str)
+                    if res.get("status") != "ok":
+                        migrated_all = False
+                        break
+                    _decrypted_keys_cache.setdefault("keys", {})[kname] = {
+                        "value": v_str,
+                        "description": d_str,
+                        "created_at": int(time.time()),
+                    }
+        # Only wipe plaintext file after strict read-back verification against Keystore Vault
+        if migrated_all:
+            verify_res = query_keystore_vault("get_all")
+            verified_keys = verify_res.get("keys", {})
+            if all(k in verified_keys for k in keys):
+                sz = API_KEYS_FILE.stat().st_size
+                if sz > 0:
+                    API_KEYS_FILE.write_bytes(b"\x00" * sz)
+                API_KEYS_FILE.unlink()
+                logger.info("Successfully verified and migrated legacy api_keys.json to Keystore Vault.")
     except Exception as e:
         logger.warning("Error migrating legacy api_keys.json: %s", e)
 
@@ -943,6 +1028,37 @@ def load_api_keys_store() -> dict[str, Any]:
     global _decrypted_keys_cache
     if _decrypted_keys_cache and _decrypted_keys_cache.get("keys"):
         return _decrypted_keys_cache
+
+    vault_res = query_keystore_vault("get_all")
+    if vault_res.get("status") == "ok":
+        raw_keys = vault_res.get("keys", {})
+        if raw_keys:
+            store_keys = {}
+            for k, v in raw_keys.items():
+                store_keys[k] = {"value": v, "description": "", "created_at": int(time.time())}
+            _decrypted_keys_cache = {"version": 1, "updated_at": int(time.time()), "keys": store_keys}
+            # Only remove legacy file if vault verified to have all keys
+            if API_KEYS_FILE.exists():
+                try:
+                    data = json.loads(API_KEYS_FILE.read_text(encoding="utf-8"))
+                    legacy_keys = data.get("keys", {})
+                    if all(k in raw_keys for k in legacy_keys):
+                        sz = API_KEYS_FILE.stat().st_size
+                        if sz > 0:
+                            API_KEYS_FILE.write_bytes(b"\x00" * sz)
+                        API_KEYS_FILE.unlink()
+                except Exception:
+                    pass
+            return _decrypted_keys_cache
+
+    if API_KEYS_FILE.exists():
+        try:
+            os.chmod(str(API_KEYS_FILE), 0o600)
+            _decrypted_keys_cache = json.loads(API_KEYS_FILE.read_text(encoding="utf-8"))
+            return _decrypted_keys_cache
+        except Exception:
+            pass
+
     if KEYSTORE_VAULT_FILE.exists():
         try:
             os.chmod(str(KEYSTORE_VAULT_FILE), 0o600)
@@ -950,31 +1066,16 @@ def load_api_keys_store() -> dict[str, Any]:
             return _decrypted_keys_cache
         except Exception:
             pass
-    if API_KEYS_FILE.exists():
-        migrate_legacy_api_keys_store()
-        if KEYSTORE_VAULT_FILE.exists():
-            try:
-                _decrypted_keys_cache = json.loads(KEYSTORE_VAULT_FILE.read_text(encoding="utf-8"))
-                return _decrypted_keys_cache
-            except Exception:
-                pass
+
     _decrypted_keys_cache = {"version": 1, "updated_at": int(time.time()), "keys": {}}
-    atomic_write_secure(str(KEYSTORE_VAULT_FILE), json.dumps(_decrypted_keys_cache, indent=2) + "\n", mode=0o600)
     return _decrypted_keys_cache
 
 
 def save_api_keys_store(store: dict[str, Any]) -> None:
     global _decrypted_keys_cache
     _decrypted_keys_cache = store
-    atomic_write_secure(str(KEYSTORE_VAULT_FILE), json.dumps(store, indent=2) + "\n", mode=0o600)
-    if API_KEYS_FILE.exists():
-        try:
-            sz = API_KEYS_FILE.stat().st_size
-            if sz > 0:
-                API_KEYS_FILE.write_bytes(b"\x00" * sz)
-            API_KEYS_FILE.unlink()
-        except Exception:
-            pass
+    if not os.environ.get("AGY_VAULT_PORT"):
+        atomic_write_secure(str(API_KEYS_FILE), json.dumps(store, indent=2) + "\n", mode=0o600)
 
 
 def get_active_api_keys() -> dict[str, str]:
@@ -1026,6 +1127,7 @@ def save_api_key(name: str, value: str, description: str = "") -> dict[str, Any]
         "created_at": int(time.time()),
     }
     store["updated_at"] = int(time.time())
+    query_keystore_vault("save_key", name=name, value=value, description=description)
     save_api_keys_store(store)
     sync_api_keys_manifest()
     return {"name": name, "description": description, "masked": mask_api_key(value), "created_at": keys[name]["created_at"]}
@@ -1037,6 +1139,7 @@ def delete_api_key(name: str) -> bool:
     if name in keys:
         del keys[name]
         store["updated_at"] = int(time.time())
+        query_keystore_vault("delete_key", name=name)
         save_api_keys_store(store)
         sync_api_keys_manifest()
         return True
@@ -1486,10 +1589,18 @@ async def toggle_mcp_server(name: str, enabled: bool) -> dict[str, Any]:
                 cdata["mcpServers"][name]["disabled"] = not enabled
                 if trans == "stdio":
                     if not enabled:
+                        if "env" in cdata["mcpServers"][name]:
+                            server_entry["env"] = cdata["mcpServers"][name].pop("env")
+                        if "args" in cdata["mcpServers"][name]:
+                            server_entry["args"] = cdata["mcpServers"][name].get("args", [])
+                            cdata["mcpServers"][name]["args"] = []
                         cdata["mcpServers"][name]["command"] = "/bin/false"
+                        save_mcp_vault(vault)
                     else:
                         cdata["mcpServers"][name]["command"] = server_entry.get("command", "")
                         cdata["mcpServers"][name]["args"] = server_entry.get("args", [])
+                        if server_entry.get("env"):
+                            cdata["mcpServers"][name]["env"] = server_entry.get("env")
                 else:
                     cdata["mcpServers"][name]["serverUrl"] = f"http://127.0.0.1:{PORT}/mcp-proxy/{name}"
                     cdata["mcpServers"][name].pop("headers", None)
@@ -4642,6 +4753,8 @@ class AgyProcessOrchestrator:
             proc_env["AGY_WEB_PORT"] = str(PORT)
             proc_env.pop("AGY_MASTER_KEY", None)
             proc_env.pop("AGY_INTERNAL_VAULT_TOKEN", None)
+            proc_env.pop("AGY_AUTH_TOKEN", None)
+            proc_env.pop("AGY_VAULT_PORT", None)
             active_api_keys = get_active_api_keys()
             if "OPENAI_API_KEY" in active_api_keys:
                 proc_env["OPENAI_BASE_URL"] = f"http://127.0.0.1:{PORT}/proxy/openai/v1"
@@ -4651,6 +4764,7 @@ class AgyProcessOrchestrator:
                 proc_env["ANTHROPIC_API_KEY"] = "agy-managed-proxy-session"
             if "GEMINI_API_KEY" in active_api_keys:
                 proc_env["GEMINI_BASE_URL"] = f"http://127.0.0.1:{PORT}/proxy/gemini"
+                proc_env["GEMINI_API_KEY"] = "agy-managed-proxy-session"
             if "TAVILY_API_KEY" in active_api_keys:
                 proc_env["TAVILY_API_KEY"] = "agy-managed-proxy-session"
             if "GITHUB_TOKEN" in active_api_keys:
@@ -5246,8 +5360,16 @@ class AgyProcessOrchestrator:
                                                     continue
                                                 with open(f"/proc/{p_int}/cmdline", "rb") as cf:
                                                     raw_c = cf.read().decode("utf-8", errors="replace").replace("\x00", " ").strip()
-                                                if "github_mcp" in raw_c or "server.py" in raw_c:
+                                                if "github_mcp" in raw_c or "server.py" in raw_c or "mcp" in raw_c.lower() or "stdio" in raw_c.lower():
                                                     continue
+
+                                                # Avoid latching onto long-lived background daemon processes
+                                                try:
+                                                    proc_ctime = os.stat(f"/proc/{p_int}").st_ctime
+                                                    if time.time() - proc_ctime > 30.0:
+                                                        continue
+                                                except Exception:
+                                                    pass
 
                                                 if fallback_pid is None:
                                                     fallback_pid = p_int
@@ -7493,7 +7615,24 @@ class TerminalExecutionManager:
         env = dict(os.environ)
         env.pop("AGY_MASTER_KEY", None)
         env.pop("AGY_INTERNAL_VAULT_TOKEN", None)
+        env.pop("AGY_AUTH_TOKEN", None)
+        env.pop("AGY_VAULT_PORT", None)
         env["TERM"] = "xterm-256color"
+
+        active_api_keys = get_active_api_keys()
+        if "OPENAI_API_KEY" in active_api_keys:
+            env["OPENAI_BASE_URL"] = f"http://127.0.0.1:{PORT}/proxy/openai/v1"
+            env["OPENAI_API_KEY"] = "agy-managed-proxy-session"
+        if "ANTHROPIC_API_KEY" in active_api_keys:
+            env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{PORT}/proxy/anthropic/v1"
+            env["ANTHROPIC_API_KEY"] = "agy-managed-proxy-session"
+        if "GEMINI_API_KEY" in active_api_keys:
+            env["GEMINI_BASE_URL"] = f"http://127.0.0.1:{PORT}/proxy/gemini"
+            env["GEMINI_API_KEY"] = "agy-managed-proxy-session"
+        if "TAVILY_API_KEY" in active_api_keys:
+            env["TAVILY_API_KEY"] = "agy-managed-proxy-session"
+        if "GITHUB_TOKEN" in active_api_keys:
+            env["GITHUB_TOKEN"] = "agy-managed-proxy-session"
 
         try:
             proc = await asyncio.create_subprocess_shell(
@@ -7689,7 +7828,23 @@ class TerminalExecutionManager:
                 else:
                     proc.terminate()
             except Exception as e:
-                logger.debug("Failed killing terminal process: %s", e)
+                logger.debug("Failed sending SIGTERM to terminal process: %s", e)
+
+            # Schedule SIGKILL escalation after 2 seconds if still running
+            async def _escalate_kill():
+                await asyncio.sleep(2.0)
+                if proc.returncode is None:
+                    try:
+                        if hasattr(os, "killpg") and hasattr(os, "getpgid"):
+                            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                        else:
+                            proc.kill()
+                    except Exception:
+                        pass
+            try:
+                asyncio.create_task(_escalate_kill())
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -7726,6 +7881,10 @@ class AgyWebServer:
         self.ipc_sock_path: Path = GEMINI_DIR / "ask_question.sock"
         self.ipc_server: Optional[asyncio.AbstractServer] = None
         self.terminal_mgr = TerminalExecutionManager(self.orchestrator, self.broadcast, self)
+        self.proxy_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=15.0, read=300.0, write=60.0, pool=30.0),
+            follow_redirects=False,
+        )
 
     def get_all_sessions(self, search_query: str = "", limit: int = 100) -> list[dict[str, Any]]:
         return self.orchestrator.get_all_sessions(search_query=search_query, limit=limit)
@@ -8232,6 +8391,83 @@ class AgyWebServer:
         except Exception:
             self.clients.discard(client)
 
+    async def _stream_upstream_response(
+        self,
+        connection: ServerConnection,
+        method: str,
+        target_url: str,
+        headers: dict[str, str],
+        body: bytes,
+    ) -> Optional[Response]:
+        try:
+            req = self.proxy_client.build_request(
+                method=method,
+                url=target_url,
+                headers=headers,
+                content=body if body else None,
+            )
+            resp = await self.proxy_client.send(req, stream=True)
+        except Exception as exc:
+            logger.error("Proxy upstream request failed (%s): %s", target_url, exc)
+            return Response(
+                int(HTTPStatus.BAD_GATEWAY),
+                "Bad Gateway",
+                Headers([("Content-Type", "application/json; charset=utf-8")]),
+                json.dumps({"error": f"Upstream proxy connection failed: {exc}"}).encode("utf-8"),
+            )
+
+        transport = getattr(connection, "transport", None)
+        if not transport:
+            await resp.aclose()
+            return Response(
+                int(HTTPStatus.INTERNAL_SERVER_ERROR),
+                "Internal Error",
+                Headers([("Content-Type", "application/json; charset=utf-8")]),
+                b'{"error": "No transport"}',
+            )
+
+        status_line = f"HTTP/1.1 {resp.status_code} {resp.reason_phrase or 'OK'}\r\n"
+        out_hdr_lines = [status_line.encode("ascii")]
+
+        excluded_headers = {
+            "transfer-encoding",
+            "content-length",
+            "content-encoding",
+            "connection",
+            "keep-alive",
+            "upgrade",
+        }
+        for k, v in resp.headers.items():
+            if k.lower() not in excluded_headers:
+                out_hdr_lines.append(f"{k}: {v}\r\n".encode("utf-8", errors="replace"))
+
+        out_hdr_lines.append(b"Transfer-Encoding: chunked\r\n")
+        out_hdr_lines.append(b"Connection: close\r\n\r\n")
+        header_block = b"".join(out_hdr_lines)
+
+        try:
+            transport.write(header_block)
+            async for chunk in resp.aiter_raw():
+                if hasattr(transport, "is_closing") and transport.is_closing():
+                    break
+                if not chunk:
+                    continue
+                hex_len = f"{len(chunk):X}\r\n".encode("ascii")
+                transport.write(hex_len + chunk + b"\r\n")
+
+            if not (hasattr(transport, "is_closing") and transport.is_closing()):
+                transport.write(b"0\r\n\r\n")
+        except Exception as write_err:
+            logger.debug("Proxy client stream write interrupted: %s", write_err)
+        finally:
+            await resp.aclose()
+            try:
+                transport.close()
+            except Exception:
+                pass
+
+        raise asyncio.CancelledError()
+
     async def handle_http_request(
         self, connection: ServerConnection, request: Request
     ) -> Optional[Response]:
@@ -8523,9 +8759,6 @@ class AgyWebServer:
 
             target_url = pcfg["base"].rstrip("/") + ("/" + subpath.lstrip("/") if subpath else "")
             qs = request.path.split("?", 1)[1] if "?" in request.path else ""
-            if qs:
-                sep = "&" if "?" in target_url else "?"
-                target_url = f"{target_url}{sep}{qs}"
 
             out_headers = dict(request.headers)
             out_headers.pop("host", None)
@@ -8545,9 +8778,26 @@ class AgyWebServer:
                 if "anthropic-version" not in out_headers:
                     out_headers["anthropic-version"] = "2023-06-01"
             elif provider == "gemini":
+                if qs:
+                    try:
+                        import urllib.parse
+                        parsed_qs = urllib.parse.parse_qs(qs, keep_blank_values=True)
+                        parsed_qs.pop("key", None)
+                        qs = urllib.parse.urlencode(parsed_qs, doseq=True)
+                    except Exception:
+                        pass
                 out_headers["x-goog-api-key"] = secret_val
             elif provider == "tavily":
                 out_headers["Authorization"] = f"Bearer {secret_val}"
+                if qs:
+                    try:
+                        import urllib.parse
+                        parsed_qs = urllib.parse.parse_qs(qs, keep_blank_values=True)
+                        if "api_key" in parsed_qs:
+                            parsed_qs["api_key"] = [secret_val]
+                            qs = urllib.parse.urlencode(parsed_qs, doseq=True)
+                    except Exception:
+                        pass
                 if req_body:
                     try:
                         tav_data = json.loads(req_body.decode("utf-8"))
@@ -8559,30 +8809,17 @@ class AgyWebServer:
             elif provider == "github":
                 out_headers["Authorization"] = f"Bearer {secret_val}"
 
-            try:
-                async with httpx.AsyncClient(
-                    timeout=httpx.Timeout(connect=15.0, read=300.0, write=60.0, pool=30.0),
-                    follow_redirects=False,
-                ) as client:
-                    resp = await client.request(
-                        method=getattr(request, "method", "GET"),
-                        url=target_url,
-                        headers=out_headers,
-                        content=req_body,
-                    )
-                    resp_headers = [
-                        (k, v) for k, v in resp.headers.items()
-                        if k.lower() not in ("transfer-encoding", "content-encoding", "content-length")
-                    ]
-                    return Response(
-                        int(resp.status_code),
-                        resp.reason_phrase or "OK",
-                        Headers(resp_headers),
-                        resp.content,
-                    )
-            except Exception as exc:
-                logger.error("API proxy upstream request failed for %s: %s", provider, exc)
-                return _json_response({"error": f"Upstream proxy error: {exc}"}, HTTPStatus.BAD_GATEWAY)
+            if qs:
+                sep = "&" if "?" in target_url else "?"
+                target_url = f"{target_url}{sep}{qs}"
+
+            return await self._stream_upstream_response(
+                connection,
+                getattr(request, "method", "GET"),
+                target_url,
+                out_headers,
+                req_body,
+            )
 
         # -------------------------------------------------------------------
         # MCP Loopback Proxy Gatekeeper (Module 01, ARCH-V19-01, AC-MCP-01..08)
@@ -8652,33 +8889,13 @@ class AgyWebServer:
             mcp_headers["User-Agent"] = f"AntigravityStudio/{APP_VERSION} (MCP-Proxy)"
             req_body = getattr(request, "body", b"")
 
-            try:
-                async with httpx.AsyncClient(
-                    timeout=httpx.Timeout(connect=15.0, read=300.0, write=60.0, pool=30.0),
-                    follow_redirects=False,
-                ) as client:
-                    resp = await client.request(
-                        method=getattr(request, "method", "POST"),
-                        url=target_url,
-                        headers=mcp_headers,
-                        content=req_body,
-                    )
-                    resp_headers = [
-                        (k, v) for k, v in resp.headers.items()
-                        if k.lower() not in ("transfer-encoding", "content-encoding", "content-length")
-                    ]
-                    return Response(
-                        int(resp.status_code),
-                        resp.reason_phrase or "OK",
-                        Headers(resp_headers),
-                        resp.content,
-                    )
-            except Exception as exc:
-                logger.error("MCP upstream connection failed for %s: %s", server_name, exc)
-                return _json_response(
-                    {"error": f"Upstream MCP communication error: {exc}"},
-                    HTTPStatus.BAD_GATEWAY,
-                )
+            return await self._stream_upstream_response(
+                connection,
+                getattr(request, "method", "POST"),
+                target_url,
+                mcp_headers,
+                req_body,
+            )
 
         if path.startswith("/api/"):
             origin = request.headers.get("Origin")
@@ -9309,15 +9526,6 @@ class AgyWebServer:
                     keys = list_api_keys_masked()
                     await self.broadcast({"type": "api_keys_list", "keys": keys})
                     await self.broadcast({"type": "api_key_deleted", "name": name})
-            return
-
-        if mtype == "get_api_key_raw":
-            name = str(data.get("name") or "").strip()
-            try:
-                raw_val = get_api_key_raw(name)
-                await websocket.send(json.dumps({"type": "api_key_raw", "name": name, "value": raw_val}))
-            except Exception as exc:
-                await websocket.send(json.dumps({"type": "system_card", "title": "Key Read Error", "markdown": str(exc), "level": "error"}))
             return
 
         # Skills Management
@@ -11263,12 +11471,17 @@ class AgyWebServer:
                 "| `/models [id]` | Inspect or switch the active model (`gemini-3.8-flash-high`, `claude-sonnet-4-6`, etc.) |\n"
                 "| `/mode [mode]` | Switch execution mode (`default`, `accept-edits`, `plan`) |\n"
                 "| `/status` | Display device hardware & Antigravity CLI status |\n"
+                "| `/terminal` | Toggle direct bash terminal command execution mode |\n"
                 "| `/clear` | Start a fresh conversation session |\n"
                 "| `/exit` | Interrupt any running `agy` worker subprocess |"
             )
             await self.broadcast(
                 {"type": "system_card", "title": "Antigravity Mobile Command Reference", "markdown": md, "level": "info"}
             )
+            return True
+
+        if cmd == "/terminal":
+            await self.broadcast({"type": "toggle_terminal_mode"})
             return True
 
         if cmd == "/exit":
@@ -11317,6 +11530,7 @@ async def main() -> None:
             HOST,
             PORT,
             process_request=app.handle_http_request,
+            open_timeout=None,
             max_size=16 * 1024 * 1024,
             ping_interval=20,
             ping_timeout=20,
@@ -11338,6 +11552,11 @@ async def main() -> None:
                     await asyncio.wait_for(app.orchestrator.acp_proc.wait(), timeout=2.0)
                 except Exception:
                     app.orchestrator.acp_proc.kill()
+        except Exception:
+            pass
+        try:
+            if hasattr(app, "proxy_client"):
+                await app.proxy_client.aclose()
         except Exception:
             pass
         await app.stop_ipc_server()
