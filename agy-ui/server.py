@@ -5060,6 +5060,7 @@ class AgyProcessOrchestrator:
                             continue
 
                         is_completed = False
+                        is_acp_ingested = False
                         completion_data: Optional[dict[str, Any]] = None
 
                         if msgs_dir.is_dir():
@@ -5080,6 +5081,7 @@ class AgyProcessOrchestrator:
                                         if task_key in content_str or full_task_id in content_str:
                                             self._seen_bg_message_files.add(mfile.name)
                                             is_completed = True
+                                            is_acp_ingested = True
                                             try:
                                                 completion_data = json.loads(content_str)
                                             except Exception:
@@ -5115,6 +5117,7 @@ class AgyProcessOrchestrator:
                                                     or 'action": "kill"' in lower_line
                                                 ):
                                                     is_completed = True
+                                                    is_acp_ingested = True
                                                     is_cancelled = (
                                                         "cancelled" in lower_line
                                                         or "canceled" in lower_line
@@ -5295,14 +5298,15 @@ class AgyProcessOrchestrator:
                                     "exit_code": exit_code,
                                 })
 
-                                self._pending_task_completions[cid].append({
-                                    "task_key": task_key,
-                                    "summary": summary,
-                                    "exit_code": exit_code,
-                                    "duration": duration,
-                                    "output_snippet": output_snippet[:600],
-                                })
-                                self._schedule_background_feedback(cid)
+                                if not is_acp_ingested:
+                                    self._pending_task_completions[cid].append({
+                                        "task_key": task_key,
+                                        "summary": summary,
+                                        "exit_code": exit_code,
+                                        "duration": duration,
+                                        "output_snippet": output_snippet[:600],
+                                    })
+                                    self._schedule_background_feedback(cid)
                         else:
                             if full_task_id not in self.active_background_tasks and task_key not in self.active_background_tasks:
                                 try:
@@ -5484,6 +5488,7 @@ class AgyProcessOrchestrator:
                     if ctx.current_turn_id == turn_id:
                         ctx.current_turn_id = None
                     ctx.spontaneous_turn_id = None
+                    snapshot_preview = ctx.active_snapshot.raw_markdown if ctx.active_snapshot else ""
                     ctx.active_snapshot = None
                     ctx.current_action = ""
                     s_title = ctx.title or (f"Session {cid[:8]}" if cid else "Conversation")
@@ -5514,7 +5519,7 @@ class AgyProcessOrchestrator:
                         "event": "turn_complete",
                         "conversation_id": cid,
                         "title": s_title,
-                        "preview": ctx.active_snapshot.raw_markdown if ctx.active_snapshot else "",
+                        "preview": snapshot_preview,
                     })
             except asyncio.CancelledError:
                 pass

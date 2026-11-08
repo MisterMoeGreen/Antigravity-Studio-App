@@ -400,8 +400,9 @@ object AgyNotificationManager {
         }
     }
 
-    fun shouldSendCompletionNotification(conversationId: String): Boolean {
+    fun shouldSendCompletionNotification(conversationId: String, isBackgroundTask: Boolean = false): Boolean {
         if (!isAppForeground) return true
+        if (isBackgroundTask) return true
         val active = activeConversationId?.trim()
         val target = conversationId.trim()
         if (active != null && active.equals(target, ignoreCase = true)) {
@@ -437,7 +438,7 @@ object AgyNotificationManager {
             return
         }
 
-        if (!shouldSendCompletionNotification(conversationId) || !hasNotificationPermission(context)) {
+        if (!shouldSendCompletionNotification(conversationId, isBackgroundTask) || !hasNotificationPermission(context)) {
             return
         }
 
