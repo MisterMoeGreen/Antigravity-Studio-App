@@ -428,8 +428,21 @@ object AgyNotificationManager {
     }
 
     fun shouldSendCompletionNotification(conversationId: String, isBackgroundTask: Boolean = false): Boolean {
-        // Invariants: The user must NEVER miss a task or turn completion.
-        // Never suppress based on isAppForeground.
+        // When app is in background, screen off, or closed: ALWAYS notify.
+        if (!isAppForeground) return true
+
+        // When app is in foreground: suppress notification only if the user is actively
+        // viewing this exact session, because they are already watching the result in real time.
+        val active = activeConversationId?.trim()?.lowercase() ?: return true
+        val target = conversationId.trim().lowercase()
+        if (active == target) return false
+
+        val minLen = minOf(active.length, target.length)
+        if (minLen >= 6 && (active.startsWith(target) || target.startsWith(active))) {
+            return false
+        }
+
+        // User is in the app, but looking at a different session -> notify so they know this task/turn finished.
         return true
     }
 
@@ -474,7 +487,7 @@ object AgyNotificationManager {
             return
         }
 
-        if (!hasNotificationPermission(context)) {
+        if (!shouldSendCompletionNotification(canonicalCid, isBackgroundTask) || !hasNotificationPermission(context)) {
             return
         }
 
