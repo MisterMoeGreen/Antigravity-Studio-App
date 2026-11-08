@@ -119,7 +119,7 @@ flowchart TD
 
 ## 4. Specification Module Map
 
-The v1.9.0 specification is partitioned into 4 modular specifications:
+The v1.9.0 specification is partitioned into modular specifications:
 
 | Module File | Title | Primary Scope |
 | :--- | :--- | :--- |
@@ -127,6 +127,8 @@ The v1.9.0 specification is partitioned into 4 modular specifications:
 | [`02-android-keystore-vault-and-api-key-proxy.md`](file:///storage/emulated/0/Documents/AgyStudio/specs/v1.9.0/02-android-keystore-vault-and-api-key-proxy.md) | Android Keystore Vault & API Key Proxy | Hardware MasterKey, credential database, proxy route injection, `.agy.md` backup compatibility. |
 | [`04-monochrome-status-bar-notification-icon.md`](file:///storage/emulated/0/Documents/AgyStudio/specs/v1.9.0/04-monochrome-status-bar-notification-icon.md) | Monochrome Status Bar Notification Icon | VectorDrawable specs, `AgyForegroundService` builder integration, density scaling, design rules. |
 | [`05-direct-chat-terminal-execution.md`](file:///storage/emulated/0/Documents/AgyStudio/specs/v1.9.0/05-direct-chat-terminal-execution.md) | Direct Chat Terminal Execution | Composer toggle pill, `!` auto-clearing trigger, monospace streaming output card, `cd` workspace sync. |
+| [`06-standardized-stdio-and-oauth-mcp-architecture.md`](file:///storage/emulated/0/Documents/AgyStudio/specs/v1.9.0/06-standardized-stdio-and-oauth-mcp-architecture.md) | Standardized Stdio Provisioning & OAuth 2.1 MCP | Generic on-demand Stdio binary fetching/validation, RFC 9728/8414 OAuth 2.1 PKCE client. |
+| [`07-in-app-read-only-file-preview-and-line-navigation.md`](file:///storage/emulated/0/Documents/AgyStudio/specs/v1.9.0/07-in-app-read-only-file-preview-and-line-navigation.md) | In-App Read-Only File Preview & Line Navigation | Intercepts `file://` and local links, syntax-highlighted preview modal, line gutter & scroll targeting. |
 
 ---
 
