@@ -2867,36 +2867,67 @@ async def generate_config_export_bundle(categories: list[str], password: str) ->
             for sname, sinfo in servers.items():
                 s_copy = dict(sinfo)
                 v_entry = vault.get(sname, {})
-                if v_entry.get("transport") == "http":
+                trans = (
+                    v_entry.get("transport")
+                    or (
+                        "http"
+                        if (
+                            "serverUrl" in sinfo
+                            or "url" in sinfo
+                            or sinfo.get("type") == "http"
+                            or "upstreamUrl" in sinfo
+                            or "upstreamUrl" in v_entry
+                        )
+                        else "stdio"
+                    )
+                ).lower()
+
+                if trans == "http":
                     real_url = v_entry.get("upstreamUrl") or sinfo.get("upstreamUrl") or ""
+                    if not real_url and s_copy.get("serverUrl") and "/mcp-proxy/" not in s_copy.get("serverUrl", ""):
+                        real_url = s_copy.get("serverUrl")
                     if real_url:
                         s_copy["serverUrl"] = real_url
-                    elif s_copy.get("serverUrl", "").startswith(f"http://127.0.0.1:{PORT}/mcp-proxy/"):
+                    elif "/mcp-proxy/" in s_copy.get("serverUrl", ""):
                         s_copy["serverUrl"] = ""
-                    if v_entry.get("headers"):
-                        s_copy["headers"] = v_entry["headers"]
+
+                    real_headers = dict(v_entry.get("headers") or sinfo.get("headers") or {})
+                    if real_headers:
+                        s_copy["headers"] = real_headers
                     s_copy.pop("upstreamUrl", None)
-                elif v_entry.get("transport") == "stdio":
-                    if v_entry.get("command"):
-                        s_copy["command"] = v_entry["command"]
-                    if v_entry.get("args") is not None:
-                        s_copy["args"] = v_entry["args"]
-                    if v_entry.get("env"):
-                        s_copy["env"] = v_entry["env"]
+                elif trans == "stdio":
+                    real_cmd = v_entry.get("command") or sinfo.get("command") or ""
+                    if real_cmd and real_cmd != "/bin/false":
+                        s_copy["command"] = real_cmd
+                    real_args = v_entry.get("args") if v_entry.get("args") is not None else sinfo.get("args")
+                    if real_args is not None:
+                        s_copy["args"] = real_args
+                    real_env = dict(v_entry.get("env") or sinfo.get("env") or {})
+                    if real_env:
+                        s_copy["env"] = real_env
+
+                if "disabled" in v_entry:
+                    s_copy["disabled"] = not v_entry.get("enabled", True)
+
                 export_servers[sname] = s_copy
+
             for vname, vinfo in vault.items():
                 if vname not in export_servers:
-                    if vinfo.get("transport") == "http":
+                    v_trans = (
+                        vinfo.get("transport")
+                        or ("http" if ("upstreamUrl" in vinfo or "serverUrl" in vinfo) else "stdio")
+                    ).lower()
+                    if v_trans == "http":
                         export_servers[vname] = {
-                            "serverUrl": vinfo.get("upstreamUrl", ""),
-                            "headers": vinfo.get("headers", {}),
+                            "serverUrl": vinfo.get("upstreamUrl") or vinfo.get("serverUrl", ""),
+                            "headers": dict(vinfo.get("headers") or {}),
                             "disabled": not vinfo.get("enabled", True),
                         }
                     else:
                         export_servers[vname] = {
                             "command": vinfo.get("command", ""),
                             "args": vinfo.get("args", []),
-                            "env": vinfo.get("env", {}),
+                            "env": dict(vinfo.get("env") or {}),
                             "disabled": not vinfo.get("enabled", True),
                         }
             if export_servers:
@@ -2993,6 +3024,19 @@ async def restore_configurations_bundle(
     password: Optional[str] = None,
     progress_callback: Optional[Any] = None,
 ) -> dict[str, Any]:
+    async def notify_progress(msg: str, pct: Optional[int] = None) -> None:
+        if not progress_callback:
+            return
+        try:
+            await progress_callback(msg, pct)
+        except TypeError:
+            try:
+                await progress_callback(msg)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     # 1. Size Boundary (ARGON-V163-20)
     if len(content) > 20 * 1024 * 1024:
         raise ValueError("File exceeds maximum allowable backup size (20 MB).")
@@ -3002,20 +3046,21 @@ async def restore_configurations_bundle(
     if trimmed_content.startswith(EXPORT_SIGNATURE_V2):
         if not password:
             raise ValueError("Password is required to decrypt this encrypted backup.")
-        if progress_callback:
-            await progress_callback("Deriving key & decrypting backup...")
+        await notify_progress("Deriving key & decrypting backup...", 10)
         decrypted_markdown = decrypt_v2_bundle(content, password)
         content = decrypted_markdown
         trimmed_content = content.strip()
     elif trimmed_content.startswith(EXPORT_SIGNATURE_V1):
         # Legacy V1 unencrypted format supported for backward compatibility
-        pass
+        await notify_progress("Reading backup manifest...", 10)
     else:
         raise ValueError("Invalid backup file: Unrecognized Antigravity Studio export signature on Line 1.")
 
     # 3. Inner Canonical Signature & Frontmatter
     if not trimmed_content.startswith(EXPORT_SIGNATURE_V1):
         raise ValueError("Corrupted decrypted payload: Missing inner export signature.")
+
+    await notify_progress("Verifying integrity checksum & manifest...", 20)
 
     fm_match = re.match(
         r"^<!-- ANTIGRAVITY_STUDIO_EXPORT_V1 -->\s*\r?\n---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$",
@@ -3057,8 +3102,7 @@ async def restore_configurations_bundle(
 
     # 4. Phase 1: SSH Keys
     if "## Section: SSH Keys" in post_frontmatter_body:
-        if progress_callback:
-            await progress_callback("Restoring SSH keys & credentials...")
+        await notify_progress("Restoring SSH keys & credentials...", 30)
         SSH_DIR.mkdir(mode=0o700, exist_ok=True)
         os.chmod(str(SSH_DIR), 0o700)
         key_blocks = re.findall(
@@ -3092,8 +3136,7 @@ async def restore_configurations_bundle(
 
     # 5. Phase 2: API Keys
     if "## Section: API Keys" in post_frontmatter_body:
-        if progress_callback:
-            await progress_callback("Merging API keys...")
+        await notify_progress("Merging API keys & Keystore vault...", 45)
         api_match = re.search(r"## Section: API Keys[\s\S]*?```json\s*([\s\S]*?)\s*```", post_frontmatter_body)
         if api_match:
             try:
@@ -3129,8 +3172,7 @@ async def restore_configurations_bundle(
 
     # 6. Phase 3: Custom Skills (Recursive Multi-File)
     if "## Section: Custom Skills" in post_frontmatter_body:
-        if progress_callback:
-            await progress_callback("Restoring custom skills...")
+        await notify_progress("Restoring custom skills & resources...", 60)
         GLOBAL_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
         skill_blocks = re.findall(
             r"### Skill:\s*`([^`]+)`([\s\S]*?)(?=### Skill:|## Section:|\Z)",
@@ -3172,8 +3214,7 @@ async def restore_configurations_bundle(
 
     # 7. Phase 4: MCP Servers
     if "## Section: MCP Servers" in post_frontmatter_body:
-        if progress_callback:
-            await progress_callback("Configuring MCP servers...")
+        await notify_progress("Configuring MCP servers & proxy vault...", 75)
         mcp_match = re.search(r"## Section: MCP Servers[\s\S]*?```json\s*([\s\S]*?)\s*```", post_frontmatter_body)
         if mcp_match:
             try:
@@ -3190,12 +3231,41 @@ async def restore_configurations_bundle(
                     has_new_mcp = False
                     for mname, mcfg in imported_mcps.items():
                         mname = mname.strip()
+                        mcfg_dict = dict(mcfg) if isinstance(mcfg, dict) else {}
+                        headers_dict = dict(mcfg_dict.get("headers") or {}) if isinstance(mcfg_dict.get("headers"), dict) else {}
+
                         if mname in servers and mname in vault:
+                            v_entry = vault[mname]
+                            v_headers = v_entry.setdefault("headers", {})
+                            updated_existing = False
+                            for hk, hv in headers_dict.items():
+                                if hk not in v_headers or not v_headers[hk]:
+                                    v_headers[hk] = hv
+                                    updated_existing = True
+                            if not v_entry.get("upstreamUrl"):
+                                raw_url = mcfg_dict.get("upstreamUrl") or mcfg_dict.get("serverUrl") or mcfg_dict.get("url") or ""
+                                if raw_url and f"/mcp-proxy/{mname}" not in raw_url:
+                                    v_entry["upstreamUrl"] = raw_url
+                                    updated_existing = True
+                            if updated_existing:
+                                has_new_mcp = True
                             summary["mcps"]["preserved"].append(mname)
                         else:
-                            mcfg_copy = dict(mcfg) if isinstance(mcfg, dict) else {}
-                            is_disabled = mcfg_copy.get("disabled", False)
-                            trans = "http" if ("serverUrl" in mcfg_copy or "url" in mcfg_copy or mcfg_copy.get("type") == "http") else "stdio"
+                            mcfg_copy = dict(mcfg_dict)
+                            is_disabled = bool(mcfg_copy.get("disabled", False))
+                            trans = (
+                                mcfg_copy.get("transport")
+                                or (
+                                    "http"
+                                    if (
+                                        "serverUrl" in mcfg_copy
+                                        or "url" in mcfg_copy
+                                        or mcfg_copy.get("type") == "http"
+                                        or "upstreamUrl" in mcfg_copy
+                                    )
+                                    else "stdio"
+                                )
+                            ).lower()
                             if trans == "http":
                                 raw_url = mcfg_copy.get("upstreamUrl") or mcfg_copy.get("serverUrl") or mcfg_copy.get("url") or ""
                                 if f"/mcp-proxy/{mname}" in raw_url:
@@ -3204,7 +3274,7 @@ async def restore_configurations_bundle(
                                     "enabled": not is_disabled,
                                     "transport": "http",
                                     "upstreamUrl": raw_url,
-                                    "headers": mcfg_copy.get("headers", {}),
+                                    "headers": headers_dict,
                                     "created_at": int(time.time()),
                                 }
                                 mcfg_copy["serverUrl"] = f"http://127.0.0.1:{PORT}/mcp-proxy/{mname}"
@@ -3218,7 +3288,7 @@ async def restore_configurations_bundle(
                                     "transport": "stdio",
                                     "command": mcfg_copy.get("command", "") if mcfg_copy.get("command") != "/bin/false" else "",
                                     "args": mcfg_copy.get("args", []),
-                                    "env": mcfg_copy.get("env", {}),
+                                    "env": dict(mcfg_copy.get("env") or {}),
                                     "created_at": int(time.time()),
                                 }
                                 if is_disabled:
@@ -3238,8 +3308,7 @@ async def restore_configurations_bundle(
 
     # 8. Phase 5: Container Packages & Differential apk add
     if "## Section: Alpine Linux Packages" in post_frontmatter_body:
-        if progress_callback:
-            await progress_callback("Checking container packages...")
+        await notify_progress("Checking container packages...", 85)
         pkg_match = re.search(r"## Section: Alpine Linux Packages[\s\S]*?```json\s*([\s\S]*?)\s*```", post_frontmatter_body)
         if pkg_match:
             try:
@@ -3261,8 +3330,7 @@ async def restore_configurations_bundle(
 
                     if missing:
                         sample_str = ", ".join(missing[:3]) + ("..." if len(missing) > 3 else "")
-                        if progress_callback:
-                            await progress_callback(f"Installing {len(missing)} package(s) via apk add: {sample_str}")
+                        await notify_progress(f"Installing {len(missing)} package(s) via apk: {sample_str}", 88)
                         async with APK_MUTATION_LOCK:
                             try:
                                 code, stdout, stderr = await run_apk_command("add", "--no-cache", *missing)
@@ -3274,8 +3342,7 @@ async def restore_configurations_bundle(
                                     # Fall back to installing individually so one invalid or missing package does not block the rest
                                     failed_msgs: list[str] = []
                                     for single_pkg in missing:
-                                        if progress_callback:
-                                            await progress_callback(f"Installing {single_pkg} via apk add...")
+                                        await notify_progress(f"Installing {single_pkg} via apk add...", 89)
                                         c_s, out_s, err_s = await run_apk_command("add", "--no-cache", single_pkg)
                                         if c_s == 0:
                                             summary["packages"]["installed"].append(single_pkg)
@@ -10328,12 +10395,15 @@ class AgyWebServer:
                 return
 
             async with IMPORT_MUTATION_LOCK:
-                async def progress_cb(message: str) -> None:
+                async def progress_cb(message: str, percent: Optional[int] = None) -> None:
                     try:
-                        await websocket.send(json.dumps({
+                        p_data: dict[str, Any] = {
                             "type": "import_configurations_progress",
                             "message": message,
-                        }))
+                        }
+                        if percent is not None:
+                            p_data["percent"] = max(0, min(100, int(percent)))
+                        await websocket.send(json.dumps(p_data))
                     except Exception:
                         pass
 
@@ -10343,6 +10413,12 @@ class AgyWebServer:
                         password=password,
                         progress_callback=progress_cb,
                     )
+                    await progress_cb("Restarting agent daemon with fresh context...", 94)
+                    try:
+                        await self.orchestrator.recycle_acp_daemon()
+                    except Exception as acp_err:
+                        logger.warning("Error recycling ACP daemon post-import: %s", acp_err)
+                    await progress_cb("Import completed successfully!", 100)
                     await websocket.send(json.dumps({
                         "type": "import_configurations_result",
                         "success": True,
@@ -10366,7 +10442,7 @@ class AgyWebServer:
                     try:
                         await self.broadcast({"type": "mcp_servers_list", "servers": load_masked_mcp_servers()})
                         await self.broadcast({"type": "api_keys_list", "keys": load_api_keys_store()})
-                        await self.broadcast({"type": "skills_list", "skills": list_user_skills()})
+                        await self.broadcast({"type": "skills_list", "skills": discover_skills(self.orchestrator.config.workspace)})
                         await self.broadcast({"type": "ssh_keys_list", "keys": await list_ssh_keys()})
                         pkg_info = get_installed_packages()
                         await self.broadcast({

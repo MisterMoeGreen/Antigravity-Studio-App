@@ -3765,9 +3765,17 @@
       </div>
 
       <!-- Live Progress Display -->
-      <div id="importProgressBox" style="display:none; flex-direction:column; align-items:center; justify-content:center; padding:18px 12px; background:var(--bg-card); border-radius:10px; margin-bottom:16px; border:1px solid var(--border-subtle); gap:10px;">
-        <svg class="fa-icon fa-spin" viewBox="0 0 512 512" style="width:28px;height:28px;color:var(--accent-primary);" aria-hidden="true" focusable="false"><path fill="currentColor" d="M48.5 224L40 224c-13.3 0-24-10.7-24-24L16 72c0-9.7 5.8-18.5 14.8-22.2s19.3-1.7 26.2 5.2L98.6 96.6c87.6-86.5 228.7-86.2 315.8 1c87.5 87.5 87.5 229.3 0 316.8s-229.3 87.5-316.8 0c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0c62.5 62.5 163.8 62.5 226.3 0s62.5-163.8 0-226.3c-62.2-62.2-162.7-62.5-225.3-1L185 183c6.9 6.9 8.9 17.2 5.2 26.2s-12.5 14.8-22.2 14.8L48.5 224z"/></svg>
-        <div id="importProgressMessage" style="font-size:13px; font-weight:500; color:var(--text-primary); text-align:center;">Restoring configurations...</div>
+      <div id="importProgressBox" style="display:none; flex-direction:column; align-items:stretch; justify-content:center; padding:18px 16px; background:var(--bg-card); border-radius:10px; margin-bottom:16px; border:1px solid var(--border-subtle); gap:12px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+          <div style="display:flex; align-items:center; gap:8px; min-width:0; flex:1;">
+            <svg class="fa-icon fa-spin" viewBox="0 0 512 512" style="width:18px;height:18px;color:var(--accent-primary);flex-shrink:0;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M48.5 224L40 224c-13.3 0-24-10.7-24-24L16 72c0-9.7 5.8-18.5 14.8-22.2s19.3-1.7 26.2 5.2L98.6 96.6c87.6-86.5 228.7-86.2 315.8 1c87.5 87.5 87.5 229.3 0 316.8s-229.3 87.5-316.8 0c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0c62.5 62.5 163.8 62.5 226.3 0s62.5-163.8 0-226.3c-62.2-62.2-162.7-62.5-225.3-1L185 183c6.9 6.9 8.9 17.2 5.2 26.2s-12.5 14.8-22.2 14.8L48.5 224z"/></svg>
+            <div id="importProgressMessage" style="font-size:13px; font-weight:500; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Restoring configurations...</div>
+          </div>
+          <span id="importProgressPercent" style="font-size:12px; font-weight:600; color:var(--accent-primary); font-variant-numeric:tabular-nums; flex-shrink:0;">0%</span>
+        </div>
+        <div class="import-progress-bar-track" style="width:100%; height:6px; background:var(--border-subtle); border-radius:3px; overflow:hidden;">
+          <div id="importProgressBarFill" style="width:0%; height:100%; background:linear-gradient(90deg, var(--accent-primary), var(--accent-secondary, #38bdf8)); border-radius:3px; transition:width 0.25s cubic-bezier(0.4, 0, 0.2, 1);"></div>
+        </div>
       </div>
 
       <!-- Summary Report Box (Post-Execution) -->
@@ -10964,6 +10972,8 @@
       const importZeroOverwriteNote = document.getElementById('importZeroOverwriteNote');
       const importProgressBox = document.getElementById('importProgressBox');
       const importProgressMessage = document.getElementById('importProgressMessage');
+      const importProgressBarFill = document.getElementById('importProgressBarFill');
+      const importProgressPercent = document.getElementById('importProgressPercent');
       const importResultSummaryBox = document.getElementById('importResultSummaryBox');
       const importActionButtonsRow = document.getElementById('importActionButtonsRow');
       const importDoneButtonRow = document.getElementById('importDoneButtonRow');
@@ -11325,11 +11335,23 @@
             return;
           }
 
-          btnSubmitImportPassword.disabled = true;
-          btnSubmitImportPassword.innerHTML = `<svg class="fa-icon fa-spin" viewBox="0 0 512 512" style="width:14px;height:14px;margin-right:6px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M48.5 224L40 224c-13.3 0-24-10.7-24-24L16 72c0-9.7 5.8-18.5 14.8-22.2s19.3-1.7 26.2 5.2L98.6 96.6c87.6-86.5 228.7-86.2 315.8 1c87.5 87.5 87.5 229.3 0 316.8s-229.3 87.5-316.8 0c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0c62.5 62.5 163.8 62.5 226.3 0s62.5-163.8 0-226.3c-62.2-62.2-162.7-62.5-225.3-1L185 183c6.9 6.9 8.9 17.2 5.2 26.2s-12.5 14.8-22.2 14.8L48.5 224z"/></svg>Decrypting...`;
-          if (btnCancelImportPassword) btnCancelImportPassword.disabled = true;
-          if (btnCloseImportPassword) btnCloseImportPassword.disabled = true;
           if (importPasswordError) importPasswordError.style.display = 'none';
+
+          // Seamless transition to importConfirmSheet to show live progress bar & phases
+          if (importPasswordSheet) importPasswordSheet.classList.remove('open');
+          if (importConfirmSheet) {
+            resetImportSheetUI();
+            if (importSheetTitle) importSheetTitle.textContent = 'Restoring Configuration';
+            if (importSheetSubtitle) importSheetSubtitle.textContent = 'Decrypting backup and applying configurations locally:';
+            if (detectedItemsList) detectedItemsList.style.display = 'none';
+            if (importZeroOverwriteNote) importZeroOverwriteNote.style.display = 'none';
+            if (importActionButtonsRow) importActionButtonsRow.style.display = 'none';
+            if (importProgressBox) importProgressBox.style.display = 'flex';
+            if (importProgressBarFill) importProgressBarFill.style.width = '10%';
+            if (importProgressPercent) importProgressPercent.textContent = '10%';
+            if (importProgressMessage) importProgressMessage.textContent = 'Deriving key & decrypting backup...';
+            importConfirmSheet.classList.add('open');
+          }
 
           sendWs({
             type: 'import_configurations',
@@ -11345,6 +11367,9 @@
         if (detectedItemsList) detectedItemsList.style.display = 'flex';
         if (importZeroOverwriteNote) importZeroOverwriteNote.style.display = 'block';
         if (importProgressBox) importProgressBox.style.display = 'none';
+        if (importProgressBarFill) importProgressBarFill.style.width = '0%';
+        if (importProgressPercent) importProgressPercent.textContent = '0%';
+        if (importProgressMessage) importProgressMessage.textContent = 'Restoring configurations...';
         if (importResultSummaryBox) {
           importResultSummaryBox.style.display = 'none';
           importResultSummaryBox.innerHTML = '';
@@ -11419,6 +11444,8 @@
           if (btnCloseImportConfirm) btnCloseImportConfirm.disabled = true;
           if (importActionButtonsRow) importActionButtonsRow.style.display = 'none';
           if (importProgressBox) importProgressBox.style.display = 'flex';
+          if (importProgressBarFill) importProgressBarFill.style.width = '10%';
+          if (importProgressPercent) importProgressPercent.textContent = '10%';
           if (importProgressMessage) importProgressMessage.textContent = 'Verifying and restoring configurations...';
 
           sendWs({
@@ -11429,8 +11456,21 @@
       }
 
       function handleImportProgress(msg) {
+        if (!msg) return;
+        if (importProgressBox) {
+          importProgressBox.style.display = 'flex';
+        }
         if (importProgressMessage && msg.message) {
           importProgressMessage.textContent = msg.message;
+        }
+        if (typeof msg.percent === 'number') {
+          const pct = Math.max(0, Math.min(100, Math.round(msg.percent)));
+          if (importProgressBarFill) {
+            importProgressBarFill.style.width = pct + '%';
+          }
+          if (importProgressPercent) {
+            importProgressPercent.textContent = pct + '%';
+          }
         }
       }
 
@@ -11439,14 +11479,12 @@
         if (btnCloseImportConfirm) btnCloseImportConfirm.disabled = false;
 
         if (!msg.success) {
-          // If password sheet is open, report error there so user can re-try
-          if (importPasswordSheet && importPasswordSheet.classList.contains('open')) {
-            if (btnSubmitImportPassword) {
-              btnSubmitImportPassword.disabled = false;
-              btnSubmitImportPassword.textContent = 'Decrypt & Restore';
-            }
-            if (btnCancelImportPassword) btnCancelImportPassword.disabled = false;
-            if (btnCloseImportPassword) btnCloseImportPassword.disabled = false;
+          // If the failure was due to password decryption, return to password sheet so user can re-enter
+          const errLower = (msg.error || '').toLowerCase();
+          const isAuthOrCryptoError = errLower.includes('password') || errLower.includes('decrypt') || errLower.includes('mac') || errLower.includes('padding') || errLower.includes('key');
+          if (pendingImportBundle && pendingImportBundle.isEncrypted && isAuthOrCryptoError) {
+            if (importConfirmSheet) importConfirmSheet.classList.remove('open');
+            openImportPasswordSheet(pendingImportBundle.meta);
             if (inputImportPassword) {
               inputImportPassword.style.borderColor = 'var(--danger)';
               inputImportPassword.focus();
