@@ -4418,7 +4418,18 @@ class AntigravityStorageEngine:
         brain_path = resolve_brain_dir(conversation_id) or (BRAIN_DIR / conversation_id)
         logs_dir = brain_path / ".system_generated" / "logs"
         transcript_full_path = logs_dir / "transcript_full.jsonl"
-        transcript_path = transcript_full_path if transcript_full_path.exists() else (logs_dir / "transcript.jsonl")
+        transcript_compact_path = logs_dir / "transcript.jsonl"
+        if transcript_full_path.exists() and transcript_compact_path.exists():
+            try:
+                full_mtime = transcript_full_path.stat().st_mtime
+                compact_mtime = transcript_compact_path.stat().st_mtime
+                transcript_path = transcript_full_path if full_mtime >= (compact_mtime - 2.0) else transcript_compact_path
+            except Exception:
+                transcript_path = transcript_full_path
+        elif transcript_full_path.exists():
+            transcript_path = transcript_full_path
+        else:
+            transcript_path = transcript_compact_path
         messages: list[dict[str, Any]] = []
 
         if transcript_path.exists():
@@ -5547,6 +5558,15 @@ class AgyProcessOrchestrator:
                                         ctx = v
                                         break
                             is_agent_turn_running = bool(ctx and ctx.is_running)
+                            spawned_turn_id = t_info.get("spawned_during_turn_id") if t_info else None
+                            current_turn_id = getattr(ctx, "current_turn_id", None) if ctx else None
+
+                            # A task is an intermediate in-turn command if the agent is currently running
+                            # the SAME turn that spawned it (or if it started & finished within one poll tick during a turn).
+                            is_intermediate_in_turn_task = bool(
+                                is_agent_turn_running
+                                and (not spawned_turn_id or spawned_turn_id == current_turn_id)
+                            )
 
                             is_user_stopped = bool(
                                 is_cancelled
@@ -5601,9 +5621,9 @@ class AgyProcessOrchestrator:
                                 or exit_code in (137, 143)
                             )
 
-                            # Only emit notification and schedule feedback if the task finished AFTER the turn (agent is idle).
-                            # Intermediate tasks completing while an agent turn is actively executing are ignored for feedback.
-                            if is_from_current_session and not is_user_stopped and not is_agent_turn_running:
+                            # Only emit notification and schedule feedback if this is NOT an intermediate in-turn task.
+                            # Tasks from prior turns finishing while a new turn runs are queued for after that turn.
+                            if is_from_current_session and not is_user_stopped and not is_intermediate_in_turn_task:
                                 status_label = "Completed" if exit_code == 0 else f"Failed (exit code {exit_code})"
                                 emit_native_notif_event({
                                     "event": "task_completed",
@@ -5621,7 +5641,8 @@ class AgyProcessOrchestrator:
                                     "duration": duration,
                                     "output_snippet": output_snippet[:600],
                                 })
-                                self._schedule_background_feedback(cid)
+                                if not is_agent_turn_running:
+                                    self._schedule_background_feedback(cid)
                         else:
                             if full_task_id not in self.active_background_tasks:
                                 try:
@@ -6191,6 +6212,7 @@ class AgyProcessOrchestrator:
             ctx.active_prompt = prompt
             ctx.active_snapshot = TurnSnapshot(turn_id=turn_id, model=ctx.model)
             self._auth_required_detected = False
+            stop_reason = "end_turn"
 
             usage_summary = {
                 "input_tokens": 0,
@@ -6611,6 +6633,13 @@ class AgyProcessOrchestrator:
                         "unread_sessions": list(self.unread_sessions),
                     }
                 )
+                if final_cid and stop_reason != "cancelled":
+                    has_pending = any(
+                        cid_matches(k, final_cid) and bool(v)
+                        for k, v in self._pending_task_completions.items()
+                    )
+                    if has_pending:
+                        self._schedule_background_feedback(final_cid)
                 self._gc_idle_sessions()
 
     _SESSION_IDLE_TTL = 30 * 60  # 30 minutes

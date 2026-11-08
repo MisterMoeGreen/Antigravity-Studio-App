@@ -5352,22 +5352,33 @@
 
       function getOrCreateSessionBuffer(cid) {
         if (!cid) cid = state.conversationId || 'default';
-        if (!state.sessionBuffers.has(cid)) {
-          state.sessionBuffers.set(cid, {
-            conversationId: cid,
-            activeTurns: new Map(), // turnId -> TurnVirtualRecord
-            isRunning: false,
-            waitingInput: false,
-            pendingQuestion: null,
-            currentAction: 'Ready',
-            startTime: 0,
-            unread: false,
-            draftPrompt: '',
-            draftAttachments: [],
-            activeUserPrompt: '',
-            activeUserAttachments: [],
-          });
+        if (state.sessionBuffers.has(cid)) {
+          return state.sessionBuffers.get(cid);
         }
+        for (const [existingKey, existingBuf] of state.sessionBuffers.entries()) {
+          if (cidMatches(existingKey, cid)) {
+            if (cid.length > existingKey.length && cid !== 'default' && cid !== 'session-draft') {
+              state.sessionBuffers.delete(existingKey);
+              existingBuf.conversationId = cid;
+              state.sessionBuffers.set(cid, existingBuf);
+            }
+            return existingBuf;
+          }
+        }
+        state.sessionBuffers.set(cid, {
+          conversationId: cid,
+          activeTurns: new Map(), // turnId -> TurnVirtualRecord
+          isRunning: false,
+          waitingInput: false,
+          pendingQuestion: null,
+          currentAction: 'Ready',
+          startTime: 0,
+          unread: false,
+          draftPrompt: '',
+          draftAttachments: [],
+          activeUserPrompt: '',
+          activeUserAttachments: [],
+        });
         return state.sessionBuffers.get(cid);
       }
 
@@ -6456,7 +6467,6 @@
               Array.isArray(msg.messages) &&
               histBuf.messages.length === msg.messages.length &&
               chatViewport.querySelectorAll('.msg-row').length > 0;
-              chatViewport.querySelectorAll('.msg-row').length > 0;
 
             if (!messagesMatch) {
               state.activeTurns.clear();
@@ -6614,7 +6624,8 @@
             renderSessionDrawerList();
 
             if (isDraftOrMatchesSession(cid)) {
-              if (state.conversationId !== cid) {
+              const isRealCid = cid && cid !== 'default' && cid !== 'session-draft' && cid !== 'null' && cid !== 'undefined' && !cid.startsWith('session-');
+              if (isRealCid && (!state.conversationId || state.conversationId === 'default' || state.conversationId === 'session-draft' || cid.length > state.conversationId.length)) {
                 state.conversationId = cid;
                 try { localStorage.setItem('agy_last_active_cid', cid); } catch (_) {}
               }
@@ -6706,10 +6717,28 @@
               buf.activeUserAttachments = [];
               buf.startTime = 0;
               buf.isPinned = false;
+              if (msg.turn_id && buf.activeTurns.has(msg.turn_id)) {
+                tRec = buf.activeTurns.get(msg.turn_id);
+                if (msg.markdown && (!tRec.rawMarkdown || tRec.rawMarkdown.length < msg.markdown.length)) {
+                  tRec.rawMarkdown = msg.markdown;
+                }
+              }
               for (const [_, tr] of buf.activeTurns.entries()) {
                 tr.finalized = true;
               }
               buf.activeTurns.clear();
+
+              if (Array.isArray(buf.messages) && msg.markdown) {
+                const lastMsg = buf.messages[buf.messages.length - 1];
+                if (!lastMsg || lastMsg.role !== 'assistant' || lastMsg.content !== msg.markdown) {
+                  buf.messages.push({
+                    role: 'assistant',
+                    content: msg.markdown,
+                    model: state.model || '',
+                    usage: msg.usage || null,
+                  });
+                }
+              }
 
               if (msg.title && msg.title !== 'New Conversation') {
                 const renItem = state.sessions.find(x => cidMatches(x.conversation_id, cid));
