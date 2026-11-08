@@ -4355,6 +4355,8 @@ class AntigravityStorageEngine:
                 # 1. User Input Step
                 if etype in ("USER_INPUT", "USER", "HUMAN") or event.get("role") == "user":
                     if current_assistant:
+                        if not current_assistant.get("content"):
+                            current_assistant["status"] = "INTERRUPTED"
                         messages.append(current_assistant)
                         current_assistant = None
 
@@ -4476,6 +4478,8 @@ class AntigravityStorageEngine:
             or current_assistant["thoughts"]
             or current_assistant["tools"]
         ):
+            if not current_assistant.get("content"):
+                current_assistant["status"] = "INTERRUPTED"
             messages.append(current_assistant)
 
         return messages

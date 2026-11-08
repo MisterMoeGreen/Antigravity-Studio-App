@@ -877,6 +877,25 @@
       font-weight: 600;
     }
 
+    .turn-fallback-note {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 11px;
+      margin: 4px 0;
+      border-radius: 8px;
+      background: var(--bg-surface-secondary, rgba(255, 255, 255, 0.04));
+      border: 1px dashed var(--border-color, rgba(255, 255, 255, 0.12));
+      color: var(--text-muted, #94a3b8);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .turn-fallback-note .badge-icon {
+      display: inline-flex;
+      align-items: center;
+      opacity: 0.85;
+    }
+
     /* Code Block with Sticky Header & Copy Button */
     .code-wrapper {
       margin: 0.65em 0;
@@ -7119,9 +7138,18 @@
             if (m.content) {
               card.rawMarkdown = m.content;
               card.mdBody.innerHTML = renderMarkdown(m.content);
+            } else {
+              const statusStr = String(m.status || '').toUpperCase();
+              if (statusStr === 'CANCELLED' || statusStr === 'INTERRUPTED') {
+                card.mdBody.innerHTML = '<div class="turn-fallback-note"><span class="badge-icon">' + faIcon('ban') + '</span> <em>Turn was interrupted before response text was generated.</em></div>';
+              } else if (Array.isArray(m.tools) && m.tools.length > 0) {
+                card.mdBody.innerHTML = '<div class="turn-fallback-note"><span class="badge-icon">' + faIcon('wrench') + '</span> <em>Turn executed ' + m.tools.length + ' tool call' + (m.tools.length === 1 ? '' : 's') + ' without generating response text.</em></div>';
+              } else if (m.thoughts && m.thoughts.trim()) {
+                card.mdBody.innerHTML = '<div class="turn-fallback-note"><span class="badge-icon">' + faIcon('brain') + '</span> <em>Turn completed reasoning without generating response text.</em></div>';
+              }
             }
             if (m.usage && (m.usage.input_tokens || m.usage.output_tokens)) {
-              finalizeTurnCard(tid, { usage: m.usage, status: 'SUCCESS' });
+              finalizeTurnCard(tid, { usage: m.usage, status: m.status || 'SUCCESS' });
             }
           }
         }
@@ -7488,6 +7516,15 @@
         if (!t) return;
         if (t.rawMarkdown) {
           t.mdBody.innerHTML = renderMarkdown(t.rawMarkdown);
+        } else if (!t.mdBody.textContent.trim()) {
+          const turnStatus = String(msg && msg.status || '').toUpperCase();
+          if (turnStatus === 'CANCELLED' || turnStatus === 'INTERRUPTED') {
+            t.mdBody.innerHTML = '<div class="turn-fallback-note"><span class="badge-icon">' + faIcon('ban') + '</span> <em>Turn was interrupted before response text was generated.</em></div>';
+          } else if (t.toolsMap && t.toolsMap.size > 0) {
+            t.mdBody.innerHTML = '<div class="turn-fallback-note"><span class="badge-icon">' + faIcon('wrench') + '</span> <em>Turn executed ' + t.toolsMap.size + ' tool call' + (t.toolsMap.size === 1 ? '' : 's') + ' without generating response text.</em></div>';
+          } else if (t.rawThoughts && t.rawThoughts.trim()) {
+            t.mdBody.innerHTML = '<div class="turn-fallback-note"><span class="badge-icon">' + faIcon('brain') + '</span> <em>Turn completed reasoning without generating response text.</em></div>';
+          }
         }
         if (t.rawThoughts) {
           const elapsed = ((performance.now() - t.startTime) / 1000).toFixed(1);
