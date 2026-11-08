@@ -4112,12 +4112,13 @@
           Model Context Protocol servers provide external tool execution to the agent. Configured in ~/.gemini/config/mcp_config.json.
         </div>
         <div id="mcpList" style="display:flex;flex-direction:column;gap:10px;"></div>
-        <div class="mcp-reregister-box" style="margin-top:16px;padding:14px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:12px;display:flex;flex-direction:column;gap:8px;">
-          <button id="btnReRegisterMCPs" class="settings-btn" style="width:100%;padding:10px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px;">
-            <span>🔄 Re-Register MCPs</span>
+        <div style="margin-top:16px;display:flex;flex-direction:column;gap:8px;">
+          <button class="updates-secondary-btn" id="btnReRegisterMCPs" style="width:100%;touch-action:manipulation;">
+            <svg class="fa-icon" viewBox="0 0 512 512" style="width:14px;height:14px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M105.1 202.6c7.7-21.8 20.2-42.3 37.8-59.8c62.5-62.5 163.8-62.5 226.3 0L386.3 160H336c-17.7 0-32 14.3-32 32s14.3 32 32 32h128c17.7 0 32-14.3 32-32V64c0-17.7-14.3-32-32-32s-32 14.3-32 32v51.2L414.4 97.6c-87.5-87.5-229.3-87.5-316.8 0C73.2 122 55.6 150.7 44.8 181.4c-5.9 16.7 2.8 34.9 19.5 40.8s34.9-2.8 40.8-19.5zM467.2 289.8c-5.9-16.7-24.1-25.4-40.8-19.5s-25.4 24.1-19.5 40.8c-7.7 21.8-20.2 42.3-37.8 59.8c-62.5 62.5-163.8 62.5-226.3 0L125.7 352H176c17.7 0 32-14.3 32-32s-14.3-32-32-32H48c-17.7 0-32 14.3-32 32v128c0 17.7 14.3 32 32 32s32-14.3 32-32V428.8l18.4 18.4c87.5 87.5 229.3 87.5 316.8 0c24.4-24.4 42-53.1 52.8-83.8c5.9-16.7-2.8-34.9-19.5-40.8z"/></svg>
+            <span>Re-Register MCPs</span>
           </button>
-          <div style="font-size:11px;color:var(--text-muted);line-height:1.4;text-align:center;">
-            ⚠️ <strong>Warning:</strong> Re-registering reloads the agent daemon and will abort any currently running sessions. Only use after adding or deleting servers when idle.
+          <div style="font-size:11px;color:var(--text-muted);text-align:center;line-height:1.4;">
+            Reloads the agent daemon to refresh tool schemas. Active sessions will be terminated.
           </div>
         </div>
       </div>
@@ -10075,7 +10076,7 @@
           }
           btnReRegisterMCPs.disabled = true;
           const origHtml = btnReRegisterMCPs.innerHTML;
-          btnReRegisterMCPs.innerHTML = `${faIcon('arrows-rotate', 'fa-spin', 'width:14px;height:14px;')} Re-Registering...`;
+          btnReRegisterMCPs.innerHTML = `${faIcon('arrows-rotate', 'fa-spin', 'width:14px;height:14px;')} <span>Re-Registering...</span>`;
           showToast('Re-registering MCP servers with agent daemon...');
           sendWs({ type: 're_register_mcps' });
           setTimeout(() => {
