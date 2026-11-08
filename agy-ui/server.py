@@ -799,11 +799,22 @@ def query_keystore_vault(action: str, **kwargs) -> dict[str, Any]:
 _mcp_vault_cache: dict[str, Any] = {}
 
 
-def sync_and_sanitize_mcp_vault_and_config() -> dict[str, Any]:
+_last_mcp_config_mtime: float = 0.0
+
+
+def sync_and_sanitize_mcp_vault_and_config(force: bool = False) -> dict[str, Any]:
     """Sanitizes mcp_config.json, migrates plaintext auth headers and remote URLs into Keystore Vault,
     enforces loopback proxy routing, and quarantines disabled MCP tool schemas and env secrets away from the engine.
     """
-    global _mcp_vault_cache
+    global _mcp_vault_cache, _last_mcp_config_mtime
+    try:
+        current_mtime = MCP_CONFIG_FILE.stat().st_mtime if MCP_CONFIG_FILE.exists() else 0.0
+    except Exception:
+        current_mtime = 0.0
+
+    if not force and current_mtime > 0 and current_mtime == _last_mcp_config_mtime and _mcp_vault_cache:
+        return _mcp_vault_cache
+
     vault: dict[str, Any] = load_mcp_vault()
 
     MCP_DISABLED_DIR.mkdir(parents=True, exist_ok=True)
@@ -934,6 +945,11 @@ def sync_and_sanitize_mcp_vault_and_config() -> dict[str, Any]:
 
         except Exception as exc:
             logger.warning("Error during sync_and_sanitize_mcp_vault_and_config: %s", exc)
+
+    try:
+        _last_mcp_config_mtime = MCP_CONFIG_FILE.stat().st_mtime if MCP_CONFIG_FILE.exists() else 0.0
+    except Exception:
+        _last_mcp_config_mtime = 0.0
 
     _mcp_vault_cache = vault
     return vault
@@ -5755,11 +5771,6 @@ class AgyProcessOrchestrator:
         initial_title: Optional[str] = None,
         is_background_feedback: bool = False,
     ) -> None:
-        try:
-            sync_and_sanitize_mcp_vault_and_config()
-        except Exception as exc:
-            logger.debug("Pre-turn MCP sync failed: %s", exc)
-
         raw_cid = (conversation_id or "").strip()
         if raw_cid in self._migrated_cids:
             raw_cid = self._migrated_cids[raw_cid]
