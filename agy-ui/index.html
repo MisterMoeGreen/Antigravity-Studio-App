@@ -4810,7 +4810,6 @@
         { cmd: '/quota', desc: 'Display subscription quotas remaining & context window', direct: true },
         { cmd: '/login', desc: 'Sign in with Google to authenticate CLI & refresh models', action: () => { authOverlay.show('required'); sendWs({ type: 'request_auth_url' }); } },
         { cmd: '/status', desc: 'Inspect device hardware & CLI diagnostics', direct: true },
-        { cmd: '/terminal', desc: 'Toggle direct bash terminal command execution', action: () => toggleTerminalMode(!state.terminalMode) },
         { cmd: '/version', desc: 'Display application and AGY CLI runtime versions', direct: true },
         { cmd: '/clear', desc: 'Start a fresh conversation session', direct: true },
         { cmd: '/help', desc: 'Show interactive command reference card', direct: true },

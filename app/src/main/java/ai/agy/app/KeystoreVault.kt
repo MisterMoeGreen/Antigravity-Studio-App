@@ -234,7 +234,8 @@ object KeystoreVault {
     fun migrateLegacyApiKeysIfPresent(context: Context) {
         val candidates = listOf(
             File(context.applicationInfo.dataDir, "files/home/.gemini/config/api_keys.json"),
-            File(context.applicationInfo.dataDir, "files/home/.gemini/antigravity-cli/keystore_vault.json")
+            File(context.applicationInfo.dataDir, "files/home/.gemini/antigravity-cli/keystore_vault.json"),
+            File(context.applicationInfo.dataDir, "files/home/.gemini/backup_keys_safety/keystore_vault.json")
         )
 
         synchronized(lock) {
@@ -244,6 +245,7 @@ object KeystoreVault {
                     val content = legacyFile.readText(Charsets.UTF_8)
                     val json = JSONObject(content)
                     val keys = json.optJSONObject("keys")
+                    var allVerified = true
                     if (keys != null) {
                         val it = keys.keys()
                         while (it.hasNext()) {
@@ -256,17 +258,25 @@ object KeystoreVault {
                                 val readBack = getDecryptedKey(context, keyName)
                                 if (readBack != value) {
                                     Log.e(TAG, "Migration readback verification failed for $keyName")
-                                    continue
+                                    allVerified = false
+                                    break
                                 }
                             }
                         }
                     }
-                    val length = legacyFile.length()
-                    if (length > 0) {
-                        legacyFile.writeBytes(ByteArray(length.toInt()) { 0 })
+                    if (allVerified) {
+                        val length = legacyFile.length()
+                        if (length > 0) {
+                            legacyFile.writeBytes(ByteArray(length.toInt()) { 0 })
+                        }
+                        legacyFile.delete()
+                        Log.i(TAG, "Successfully migrated and wiped legacy file: ${legacyFile.name}")
+                        if (legacyFile.parentFile?.name == "backup_keys_safety") {
+                            legacyFile.parentFile?.delete()
+                        }
+                    } else {
+                        Log.e(TAG, "Aborted wiping ${legacyFile.name} because not all keys could be verified in KeystoreVault")
                     }
-                    legacyFile.delete()
-                    Log.i(TAG, "Successfully migrated and wiped legacy file: ${legacyFile.name}")
                 } catch (e: Exception) {
                     Log.e(TAG, "Error during migration of ${legacyFile.name}", e)
                 }
@@ -279,13 +289,20 @@ object KeystoreVault {
                     val mcpContent = legacyMcp.readText(Charsets.UTF_8).trim()
                     if (mcpContent.isNotEmpty() && mcpContent != "{}") {
                         saveKey(context, "__MCP_VAULT__", mcpContent, "Encrypted MCP Vault")
+                        val readBack = getDecryptedKey(context, "__MCP_VAULT__")
+                        if (readBack == mcpContent) {
+                            val length = legacyMcp.length()
+                            if (length > 0) {
+                                legacyMcp.writeBytes(ByteArray(length.toInt()) { 0 })
+                            }
+                            legacyMcp.delete()
+                            Log.i(TAG, "Successfully migrated and wiped legacy mcp_vault.json")
+                        } else {
+                            Log.e(TAG, "Aborted wiping legacy mcp_vault.json: readback mismatch")
+                        }
+                    } else {
+                        legacyMcp.delete()
                     }
-                    val length = legacyMcp.length()
-                    if (length > 0) {
-                        legacyMcp.writeBytes(ByteArray(length.toInt()) { 0 })
-                    }
-                    legacyMcp.delete()
-                    Log.i(TAG, "Successfully migrated and wiped legacy mcp_vault.json")
                 } catch (e: Exception) {
                     Log.e(TAG, "Error migrating legacy mcp_vault.json", e)
                 }

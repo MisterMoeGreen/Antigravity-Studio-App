@@ -8,7 +8,7 @@ This release addresses four core architectural objectives:
 1. **MCP Hard Disabling & Loopback Proxy Gatekeeper (Option A)**: Eliminates the capability of autonomous agent scripts or terminal commands to bypass disabled Model Context Protocol (MCP) servers by routing all MCP HTTP traffic through a local gatekeeper proxy that withholds upstream URLs and authentication headers, returning `403 Forbidden` whenever an MCP is disabled.
 2. **Android Keystore Vault & API Key Reverse Proxy Pattern**: Replaces plaintext on-disk secrets (`api_keys.json`, `os.environ` secret dumping) with hardware-backed encryption (Android Keystore AES-256-GCM Master Key). API requests route through a local reverse proxy that injects credentials in-flight, while preserving mandatory password-encrypted `.agy.md` backup export/import compatibility and UI clipboard copying.
 3. **Monochrome Status Bar Notification Icon**: Replaces the generic "A" status bar placeholder with an Android-compliant monochrome silhouette Vector Drawable (`ic_stat_antigravity.xml`), resolving Android 5.0+ alpha mask rendering requirements while retaining the full-color expanded notification logo.
-4. **Direct Chat Terminal Execution**: Introduces a dedicated `[>_ Terminal]` toggle pill in the composer bar, a `/terminal` slash command, and an automatic `!` typing trigger that clears the character and toggles Terminal Mode to ON, executing raw developer commands (`git`, `npm`, `apk`, `cargo`) directly in the workspace with streaming monospace output and zero LLM token consumption.
+4. **Direct Chat Terminal Execution**: Introduces a dedicated `[>_ Terminal]` toggle pill in the composer bar and an automatic `!` typing trigger that clears the character and toggles Terminal Mode to ON, executing raw developer commands (`git`, `npm`, `apk`, `cargo`) directly in the workspace with streaming monospace output and zero LLM token consumption.
 
 ---
 
@@ -167,7 +167,7 @@ flowchart LR
    - Update `.agy.md` export/import engine to pull from and write to the Keystore vault.
 4. **Phase 4: Direct Terminal Command Execution**:
    - Add `#pillTerminal` between `#btnUpload` and `#pillSlash`.
-   - Wire `!` auto-clearing toggle trigger, `/terminal` slash command, and Backspace exit handler.
+   - Wire `!` auto-clearing toggle trigger and Backspace exit handler.
    - Implement WebSocket `terminal_command` handler and live streaming in `server.py`.
    - Build monospace terminal output card with exit code badges and `cd` directory tracking.
 5. **Phase 5: Architectural Hardening & System Audit**:

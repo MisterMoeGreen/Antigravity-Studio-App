@@ -1037,16 +1037,26 @@ def load_api_keys_store() -> dict[str, Any]:
             for k, v in raw_keys.items():
                 store_keys[k] = {"value": v, "description": "", "created_at": int(time.time())}
             _decrypted_keys_cache = {"version": 1, "updated_at": int(time.time()), "keys": store_keys}
-            # Only remove legacy file if vault verified to have all keys
+            # Only remove legacy files if vault verified to have all keys
             if API_KEYS_FILE.exists():
                 try:
                     data = json.loads(API_KEYS_FILE.read_text(encoding="utf-8"))
                     legacy_keys = data.get("keys", {})
                     if all(k in raw_keys for k in legacy_keys):
-                        sz = API_KEYS_FILE.stat().st_size
-                        if sz > 0:
-                            API_KEYS_FILE.write_bytes(b"\x00" * sz)
-                        API_KEYS_FILE.unlink()
+                        for f in (API_KEYS_FILE, KEYSTORE_VAULT_FILE):
+                            if f.exists():
+                                sz = f.stat().st_size
+                                if sz > 0:
+                                    f.write_bytes(b"\x00" * sz)
+                                f.unlink()
+                except Exception:
+                    pass
+            elif KEYSTORE_VAULT_FILE.exists():
+                try:
+                    sz = KEYSTORE_VAULT_FILE.stat().st_size
+                    if sz > 0:
+                        KEYSTORE_VAULT_FILE.write_bytes(b"\x00" * sz)
+                    KEYSTORE_VAULT_FILE.unlink()
                 except Exception:
                     pass
             return _decrypted_keys_cache
@@ -11471,17 +11481,12 @@ class AgyWebServer:
                 "| `/models [id]` | Inspect or switch the active model (`gemini-3.8-flash-high`, `claude-sonnet-4-6`, etc.) |\n"
                 "| `/mode [mode]` | Switch execution mode (`default`, `accept-edits`, `plan`) |\n"
                 "| `/status` | Display device hardware & Antigravity CLI status |\n"
-                "| `/terminal` | Toggle direct bash terminal command execution mode |\n"
                 "| `/clear` | Start a fresh conversation session |\n"
                 "| `/exit` | Interrupt any running `agy` worker subprocess |"
             )
             await self.broadcast(
                 {"type": "system_card", "title": "Antigravity Mobile Command Reference", "markdown": md, "level": "info"}
             )
-            return True
-
-        if cmd == "/terminal":
-            await self.broadcast({"type": "toggle_terminal_mode"})
             return True
 
         if cmd == "/exit":
