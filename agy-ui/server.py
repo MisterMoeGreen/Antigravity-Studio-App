@@ -874,7 +874,7 @@ def sync_and_sanitize_mcp_vault_and_config(force: bool = False) -> dict[str, Any
 
                 if s_name not in vault:
                     if trans == "http":
-                        raw_url = s_meta.get("serverUrl") or s_meta.get("url") or ""
+                        raw_url = s_meta.get("upstreamUrl") or s_meta.get("serverUrl") or s_meta.get("url") or ""
                         vault[s_name] = {
                             "enabled": not is_disabled,
                             "transport": "http",
@@ -899,10 +899,15 @@ def sync_and_sanitize_mcp_vault_and_config(force: bool = False) -> dict[str, Any
                 if trans == "http":
                     target_proxy_url = f"http://127.0.0.1:{PORT}/mcp-proxy/{s_name}"
                     current_url = s_meta.get("serverUrl") or s_meta.get("url") or ""
+                    # Preserve real upstream URL in vault if current_url contains external target
+                    if current_url and f"/mcp-proxy/{s_name}" not in current_url:
+                        v_entry["upstreamUrl"] = current_url
+                        vault_changed = True
+                    elif not v_entry.get("upstreamUrl") and s_meta.get("upstreamUrl"):
+                        v_entry["upstreamUrl"] = s_meta["upstreamUrl"]
+                        vault_changed = True
+
                     if current_url != target_proxy_url:
-                        if current_url and "/mcp-proxy/" not in current_url:
-                            v_entry["upstreamUrl"] = current_url
-                            vault_changed = True
                         s_meta["serverUrl"] = target_proxy_url
                         s_meta.pop("url", None)
                         config_changed = True
@@ -1231,6 +1236,69 @@ def get_api_key_raw(name: str) -> str:
     raise KeyError(f"Key '{name}' not found")
 
 
+def resolve_secret_reference(value: Any) -> str:
+    """Resolves secret references ($VAR, ${VAR}, or exact API key name) against Keystore Vault and environment."""
+    if value is None:
+        return ""
+    val = str(value).strip()
+    if not val:
+        return ""
+
+    try:
+        active_store = load_api_keys_store()
+        known_keys = active_store.get("keys", {})
+    except Exception:
+        known_keys = {}
+
+    def _lookup(name: str) -> Optional[str]:
+        if name in known_keys and known_keys[name].get("value"):
+            return known_keys[name]["value"]
+        if name in os.environ and os.environ[name]:
+            return os.environ[name]
+        return None
+
+    # 1. Regex substitution for $NAME or ${NAME}
+    if "$" in val:
+        def _sub(m: re.Match) -> str:
+            var_name = m.group(1) or m.group(2)
+            resolved = _lookup(var_name)
+            return resolved if resolved is not None else m.group(0)
+
+        val = re.sub(r"\$\{([A-Za-z0-9_]+)\}|\$([A-Za-z0-9_]+)", _sub, val)
+
+    # 2. Check if the entire string (or Authorization Bearer token) is a bare key reference
+    # Bare references strictly require matching a user-registered API key name in Keystore Vault
+    if val in known_keys and known_keys[val].get("value"):
+        return known_keys[val]["value"]
+
+    if val.startswith("Bearer "):
+        bearer_suffix = val[7:].strip()
+        if bearer_suffix in known_keys and known_keys[bearer_suffix].get("value"):
+            return f"Bearer {known_keys[bearer_suffix]['value']}"
+
+    return val
+
+
+def is_secret_reference(value: Any) -> bool:
+    """Checks whether a value is an API key reference rather than a literal secret."""
+    if not isinstance(value, str) or not value.strip():
+        return False
+    val = value.strip()
+    if "$" in val and bool(re.search(r"\$\{?[A-Za-z0-9_]+\}?", val)):
+        return True
+    known_keys = set()
+    try:
+        active_store = load_api_keys_store()
+        known_keys.update(active_store.get("keys", {}).keys())
+    except Exception:
+        pass
+    if val in known_keys:
+        return True
+    if val.startswith("Bearer ") and val[7:].strip() in known_keys:
+        return True
+    return False
+
+
 # 4. Skills Discovery & Authoring
 SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
@@ -1440,22 +1508,28 @@ def load_masked_mcp_servers() -> list[dict[str, Any]]:
     except Exception:
         return []
     servers = data.get("mcpServers", {})
+    vault = load_mcp_vault()
     server_list = []
     for name, srv in sorted(servers.items()):
         copy_srv = dict(srv)
         copy_srv["name"] = name
-        trans = "http" if ("serverUrl" in copy_srv or "url" in copy_srv or copy_srv.get("type") == "http") else "stdio"
+        v_entry = vault.get(name, {})
+        trans = v_entry.get("transport") or ("http" if ("serverUrl" in copy_srv or "url" in copy_srv or copy_srv.get("type") == "http") else "stdio")
         copy_srv["transport"] = trans
-        copy_srv["target"] = copy_srv.get("serverUrl") or copy_srv.get("url") or copy_srv.get("command") or ""
+        real_url = v_entry.get("upstreamUrl") or ""
+        copy_srv["upstreamUrl"] = real_url
+        copy_srv["target"] = real_url or copy_srv.get("serverUrl") or copy_srv.get("url") or copy_srv.get("command") or ""
         copy_srv["enabled"] = not copy_srv.get("disabled", False)
-        if "headers" in copy_srv and isinstance(copy_srv["headers"], dict):
+        all_headers = dict(v_entry.get("headers") or copy_srv.get("headers") or {})
+        if all_headers:
             copy_srv["headers"] = {
-                k: mask_api_key(v) for k, v in copy_srv["headers"].items()
+                k: v if is_secret_reference(v) else mask_api_key(v) for k, v in all_headers.items()
             }
-        if "env" in copy_srv and isinstance(copy_srv["env"], dict):
+        all_env = dict(v_entry.get("env") or copy_srv.get("env") or {})
+        if all_env:
             copy_srv["env"] = {
-                k: mask_api_key(v) if any(x in k for x in ("KEY", "TOKEN", "SECRET", "PASSWORD")) else v
-                for k, v in copy_srv["env"].items()
+                k: v if is_secret_reference(v) else (mask_api_key(v) if any(x in k for x in ("KEY", "TOKEN", "SECRET", "PASSWORD")) else v)
+                for k, v in all_env.items()
             }
         server_list.append(copy_srv)
     return server_list
@@ -1484,15 +1558,20 @@ async def probe_single_mcp_server(name: str) -> dict[str, Any]:
         url = vault_entry.get("upstreamUrl") or srv.get("serverUrl") or srv.get("url") or ""
         if not url:
             return {"status": "error", "name": name, "message": "No endpoint URL configured"}
+        if f"/mcp-proxy/{name}" in url and not vault_entry.get("upstreamUrl"):
+            return {"status": "error", "name": name, "message": "No upstream URL configured in vault"}
         if not (url.startswith("http://") or url.startswith("https://")):
             url = "http://" + url
         raw_headers = dict(vault_entry.get("headers") or srv.get("headers") or {})
+        resolved_headers = {
+            hk: resolve_secret_reference(hv) for hk, hv in raw_headers.items()
+        }
         loop = asyncio.get_running_loop()
 
         def _do_http() -> dict[str, Any]:
             import ssl
             t0 = time.time()
-            headers = {"User-Agent": f"AntigravityStudio/{APP_VERSION}", **raw_headers}
+            headers = {"User-Agent": f"AntigravityStudio/{APP_VERSION}", **resolved_headers}
             req = urllib.request.Request(url, headers=headers)
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
@@ -1507,8 +1586,33 @@ async def probe_single_mcp_server(name: str) -> dict[str, Any]:
                 # indicate an active MCP server running and processing requests.
                 if e.code in (401, 403, 405):
                     return {"status": "connected", "name": name, "message": f"Active (HTTP {e.code}) · {elapsed}ms"}
+                # If server returns 400 Bad Request to a GET, try an MCP JSON-RPC initialize ping
+                if e.code == 400:
+                    try:
+                        post_headers = dict(headers)
+                        post_headers["Content-Type"] = "application/json"
+                        ping_body = json.dumps({
+                            "jsonrpc": "2.0",
+                            "id": 1,
+                            "method": "initialize",
+                            "params": {
+                                "protocolVersion": "2024-11-05",
+                                "capabilities": {},
+                                "clientInfo": {"name": "AntigravityStudio-Probe", "version": APP_VERSION}
+                            }
+                        }).encode("utf-8")
+                        post_req = urllib.request.Request(url, data=ping_body, headers=post_headers, method="POST")
+                        with urllib.request.urlopen(post_req, timeout=5.0, context=ctx) as post_resp:
+                            elapsed = int((time.time() - t0) * 1000)
+                            return {"status": "connected", "name": name, "message": f"Active (HTTP {post_resp.status}) · {elapsed}ms"}
+                    except urllib.error.HTTPError as pe:
+                        elapsed = int((time.time() - t0) * 1000)
+                        if pe.code in (200, 400, 401, 403, 405):
+                            return {"status": "connected", "name": name, "message": f"Active (HTTP {pe.code}) · {elapsed}ms"}
+                    except Exception:
+                        pass
                 # Any 5xx code (500, 502, 503, 504, 520..530, etc.) is a server/gateway error and MUST be considered offline
-                elif e.code >= 500:
+                if e.code >= 500:
                     reason = getattr(e, "reason", "Server Error") or "Server Error"
                     return {"status": "error", "name": name, "message": f"Server Error (HTTP {e.code}: {reason}) · {elapsed}ms"}
                 # 404 is an invalid/missing endpoint URL
@@ -1580,23 +1684,39 @@ async def add_mcp_server(
     vault = load_mcp_vault()
 
     if trans == "http":
+        existing_headers = vault.get(name, {}).get("headers", {})
+        final_headers = {}
+        for hk, hv in (headers or {}).items():
+            if "••••" in str(hv) and hk in existing_headers:
+                final_headers[hk] = existing_headers[hk]
+            else:
+                final_headers[hk] = hv
+
         vault[name] = {
             "enabled": True,
             "transport": "http",
             "upstreamUrl": url_or_command,
-            "headers": headers or {},
+            "headers": final_headers,
             "created_at": int(time.time()),
         }
         save_mcp_vault(vault)
         proxy_url = f"http://127.0.0.1:{PORT}/mcp-proxy/{name}"
         cmd = [str(AGY_BIN), "mcp", "add", "--type", "http", name, proxy_url]
     else:  # stdio
+        existing_env = vault.get(name, {}).get("env", {})
+        final_env = {}
+        for ek, ev in (env or {}).items():
+            if "••••" in str(ev) and ek in existing_env:
+                final_env[ek] = existing_env[ek]
+            else:
+                final_env[ek] = ev
+
         vault[name] = {
             "enabled": True,
             "transport": "stdio",
             "command": url_or_command,
             "args": args or [],
-            "env": env or {},
+            "env": final_env,
             "created_at": int(time.time()),
         }
         save_mcp_vault(vault)
@@ -1606,8 +1726,9 @@ async def add_mcp_server(
             "LD_PRELOAD": f"{USR_DIR}/lib/libagy_shim.so",
             "SSL_CERT_FILE": f"{USR_DIR}/etc/tls/cert.pem",
         }
-        if env:
-            merged_env.update(env)
+        if final_env:
+            for ek, ev in final_env.items():
+                merged_env[ek] = resolve_secret_reference(ev)
         cmd = [str(AGY_BIN), "mcp", "add", "--type", "stdio"]
         for ek, ev in merged_env.items():
             if ek and ev:
@@ -8968,7 +9089,7 @@ class AgyWebServer:
             # In-Flight Secret Injection from Vault
             vault_headers = server_meta.get("headers", {})
             for hk, hv in vault_headers.items():
-                mcp_headers[hk] = hv
+                mcp_headers[hk] = resolve_secret_reference(hv)
 
             mcp_headers["User-Agent"] = f"AntigravityStudio/{APP_VERSION} (MCP-Proxy)"
             req_body = getattr(request, "body", b"")
@@ -9335,6 +9456,12 @@ class AgyWebServer:
                         raw_history = self.storage.load_transcript(active_cid)
                         ctx = self.orchestrator.get_or_create_context(active_cid)
                         history = self.prepare_session_history_messages(ctx, raw_history)
+                        is_dup_turn = False
+                        if ctx.active_snapshot and ctx.active_snapshot.raw_markdown and history:
+                            last_asst = next((m for m in reversed(history) if m.get("role") == "assistant"), None)
+                            if last_asst and last_asst.get("content", "").strip() == ctx.active_snapshot.raw_markdown.strip():
+                                is_dup_turn = True
+
                         await websocket.send(
                             json.dumps(
                                 {
@@ -9355,7 +9482,7 @@ class AgyWebServer:
                                         "raw_thoughts": ctx.active_snapshot.raw_thoughts,
                                         "tool_calls": ctx.active_snapshot.tool_calls,
                                         "start_time": ctx.active_snapshot.start_time,
-                                    } if (ctx.is_running and ctx.active_snapshot) else None,
+                                    } if (ctx.is_running and ctx.active_snapshot and not is_dup_turn) else None,
                                     "active_background_tasks": [
                                         {
                                             "task_id": bg_info.get("task_id") or (bg_id.split("/")[-1] if "/" in bg_id else bg_id),
@@ -9455,6 +9582,10 @@ class AgyWebServer:
         self, websocket: ServerConnection, data: dict[str, Any]
     ) -> None:
         mtype = data.get("type")
+
+        if mtype == "ping":
+            await websocket.send(json.dumps({"type": "pong", "time": time.time()}))
+            return
 
         if mtype in ("request_auth_url", "trigger_login"):
             asyncio.create_task(self.orchestrator.trigger_in_app_login(turn_id=None, standalone=True))
@@ -9789,12 +9920,16 @@ class AgyWebServer:
         if mtype == "add_mcp_server":
             name = str(data.get("name") or "").strip()
             trans = str(data.get("transport") or "http").strip()
-            url_cmd = str(data.get("url_or_command") or "").strip()
+            url_cmd = str(data.get("url_or_command") or data.get("url") or data.get("command") or "").strip()
             args = data.get("args")
             headers = data.get("headers")
             env = data.get("env")
             try:
                 res = await add_mcp_server(name, trans, url_cmd, args=args, headers=headers, env=env)
+                try:
+                    await self.orchestrator.recycle_acp_daemon()
+                except Exception as rec_err:
+                    logger.warning("Error recycling ACP after add_mcp_server: %s", rec_err)
                 servers = load_masked_mcp_servers()
                 await self.broadcast({"type": "mcp_servers_list", "servers": servers})
                 await self.broadcast({"type": "mcp_server_added", "server": res})
@@ -9818,6 +9953,10 @@ class AgyWebServer:
             enabled = bool(data.get("enabled", True))
             try:
                 res = await toggle_mcp_server(name, enabled)
+                try:
+                    await self.orchestrator.recycle_acp_daemon()
+                except Exception as rec_err:
+                    logger.warning("Error recycling ACP after toggle_mcp_server: %s", rec_err)
                 servers = load_masked_mcp_servers()
                 await self.broadcast({"type": "mcp_servers_list", "servers": servers})
                 await self.broadcast({"type": "mcp_server_toggled", "server": res})
@@ -9834,6 +9973,10 @@ class AgyWebServer:
             name = str(data.get("name") or "").strip()
             try:
                 res = await delete_mcp_server(name)
+                try:
+                    await self.orchestrator.recycle_acp_daemon()
+                except Exception as rec_err:
+                    logger.warning("Error recycling ACP after delete_mcp_server: %s", rec_err)
                 servers = load_masked_mcp_servers()
                 await self.broadcast({"type": "mcp_servers_list", "servers": servers})
                 await self.broadcast({"type": "mcp_server_deleted", "server": res})
@@ -9856,7 +9999,7 @@ class AgyWebServer:
             if not brief and (name or details):
                 brief = f"{name}: {details}".strip(": ") if details else name
             active_keys = list(load_api_keys_store().get("keys", {}).keys())
-            keys_hint = ", ".join(f"`{k}`" for k in active_keys) if active_keys else "none configured yet"
+            keys_hint = ", ".join(f"`${k}`" for k in active_keys) if active_keys else "none configured yet"
 
             ai_prompt = (
                 f"The user wants to configure an MCP server in Antigravity Studio for Android:\n"
@@ -9866,6 +10009,11 @@ class AgyWebServer:
                 f"- CLI tool: `agy mcp` (run `agy mcp --help` and `agy mcp add --help` to inspect exact flags). Always pass `--type http` for remote URLs or `--type stdio` for local commands.\n"
                 f"- Available local runtimes for Stdio MCP servers: `python3` (Python 3.14), `node`/`npx` (installable on demand via `apk add --no-cache nodejs npm`), `bash`, `curl`, `git`, `busybox`. Note that `docker` is NOT supported in this Android sandbox; prefer Streamable HTTP (`--type http`) or local Python/Node MCP servers.\n"
                 f"- Pre-configured environment API keys available: {keys_hint}.\n\n"
+                f"CRITICAL SECURITY & SECRET REFERENCE DIRECTIVES:\n"
+                f"1. NEVER ask or require the user to send, paste, or type raw secret API tokens or credentials in chat.\n"
+                f"2. All credentials MUST be referenced BY NAME using variable references (e.g., `$KEY_NAME` or `${{KEY_NAME}}`). The system reverse-proxy dynamically resolves these references in-flight.\n"
+                f"3. For HTTP MCP servers with authorization headers, use references such as `\"headers\": {{\"Authorization\": \"Bearer $KEY_NAME\"}}` or `\"headers\": {{\"X-API-Key\": \"$KEY_NAME\"}}`.\n"
+                f"4. If a required API key is not yet in the pre-configured keys ({keys_hint}), instruct the user to add it in Settings [⚙] → API Keys first. Then reference its `$KEY_NAME`.\n\n"
                 f"Please configure this server, verify ~/.gemini/config/mcp_config.json is valid JSON with 0600 permissions, and test readiness with `agy mcp list`."
             )
             current_ws = self.orchestrator.config.workspace or self.default_workspace
@@ -10414,6 +10562,12 @@ class AgyWebServer:
             history = self.prepare_session_history_messages(ctx, raw_history)
             branch = get_git_branch(ctx.workspace)
 
+            is_dup_turn = False
+            if ctx.active_snapshot and ctx.active_snapshot.raw_markdown and history:
+                last_asst = next((m for m in reversed(history) if m.get("role") == "assistant"), None)
+                if last_asst and last_asst.get("content", "").strip() == ctx.active_snapshot.raw_markdown.strip():
+                    is_dup_turn = True
+
             await self.broadcast(
                 {
                     "type": "session_history",
@@ -10432,7 +10586,7 @@ class AgyWebServer:
                         "raw_thoughts": ctx.active_snapshot.raw_thoughts,
                         "tool_calls": ctx.active_snapshot.tool_calls,
                         "start_time": ctx.active_snapshot.start_time,
-                    } if (ctx.is_running and ctx.active_snapshot) else None,
+                    } if (ctx.is_running and ctx.active_snapshot and not is_dup_turn) else None,
                     "active_background_tasks": [
                         {
                             "task_id": bg_info.get("task_id") or (bg_id.split("/")[-1] if "/" in bg_id else bg_id),

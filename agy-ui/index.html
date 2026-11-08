@@ -4575,6 +4575,11 @@
             <input type="url" id="inputMCPUrl" class="search-input" placeholder="https://api.example.com/mcp" />
             <label style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Headers (JSON object or header:value):</label>
             <textarea id="txtMCPHeaders" class="settings-prompt-textarea" style="min-height:80px;" placeholder='{"Authorization": "Bearer $TOKEN"}'></textarea>
+            <div style="font-size:11px;color:var(--text-secondary);margin-top:4px;display:flex;justify-content:space-between;align-items:center;">
+              <span>Reference API Key:</span>
+              <span style="color:var(--accent-emerald);font-size:10px;">● Resolved in-flight</span>
+            </div>
+            <div class="preset-chips-container" id="mcpHeaderKeyChips" style="margin-top:2px;display:flex;flex-wrap:wrap;gap:4px;"></div>
           </div>
           <div id="mcpStdioFields" style="display:none;">
             <label style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Command (must be executable interpreter):</label>
@@ -4583,18 +4588,25 @@
             <input type="text" id="inputMCPArgs" class="search-input" placeholder="/data/data/.../script.py" />
             <label style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Environment Variables (JSON object):</label>
             <textarea id="txtMCPEnv" class="settings-prompt-textarea" style="min-height:80px;" placeholder='{"API_KEY": "..."}'></textarea>
+            <div style="font-size:11px;color:var(--text-secondary);margin-top:4px;display:flex;justify-content:space-between;align-items:center;">
+              <span>Reference API Key:</span>
+              <span style="color:var(--accent-emerald);font-size:10px;">● Injected into process env</span>
+            </div>
+            <div class="preset-chips-container" id="mcpEnvKeyChips" style="margin-top:2px;display:flex;flex-wrap:wrap;gap:4px;"></div>
           </div>
         </div>
 
         <!-- AI Setup Form -->
         <div id="mcpAISection" style="display:none;flex-direction:column;gap:8px;">
           <div class="settings-info-banner">
-            Provide the name or requirements of the MCP server, and the AI agent will inspect the documentation, configure ~/.gemini/config/mcp_config.json, and verify tool registration.
+            <strong>🛡️ Zero-Secret Exposure:</strong> The AI agent will NEVER ask for raw secret tokens in chat. It references pre-configured API keys by name (e.g. <code>$KEY_NAME</code>). To add a new secret first, open <strong>Settings → API Keys</strong>.
           </div>
           <label style="font-size:12px;color:var(--text-secondary);">Service / Tool Name:</label>
           <input type="text" id="inputAIMCPName" class="search-input" placeholder="e.g. Brave Search MCP or Context7" />
           <label style="font-size:12px;color:var(--text-secondary);">Requirements / Details:</label>
-          <textarea id="txtAIMCPDetails" class="settings-prompt-textarea" style="min-height:100px;" placeholder="Specify needed credentials or endpoint URLs..."></textarea>
+          <textarea id="txtAIMCPDetails" class="settings-prompt-textarea" style="min-height:100px;" placeholder="Specify needed capabilities or endpoint URLs (e.g. uses $JOULES_MONTANA_MCP)..."></textarea>
+          <div style="font-size:11px;color:var(--text-secondary);margin-top:4px;">Available Key References:</div>
+          <div class="preset-chips-container" id="mcpAIKeyChips" style="margin-top:2px;display:flex;flex-wrap:wrap;gap:4px;"></div>
         </div>
       </div>
       <div class="modal-footer">
@@ -5429,6 +5441,7 @@
       }
 
       function remountActiveTurnCard(turnRecord) {
+        if (!turnRecord || turnRecord.finalized) return;
         const card = ensureAssistantTurnCard(
           turnRecord.turnId,
           turnRecord.model,
@@ -5716,6 +5729,7 @@
         state.ws = ws;
 
         ws.onopen = () => {
+          state.wsInitialized = true;
           if (!state.isRunning) {
             setRuntimeStatus('idle', 'Ready');
           }
@@ -5729,6 +5743,10 @@
             } catch (err) {
               console.warn('Failed to send queued WS message:', err);
             }
+          }
+          if (state.conversationId && state.conversationId !== 'default' && state.conversationId !== 'session-draft') {
+            console.log('[WebSocket] Connected/reconnected, resyncing session:', state.conversationId);
+            sendWs({ type: 'switch_session', conversation_id: state.conversationId, force_refresh: true });
           }
         };
 
@@ -5752,6 +5770,28 @@
           setTimeout(connectWebSocket, 1800);
         };
       }
+
+      // WebSocket health watchdog for mobile background task updates & sleep recovery
+      setInterval(() => {
+        if (state.isRunning || activeBgTasks.size > 0) {
+          if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+            console.log('[Watchdog] WebSocket disconnected during active task, reconnecting...');
+            connectWebSocket();
+          } else {
+            sendWs({ type: 'ping' });
+          }
+        }
+      }, 10000);
+
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+            connectWebSocket();
+          } else if (state.conversationId && state.conversationId !== 'default' && state.conversationId !== 'session-draft') {
+            sendWs({ type: 'switch_session', conversation_id: state.conversationId, force_refresh: true });
+          }
+        }
+      });
 
       const wsMessageQueue = [];
       const MAX_WS_QUEUE = 50;
@@ -6381,17 +6421,24 @@
               histBuf.activeTurns.clear();
               if (msg.active_turn && histBuf.isRunning) {
                 const at = msg.active_turn;
-                const tRec = getOrCreateTurnRecord(histBuf, at.turn_id, at.model || state.model);
-                tRec.finalized = false;
-                if (at.raw_markdown) tRec.rawMarkdown = at.raw_markdown;
-                if (at.raw_thoughts) tRec.rawThoughts = at.raw_thoughts;
-                if (at.tool_calls) tRec.toolCalls = at.tool_calls;
-                if (at.start_time) {
-                  const elapsedSec = Math.max(0, Date.now() / 1000 - at.start_time);
-                  histBuf.startTime = performance.now() - (elapsedSec * 1000);
-                  tRec.startTime = histBuf.startTime;
-                } else if (!histBuf.startTime) {
-                  histBuf.startTime = performance.now();
+                const isAlreadyRendered = Boolean(
+                  at.raw_markdown &&
+                  msg.messages &&
+                  msg.messages.some(m => m.role === 'assistant' && m.content && m.content.trim() === at.raw_markdown.trim())
+                );
+                if (!isAlreadyRendered) {
+                  const tRec = getOrCreateTurnRecord(histBuf, at.turn_id, at.model || state.model);
+                  tRec.finalized = false;
+                  if (at.raw_markdown) tRec.rawMarkdown = at.raw_markdown;
+                  if (at.raw_thoughts) tRec.rawThoughts = at.raw_thoughts;
+                  if (at.tool_calls) tRec.toolCalls = at.tool_calls;
+                  if (at.start_time) {
+                    const elapsedSec = Math.max(0, Date.now() / 1000 - at.start_time);
+                    histBuf.startTime = performance.now() - (elapsedSec * 1000);
+                    tRec.startTime = histBuf.startTime;
+                  } else if (!histBuf.startTime) {
+                    histBuf.startTime = performance.now();
+                  }
                 }
               }
 
@@ -7953,7 +8000,9 @@
           setInitializingControlsState(true);
           updatePinButtonState(false);
 
-          appendUserBubble(trimmed, attachments);
+          // Purge active turn tracking so prior assistant turn cards cannot be mutated,
+          // remounted, or appended below the new user prompt
+          state.activeTurns.clear();
 
           // Record user prompt in active session buffer
           const buf = getOrCreateSessionBuffer(state.conversationId);
@@ -7963,11 +8012,8 @@
           buf.isRunning = true;
           buf.startTime = performance.now();
           buf.unread = false;
-          for (const [tId, tRecItem] of Array.from(buf.activeTurns.entries())) {
-            if (tRecItem.finalized) {
-              buf.activeTurns.delete(tId);
-            }
-          }
+
+          appendUserBubble(trimmed, attachments);
           syncUnreadToStorage();
 
           if (trimmed.startsWith('/')) {
@@ -9389,6 +9435,8 @@
       }
 
       function renderApiKeys(keys) {
+        state.availableApiKeys = Array.isArray(keys) ? keys.map(k => k.name) : [];
+        if (typeof updateMCPKeyChips === 'function') updateMCPKeyChips();
         if (!apiKeysList) return;
         apiKeysList.innerHTML = '';
         if (!keys || keys.length === 0) {
@@ -9778,6 +9826,71 @@
         });
       }
 
+      function updateMCPKeyChips() {
+        const keys = state.availableApiKeys || [];
+        const renderChipsInto = (container, onInsert) => {
+          if (!container) return;
+          container.innerHTML = '';
+          if (keys.length === 0) {
+            container.innerHTML = '<span style="font-size:11px;color:var(--text-muted);font-style:italic;">No keys stored yet. Add in Settings → API Keys.</span>';
+            return;
+          }
+          keys.forEach(k => {
+            const chip = document.createElement('span');
+            chip.className = 'preset-chip';
+            chip.style.fontSize = '11px';
+            chip.style.padding = '3px 8px';
+            chip.textContent = '$' + k;
+            chip.addEventListener('click', () => onInsert(k));
+            container.appendChild(chip);
+          });
+        };
+
+        const mcpHeaderKeyChips = document.getElementById('mcpHeaderKeyChips');
+        renderChipsInto(mcpHeaderKeyChips, (k) => {
+          if (!txtMCPHeaders) return;
+          const cur = txtMCPHeaders.value.trim();
+          if (!cur || cur === '{}') {
+            txtMCPHeaders.value = JSON.stringify({ "Authorization": "Bearer $" + k }, null, 2);
+          } else {
+            try {
+              const parsed = JSON.parse(cur);
+              parsed["X-API-Key"] = "$" + k;
+              txtMCPHeaders.value = JSON.stringify(parsed, null, 2);
+            } catch (_) {
+              txtMCPHeaders.value = cur + '\n' + '$' + k;
+            }
+          }
+        });
+
+        const mcpEnvKeyChips = document.getElementById('mcpEnvKeyChips');
+        renderChipsInto(mcpEnvKeyChips, (k) => {
+          if (!txtMCPEnv) return;
+          const cur = txtMCPEnv.value.trim();
+          if (!cur || cur === '{}') {
+            const obj = {};
+            obj[k] = "$" + k;
+            txtMCPEnv.value = JSON.stringify(obj, null, 2);
+          } else {
+            try {
+              const parsed = JSON.parse(cur);
+              parsed[k] = "$" + k;
+              txtMCPEnv.value = JSON.stringify(parsed, null, 2);
+            } catch (_) {
+              txtMCPEnv.value = cur + '\n' + k + '=$' + k;
+            }
+          }
+        });
+
+        const mcpAIKeyChips = document.getElementById('mcpAIKeyChips');
+        renderChipsInto(mcpAIKeyChips, (k) => {
+          if (!txtAIMCPDetails) return;
+          const cur = txtAIMCPDetails.value.trim();
+          const toAdd = `Uses key reference: $${k}`;
+          txtAIMCPDetails.value = cur ? `${cur}\n${toAdd}` : toAdd;
+        });
+      }
+
       if (btnOpenAddMCPModal) {
         btnOpenAddMCPModal.addEventListener('click', () => {
           if (modalAddMCP) {
@@ -9796,6 +9909,10 @@
             if (txtMCPEnv) txtMCPEnv.value = '';
             if (inputAIMCPName) inputAIMCPName.value = '';
             if (txtAIMCPDetails) txtAIMCPDetails.value = '';
+            updateMCPKeyChips();
+            if (!state.availableApiKeys || state.availableApiKeys.length === 0) {
+              sendWs({ type: 'list_api_keys' });
+            }
           }
         });
       }
@@ -9860,6 +9977,7 @@
               name: name,
               transport: 'http',
               url: url,
+              url_or_command: url,
               headers: headers
             });
           } else {
@@ -9875,13 +9993,21 @@
             if (txtMCPEnv && txtMCPEnv.value.trim()) {
               try {
                 env = JSON.parse(txtMCPEnv.value.trim());
-              } catch (_) {}
+              } catch (_) {
+                txtMCPEnv.value.split('\n').forEach(line => {
+                  if (line.includes('=')) {
+                    const idx = line.indexOf('=');
+                    env[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+                  }
+                });
+              }
             }
             sendWs({
               type: 'add_mcp_server',
               name: name,
               transport: 'stdio',
               command: command,
+              url_or_command: command,
               args: args,
               env: env
             });
@@ -9901,7 +10027,7 @@
             const copy = Object.assign({}, srv);
             copy.name = copy.name || name;
             copy.transport = copy.transport || ((copy.serverUrl || copy.url) ? 'http' : 'stdio');
-            copy.target = copy.target || copy.serverUrl || copy.url || copy.command || '';
+            copy.target = copy.target || copy.upstreamUrl || copy.serverUrl || copy.url || copy.command || '';
             copy.enabled = copy.enabled !== undefined ? copy.enabled : !copy.disabled;
             return copy;
           });
@@ -9927,11 +10053,16 @@
                 ${isEnabled ? 'Disable' : 'Enable'}
               </button>
             </div>
-            <div class="card-meta-text">${escapeHtml(s.target || s.url || s.command || '')}</div>
+            <div class="card-meta-text">${escapeHtml(s.upstreamUrl || s.target || s.url || s.command || '')}</div>
+            ${s.headers && Object.keys(s.headers).length > 0 ? `<div class="card-meta-sub" style="font-size:11px;color:var(--text-secondary);margin-top:2px;font-family:var(--font-mono);word-break:break-all;">${Object.entries(s.headers).map(([k,v]) => `${escapeHtml(k)}: ${escapeHtml(v)}`).join(' · ')}</div>` : ''}
+            ${s.env && Object.keys(s.env).length > 0 ? `<div class="card-meta-sub" style="font-size:11px;color:var(--text-secondary);margin-top:2px;font-family:var(--font-mono);word-break:break-all;">${Object.entries(s.env).map(([k,v]) => `${escapeHtml(k)}=${escapeHtml(v)}`).join(' · ')}</div>` : ''}
             <div class="card-health-msg" style="font-size:11px;margin-top:6px;line-height:1.4;display:none;"></div>
             <div class="card-actions-row">
               <button class="card-action-btn" data-action="probe" data-name="${escapeHtml(s.name)}">
                 ${faIcon('arrows-rotate', '', 'width:12px;height:12px;')} Probe Health
+              </button>
+              <button class="card-action-btn" data-action="edit" data-name="${escapeHtml(s.name)}">
+                ${faIcon('pen-to-square', '', 'width:12px;height:12px;')} Edit
               </button>
               <button class="card-action-btn danger" data-action="delete" data-name="${escapeHtml(s.name)}">
                 ${faIcon('trash-can', '', 'width:12px;height:12px;')} Delete
@@ -9946,6 +10077,33 @@
               enabled: !isEnabled
             });
           });
+
+          const editBtn = card.querySelector('[data-action="edit"]');
+          if (editBtn) {
+            editBtn.addEventListener('click', () => {
+              if (modalAddMCP) {
+                modalAddMCP.style.display = 'flex';
+                currentMCPAddTab = 'manual';
+                if (tabBtnMCPManual) tabBtnMCPManual.classList.add('active');
+                if (tabBtnMCPAI) tabBtnMCPAI.classList.remove('active');
+                if (mcpManualSection) mcpManualSection.style.display = 'flex';
+                if (mcpAISection) mcpAISection.style.display = 'none';
+                if (btnConfirmAddMCP) btnConfirmAddMCP.textContent = 'Save Server';
+                if (typeof updateMCPKeyChips === 'function') updateMCPKeyChips();
+                if (inputMCPName) inputMCPName.value = s.name || '';
+                if (s.transport === 'http') {
+                  if (mcpTypeHttp) mcpTypeHttp.click();
+                  if (inputMCPUrl) inputMCPUrl.value = s.upstreamUrl || s.target || s.url || '';
+                  if (txtMCPHeaders) txtMCPHeaders.value = (s.headers && Object.keys(s.headers).length > 0) ? JSON.stringify(s.headers, null, 2) : '';
+                } else {
+                  if (mcpTypeStdio) mcpTypeStdio.click();
+                  if (inputMCPCommand) inputMCPCommand.value = s.command || s.target || '';
+                  if (inputMCPArgs) inputMCPArgs.value = Array.isArray(s.args) ? s.args.join(' ') : (s.args || '');
+                  if (txtMCPEnv) txtMCPEnv.value = (s.env && Object.keys(s.env).length > 0) ? JSON.stringify(s.env, null, 2) : '';
+                }
+              }
+            });
+          }
 
           const probeBtn = card.querySelector('[data-action="probe"]');
           probeBtn.addEventListener('click', () => {

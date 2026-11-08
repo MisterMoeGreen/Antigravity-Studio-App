@@ -430,6 +430,10 @@ object AgyNotificationManager {
     }
 
     fun shouldSendCompletionNotification(conversationId: String, isBackgroundTask: Boolean = false): Boolean {
+        // Long-running background tasks (e.g. APK builds, package installs, tests) MUST ALWAYS notify
+        // regardless of whether the app is currently in foreground or which session is active.
+        if (isBackgroundTask) return true
+
         // When app is in background, screen off, or closed: ALWAYS notify.
         if (!isAppForeground) return true
 
