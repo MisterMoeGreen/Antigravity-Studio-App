@@ -1595,6 +1595,29 @@ def load_masked_mcp_servers() -> list[dict[str, Any]]:
             copy_srv["scopes"] = v_entry.get("scopes") or copy_srv.get("scopes", "")
             copy_srv["authenticated"] = v_entry.get("authenticated", False) if copy_srv["auth_mode"] == "oauth2" else True
         else:
+            raw_cmd = v_entry.get("command") or copy_srv.get("command", "")
+            raw_args = v_entry.get("args") if v_entry.get("args") is not None else copy_srv.get("args", [])
+            if raw_cmd.endswith("/agy-sh") and isinstance(raw_args, list) and len(raw_args) >= 3 and raw_args[0] == "-c":
+                m = re.search(r'exec\s+"([^"]+)"', raw_args[1])
+                if m:
+                    copy_srv["command"] = Path(m.group(1)).name
+                    copy_srv["args"] = raw_args[3:]
+                else:
+                    copy_srv["command"] = raw_cmd
+                    copy_srv["args"] = raw_args
+            else:
+                copy_srv["command"] = raw_cmd
+                copy_srv["args"] = raw_args
+
+            all_env = dict(v_entry.get("env") or copy_srv.get("env") or {})
+            clean_env = {
+                k: v for k, v in all_env.items()
+                if k not in ("LD_LIBRARY_PATH", "LD_PRELOAD", "PATH", "SSL_CERT_FILE")
+            }
+            copy_srv["env"] = {
+                k: v if is_secret_reference(v) else (mask_api_key(v) if any(x in k for x in ("KEY", "TOKEN", "SECRET", "PASSWORD")) else v)
+                for k, v in clean_env.items()
+            }
             copy_srv["downloadUrl"] = v_entry.get("downloadUrl") or copy_srv.get("downloadUrl", "")
             copy_srv["checksum"] = v_entry.get("checksum") or copy_srv.get("checksum", "")
             cmd_name = Path(copy_srv.get("command", "")).name if copy_srv.get("command") else ""
