@@ -113,25 +113,21 @@ In Antigravity Studio v1.7.0+, the CLI engine is **unbundled** from the APK, sla
 
 Follow these steps to build and stage an updated release APK:
 
-### Step 1: Ensure Latest `agy` Binary
-Ensure Termux has the latest standalone `agy.va39` binary:
+### Step 1: Pre-Build Invariants Verification
+Run the architectural invariants validator and verify the native launcher bridge:
 ```bash
-agy update -y
-```
-
-Run the binary verification script to synchronize and patch it into `jniLibs`:
-```bash
+python3 scripts/verify_architectural_invariants.py
 bash scripts/verify_or_patch_libagy.sh
 ```
 
 ### Step 2: Bump Version in `version.properties`
 For Android to install an update in-place without requiring the user to uninstall the previous version, `VERSION_CODE` **must be strictly greater** than the currently installed build:
 
-Edit [`version.properties`](file:///data/data/com.termux/files/home/storage/shared/Documents/AgyStudio/version.properties):
+Edit [`version.properties`](file:///storage/emulated/0/Documents/AgyStudio/version.properties):
 ```properties
-VERSION_CODE=43
-VERSION_NAME=1.6.1
-AGY_VERSION=1.4.12
+VERSION_CODE=94
+VERSION_NAME=1.9.0
+AGY_VERSION=1.5.1
 AGY_SHA256=...
 ```
 
@@ -145,14 +141,14 @@ bash ./gradlew assembleRelease --max-workers=2 --no-daemon
 ```
 
 During this build, Gradle will automatically:
-1. Execute `verifyLibAgy` to validate `libagy.so` ELF integrity.
+1. Execute `verifyLibAgy` to validate `libagy_launcher.so` and ensure no bulky engine binary is bundled.
 2. Execute `syncWebAssets` to repackage latest `agy-ui/` files into `usr-data.tar.zst`.
 3. Compile Kotlin and Java sources.
 4. Package native libraries and assets into `app-release.apk`.
 5. Sign the APK using the persistent keystore.
 
 ### Step 4: Verify & Stage the Output APK
-Verify that the APK generated successfully and that `libagy.so` inside it has valid ELF headers:
+Verify that the APK generated successfully:
 ```bash
 aapt dump badging app/build/outputs/apk/release/app-release.apk | head -n 3
 ```
@@ -160,7 +156,7 @@ aapt dump badging app/build/outputs/apk/release/app-release.apk | head -n 3
 Stage the APK to the user's **Downloads** folder for one-tap installation:
 ```bash
 cp -f app/build/outputs/apk/release/app-release.apk /storage/emulated/0/Download/AntigravityStudio.apk
-cp -f app/build/outputs/apk/release/app-release.apk /storage/emulated/0/Download/AntigravityStudio-v1.6.1.apk
+cp -f app/build/outputs/apk/release/app-release.apk /storage/emulated/0/Download/AntigravityStudio-v1.9.0.apk
 ```
 
 ---
@@ -171,13 +167,11 @@ cp -f app/build/outputs/apk/release/app-release.apk /storage/emulated/0/Download
 | :--- | :--- | :--- |
 | **`./gradlew: Permission denied`** | Shared storage (`/storage/emulated/0`) lacks POSIX execution bits (`noexec`). | Always run through the bash interpreter: `bash ./gradlew <tasks>`. |
 | **Git reports every file modified or "dubious ownership"** | Android FUSE assigns fixed permissions and non-Termux UID. | Run `git config core.fileMode false` and `git config --global --add safe.directory /storage/emulated/0/Documents/AgyStudio`. |
-| **`exit code -11` (SIGSEGV) in `agy`** | `libagy.so` was patched with buggy patchelf or unaligned pages, causing `unable to parse DT_STRTAB: virtual address is not in any segment`. | Run `bash scripts/verify_or_patch_libagy.sh` to cleanly re-patch from `agy.va39`. |
-| **"Google Authentication Required" lock sheet appears even when signed in** | `server.py` runs `agy models` on startup to discover models. If `agy` crashes with code -11, `models` is empty, triggering the auth lock sheet. | Fixing the `libagy.so` segfault resolves this automatically. |
-| **AAPT2 daemon crash / `ExecException`** | Google's x86_64 AAPT2 was invoked instead of native ARM64 AAPT2. | Ensure `android.aapt2FromMavenOverride=/data/data/com.termux/files/usr/bin/aapt2` is set in `gradle.properties`. |
+| **"CLI Engine Missing / Required" on launch** | The CLI engine is decoupled from the APK (v1.7.0+) to minimize APK footprint. | Open **Settings [⚙] → Software Updates → Antigravity CLI Engine** to download and setup the engine (~58MB). |
+| **AAPT2 daemon crash / `ExecException`** | Google's x86_64 AAPT2 was invoked instead of native ARM64 AAPT2. | Ensure `android.aapt2FromMavenOverride=/usr/bin/aapt2` is set in `gradle.properties`. |
 | **"App not installed as package appears to be invalid"** | `VERSION_CODE` was not incremented, or signature keystore differed from previous installation. | Bump `VERSION_CODE` in `version.properties` and verify `.android/debug.keystore` is used. |
 | **Build process killed abruptly / Termux crashes** | Android Phantom Process Killer killed high-concurrency Gradle worker pool. | Pass `--max-workers=2` or `--no-daemon` to `bash ./gradlew`. |
-| **`libagy.so` fails with symbol errors on launch** | `LD_LIBRARY_PATH` passed Bionic `/usr/lib` to Glibc `libagy.so`. | Unset `LD_LIBRARY_PATH` or exclude Bionic paths; rely on `libagy.so`'s embedded `DT_RPATH`. |
-| **`Permission denied` when creating sockets or symlinks** | Attempted to create UNIX domain sockets or symlinks on FUSE storage. | Use Termux ext4 internal storage (`$TMPDIR` or `/data/data/com.termux/files/usr/tmp`). |
+| **`Permission denied` when creating sockets or symlinks** | Attempted to create UNIX domain sockets or symlinks on FUSE storage. | Use internal ext4 storage (`$TMPDIR` or `/data/data/ai.agy.app/files/usr/tmp`). |
 
 ---
 
