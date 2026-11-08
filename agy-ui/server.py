@@ -907,6 +907,12 @@ def sync_and_sanitize_mcp_vault_and_config(force: bool = False) -> dict[str, Any
                         v_entry["upstreamUrl"] = s_meta["upstreamUrl"]
                         vault_changed = True
 
+                    # ALWAYS keep upstreamUrl in s_meta (mcp_config.json) so it can never be lost
+                    real_upstream = v_entry.get("upstreamUrl") or s_meta.get("upstreamUrl") or ""
+                    if real_upstream and s_meta.get("upstreamUrl") != real_upstream:
+                        s_meta["upstreamUrl"] = real_upstream
+                        config_changed = True
+
                     if current_url != target_proxy_url:
                         s_meta["serverUrl"] = target_proxy_url
                         s_meta.pop("url", None)
@@ -1004,22 +1010,24 @@ def load_mcp_vault() -> dict[str, Any]:
 
     vault_res = query_keystore_vault("get_mcp_vault")
     if vault_res.get("status") == "ok":
-        _mcp_vault_cache = vault_res.get("vault", {})
-        if MCP_VAULT_FILE.exists():
+        vault_data = vault_res.get("vault", {})
+        if vault_data:
+            _mcp_vault_cache = vault_data
             try:
-                sz = MCP_VAULT_FILE.stat().st_size
-                if sz > 0:
-                    MCP_VAULT_FILE.write_bytes(b"\x00" * sz)
-                MCP_VAULT_FILE.unlink()
+                atomic_write_secure(str(MCP_VAULT_FILE), json.dumps(vault_data, indent=2) + "\n", mode=0o600)
             except Exception:
                 pass
-        return _mcp_vault_cache
+            return _mcp_vault_cache
 
     if MCP_VAULT_FILE.exists():
         try:
             os.chmod(str(MCP_VAULT_FILE), 0o600)
-            _mcp_vault_cache = json.loads(MCP_VAULT_FILE.read_text(encoding="utf-8"))
-            return _mcp_vault_cache
+            disk_vault = json.loads(MCP_VAULT_FILE.read_text(encoding="utf-8"))
+            if disk_vault:
+                _mcp_vault_cache = disk_vault
+                # Sync back to Keystore Vault if Keystore Vault was empty
+                query_keystore_vault("save_mcp_vault", vault=_mcp_vault_cache)
+                return _mcp_vault_cache
         except Exception:
             pass
 
@@ -1030,8 +1038,10 @@ def save_mcp_vault(vault: dict[str, Any]) -> None:
     global _mcp_vault_cache
     _mcp_vault_cache = vault
     query_keystore_vault("save_mcp_vault", vault=vault)
-    if not os.environ.get("AGY_VAULT_PORT"):
+    try:
         atomic_write_secure(str(MCP_VAULT_FILE), json.dumps(vault, indent=2) + "\n", mode=0o600)
+    except Exception:
+        pass
 
 
 _decrypted_keys_cache: dict[str, Any] = {}
@@ -1748,6 +1758,7 @@ async def add_mcp_server(
         try:
             cdata = json.loads(MCP_CONFIG_FILE.read_text(encoding="utf-8"))
             if name in cdata.get("mcpServers", {}):
+                cdata["mcpServers"][name]["upstreamUrl"] = url_or_command
                 cdata["mcpServers"][name].pop("headers", None)
                 atomic_write_secure(str(MCP_CONFIG_FILE), json.dumps(cdata, indent=2) + "\n", mode=0o600)
         except Exception:
