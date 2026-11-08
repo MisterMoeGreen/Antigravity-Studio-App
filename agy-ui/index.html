@@ -11234,6 +11234,7 @@
       if (btnDoneImportConfirm) {
         btnDoneImportConfirm.addEventListener('click', () => {
           closeImportConfirmSheet();
+          sendWs({ type: 'list_api_keys' });
           sendWs({ type: 'list_ssh_keys' });
           sendWs({ type: 'list_skills' });
           sendWs({ type: 'list_mcp_servers' });

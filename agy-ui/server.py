@@ -2926,6 +2926,7 @@ async def restore_configurations_bundle(
                                     "description": desc.strip(),
                                     "created_at": int(time.time()),
                                 }
+                                query_keystore_vault("save_key", name=kname, value=val, description=desc.strip())
                                 summary["api_keys"]["restored"].append(kname)
                                 has_new = True
                     if has_new:
