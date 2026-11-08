@@ -5221,6 +5221,28 @@
         }
       }
 
+      function cidMatches(cidA, cidB) {
+        if (!cidA || !cidB) return false;
+        const a = String(cidA).trim().toLowerCase();
+        const b = String(cidB).trim().toLowerCase();
+        if (a === b) return true;
+        if (a === 'default' || a === 'session-draft' || b === 'default' || b === 'session-draft' || a === 'null' || b === 'null' || a === 'undefined' || b === 'undefined') {
+          return false;
+        }
+        const minLen = Math.min(a.length, b.length);
+        if (minLen < 6) return false;
+        return a.startsWith(b) || b.startsWith(a);
+      }
+
+      function isDraftOrMatchesSession(cid) {
+        const isCidDraft = !cid || cid === 'default' || cid === 'session-draft' || cid === 'null' || cid === 'undefined';
+        const isStateDraft = !state.conversationId || state.conversationId === 'default' || state.conversationId === 'session-draft' || state.conversationId === 'null' || state.conversationId === 'undefined';
+        if (isCidDraft || isStateDraft) {
+          return isCidDraft && isStateDraft;
+        }
+        return cidMatches(state.conversationId, cid);
+      }
+
       function adoptDraftSessionId(cid) {
         if (!cid || cid === 'default' || cid === 'null' || cid === 'undefined' || cid.startsWith('session-')) return false;
         const defBuf = state.sessionBuffers.get('default');
@@ -5508,7 +5530,7 @@
         if (!newCid || newCid === 'default' || newCid === 'null' || newCid === 'undefined') return;
         closeOverlays();
         const now = Date.now();
-        if (newCid === state.conversationId) {
+        if (cidMatches(newCid, state.conversationId)) {
           if (!forceRefresh) {
             return;
           }
@@ -6224,7 +6246,7 @@
             const savedUnreads = loadUnreadFromStorage();
             if (Array.isArray(savedUnreads)) {
               for (const uCid of savedUnreads) {
-                if (uCid !== state.conversationId) {
+                if (!isDraftOrMatchesSession(uCid)) {
                   const b = getOrCreateSessionBuffer(uCid);
                   b.unread = true;
                 }
@@ -6232,7 +6254,7 @@
             }
             if (Array.isArray(msg.unread_sessions)) {
               for (const uCid of msg.unread_sessions) {
-                if (uCid !== state.conversationId) {
+                if (!isDraftOrMatchesSession(uCid)) {
                   const b = getOrCreateSessionBuffer(uCid);
                   b.unread = true;
                 }
@@ -6333,7 +6355,7 @@
               }
               renderSessionDrawerList();
             }
-            if (cid && cid === state.conversationId) {
+            if (cid && isDraftOrMatchesSession(cid)) {
               setRuntimeStatus(msg.state, msg.detail);
               if (msg.state === 'idle') {
                 resetSendButtonToIdle();
@@ -6344,7 +6366,7 @@
           }
 
           case 'status':
-            if (!msg.conversation_id || msg.conversation_id === state.conversationId) {
+            if (!msg.conversation_id || isDraftOrMatchesSession(msg.conversation_id)) {
               setRuntimeStatus(msg.state, msg.detail);
               if (msg.state === 'idle') {
                 resetSendButtonToIdle();
@@ -6356,7 +6378,7 @@
             state.sessions = msg.sessions || [];
             if (Array.isArray(msg.unread_sessions)) {
               for (const uCid of msg.unread_sessions) {
-                if (uCid !== state.conversationId) {
+                if (!isDraftOrMatchesSession(uCid)) {
                   const b = getOrCreateSessionBuffer(uCid);
                   b.unread = true;
                 }
@@ -6364,7 +6386,7 @@
             }
             renderSessionDrawerList();
             if (state.conversationId) {
-              const cur = state.sessions.find(x => x.conversation_id === state.conversationId);
+              const cur = state.sessions.find(x => cidMatches(x.conversation_id, state.conversationId));
               if (cur && cur.title && cur.title !== 'New Conversation') {
                 sessionTitle.textContent = cur.title;
               }
@@ -6372,10 +6394,10 @@
             break;
 
           case 'session_renamed':
-            if (state.conversationId === msg.conversation_id) {
+            if (isDraftOrMatchesSession(msg.conversation_id)) {
               sessionTitle.textContent = msg.title;
             }
-            const renItem = state.sessions.find(x => x.conversation_id === msg.conversation_id);
+            const renItem = state.sessions.find(x => cidMatches(x.conversation_id, msg.conversation_id));
             if (renItem) {
               renItem.title = msg.title;
             }
@@ -6387,12 +6409,12 @@
 
           case 'session_history':
             hideBootSplash();
-            if (msg.conversation_id && state.isInitializingDraft && (!state.conversationId || state.conversationId === msg.conversation_id)) {
+            if (msg.conversation_id && state.isInitializingDraft && (!state.conversationId || cidMatches(state.conversationId, msg.conversation_id))) {
               adoptDraftSessionId(msg.conversation_id);
             }
             if (state.ignoreNextInitialHistory) {
               state.ignoreNextInitialHistory = false;
-              if (msg.conversation_id !== state.conversationId) {
+              if (!isDraftOrMatchesSession(msg.conversation_id)) {
                 break;
               }
             }
@@ -6406,19 +6428,20 @@
               }
               break;
             }
-            if (state.conversationId && msg.conversation_id && msg.conversation_id !== state.conversationId && !msg.force_switch) {
+            const isSameActiveSession = isDraftOrMatchesSession(msg.conversation_id);
+            if (state.conversationId && msg.conversation_id && !isSameActiveSession && !msg.force_switch) {
               // Background session history update - update its buffer only, do not hijack active view
               const b = getOrCreateSessionBuffer(msg.conversation_id);
               if (msg.messages) b.messages = msg.messages;
               renderSessionDrawerList();
               break;
             }
-            const isSameActiveSession = (state.conversationId === msg.conversation_id);
             const prevScrollTop = chatViewport.scrollTop;
             const wasNearBottom = (chatViewport.scrollHeight - chatViewport.scrollTop - chatViewport.clientHeight) < 100;
             const histBuf = getOrCreateSessionBuffer(msg.conversation_id);
 
             state.conversationId = msg.conversation_id;
+            try { localStorage.setItem('agy_last_active_cid', msg.conversation_id); } catch (_) {}
             sessionTitle.textContent = msg.title || 'New Conversation';
             if (msg.config) {
               updateConfigPills(msg.config);
@@ -6428,9 +6451,11 @@
             }
 
             const messagesMatch = isSameActiveSession &&
+              !msg.force_refresh &&
               Array.isArray(histBuf.messages) &&
               Array.isArray(msg.messages) &&
               histBuf.messages.length === msg.messages.length &&
+              chatViewport.querySelectorAll('.msg-row').length > 0;
               chatViewport.querySelectorAll('.msg-row').length > 0;
 
             if (!messagesMatch) {
@@ -6588,7 +6613,11 @@
             }
             renderSessionDrawerList();
 
-            if (cid === state.conversationId) {
+            if (isDraftOrMatchesSession(cid)) {
+              if (state.conversationId !== cid) {
+                state.conversationId = cid;
+                try { localStorage.setItem('agy_last_active_cid', cid); } catch (_) {}
+              }
               setInitializingControlsState(false);
               updatePinButtonState(Boolean(buf && buf.isPinned));
               setSendButtonRunning();
@@ -6608,7 +6637,7 @@
             const delta = msg.delta || '';
             tRec.rawThoughts += delta;
 
-            if (cid === state.conversationId) {
+            if (isDraftOrMatchesSession(cid)) {
               appendTurnThought(msg.turn_id, delta);
               if (liveProgress.active && !liveProgress.currentAction.startsWith('Thinking')) {
                 setLiveProgress('thought', 'Thinking...');
@@ -6626,7 +6655,7 @@
             // String-only background buffering (AC-2.4 & ARGON-V14-17)
             tRec.rawMarkdown += delta;
 
-            if (cid === state.conversationId) {
+            if (isDraftOrMatchesSession(cid)) {
               appendTurnToken(msg.turn_id, delta);
               if (liveProgress.active && liveProgress.currentAction !== 'Generating response...') {
                 setLiveProgress('response', 'Generating response...');
@@ -6648,12 +6677,12 @@
             }
             buf.currentAction = formatToolAction(msg);
 
-            const sItem = state.sessions.find(s => s.conversation_id === cid);
+            const sItem = state.sessions.find(s => cidMatches(s.conversation_id, cid));
             if (sItem) {
               sItem.preview = buf.currentAction;
             }
 
-            if (cid === state.conversationId) {
+            if (isDraftOrMatchesSession(cid)) {
               setRuntimeStatus('running', buf.currentAction);
               upsertTurnTool(msg.turn_id, msg);
             }
@@ -6666,7 +6695,7 @@
 
           case 'turn_complete': {
             const cid = msg.conversation_id || state.conversationId;
-            const isCurrent = !msg.conversation_id || msg.conversation_id === state.conversationId;
+            const isCurrent = isDraftOrMatchesSession(cid);
             let tRec = null;
             if (cid && cid !== 'default' && cid !== 'null' && cid !== 'undefined') {
               const buf = getOrCreateSessionBuffer(cid);
@@ -6683,11 +6712,11 @@
               buf.activeTurns.clear();
 
               if (msg.title && msg.title !== 'New Conversation') {
-                const renItem = state.sessions.find(x => x.conversation_id === cid);
+                const renItem = state.sessions.find(x => cidMatches(x.conversation_id, cid));
                 if (renItem) {
                   renItem.title = msg.title;
                 }
-                if (cid === state.conversationId) {
+                if (isCurrent) {
                   sessionTitle.textContent = msg.title;
                 }
               }
@@ -6702,7 +6731,7 @@
               statusText.textContent = 'Ready';
               updatePinButtonState(false);
               jumpToBottom(true);
-            } else if (cid && cid !== state.conversationId) {
+            } else if (cid && !isCurrent) {
               const buf = getOrCreateSessionBuffer(cid);
               buf.unread = true;
               syncUnreadToStorage();
@@ -6714,11 +6743,11 @@
               if (typeof window.AndroidApp.clearLiveNotification === 'function') {
                 window.AndroidApp.clearLiveNotification(cid);
               }
-              const isCurrentlyOpenAndVisible = (cid === state.conversationId && document.visibilityState === 'visible');
+              const isCurrentlyOpenAndVisible = (isCurrent && document.visibilityState === 'visible');
               if (!isCurrentlyOpenAndVisible && typeof window.AndroidApp.notifyTurnComplete === 'function') {
-                const sCard = state.sessions.find(s => s.conversation_id === cid);
+                const sCard = state.sessions.find(s => cidMatches(s.conversation_id, cid));
                 const sTitle = (sCard && sCard.title) || ('Session ' + (cid ? cid.slice(0, 8) : ''));
-                const preview = (tRec && tRec.rawMarkdown) || '';
+                const preview = (msg.markdown || (tRec && tRec.rawMarkdown) || '');
                 window.AndroidApp.notifyTurnComplete(cid, sTitle, preview, msg.status || 'COMPLETED');
               }
             }
@@ -6728,7 +6757,7 @@
 
           case 'system_card': {
             const cid = msg.conversation_id;
-            if (!cid || cid === state.conversationId) {
+            if (!cid || isDraftOrMatchesSession(cid)) {
               appendSystemCard(msg.title, msg.markdown);
               stopLiveProgress();
               resetSendButtonToIdle();
@@ -7014,7 +7043,7 @@
             buf.pendingQuestion = msg;
             renderSessionDrawerList();
 
-            const isCurrentSession = Boolean(cid && cid === state.conversationId);
+            const isCurrentSession = Boolean(cid && isDraftOrMatchesSession(cid));
             const isUnassignedCurrentDraft = !state.conversationId && (
               state.isRunning || (state.activeTurns && msg.turn_id && state.activeTurns.has(msg.turn_id))
             );
@@ -7040,7 +7069,7 @@
               buf.pendingQuestion = null;
               renderSessionDrawerList();
             }
-            if (!cid || cid === state.conversationId) {
+            if (!cid || isDraftOrMatchesSession(cid)) {
               handleDismissQuestionEvent(msg);
             }
             break;
@@ -7560,8 +7589,14 @@
       }
 
       function finalizeTurnCard(turnId, msg, autoScroll = false) {
-        const t = state.activeTurns.get(turnId);
+        let t = state.activeTurns.get(turnId);
+        if (!t && msg && (msg.markdown || (msg.usage && msg.usage.output_tokens > 0))) {
+          t = ensureAssistantTurnCard(turnId, state.model);
+        }
         if (!t) return;
+        if (msg && msg.markdown && (!t.rawMarkdown || t.rawMarkdown.length < msg.markdown.length)) {
+          t.rawMarkdown = msg.markdown;
+        }
         if (t.rawMarkdown) {
           t.mdBody.innerHTML = renderMarkdown(t.rawMarkdown);
         } else if (!t.mdBody.textContent.trim()) {
@@ -7643,28 +7678,6 @@
         const m = Math.floor(sec / 60);
         const s = Math.floor(sec % 60);
         return `${m}:${s < 10 ? '0' : ''}${s}`;
-      }
-
-      function cidMatches(cidA, cidB) {
-        if (!cidA || !cidB) return false;
-        const a = String(cidA).trim().toLowerCase();
-        const b = String(cidB).trim().toLowerCase();
-        if (a === b) return true;
-        if (a === 'default' || a === 'session-draft' || b === 'default' || b === 'session-draft') {
-          return false;
-        }
-        const minLen = Math.min(a.length, b.length);
-        if (minLen < 6) return false;
-        return a.startsWith(b) || b.startsWith(a);
-      }
-
-      function isDraftOrMatchesSession(cid) {
-        const isCidDraft = !cid || cid === 'default' || cid === 'session-draft';
-        const isStateDraft = !state.conversationId || state.conversationId === 'default' || state.conversationId === 'session-draft';
-        if (isCidDraft || isStateDraft) {
-          return isCidDraft && isStateDraft;
-        }
-        return cidMatches(state.conversationId, cid);
       }
 
       function getTasksForCurrentSession() {
@@ -8567,7 +8580,7 @@
           });
           state.sessions = state.sessions.filter(s => s.conversation_id !== cid);
           renderSessionDrawerList();
-          if (state.conversationId === cid) {
+          if (cidMatches(state.conversationId, cid)) {
             state.conversationId = null;
             sessionTitle.textContent = 'Antigravity Studio';
             renderEmptyWelcome();
@@ -8583,10 +8596,10 @@
           if (!cid || cid === 'default' || cid === 'null' || cid === 'undefined' || cid.startsWith('session-')) {
             continue;
           }
-          if (buf.isRunning || (cid === state.conversationId && state.conversationId)) {
+          if (buf.isRunning || (cid && cidMatches(cid, state.conversationId))) {
             sessionMap.set(cid, {
               conversation_id: cid,
-              title: (cid === state.conversationId && sessionTitle.textContent !== 'Antigravity Studio' ? sessionTitle.textContent : null) || (buf.isRunning ? 'Running Turn' : 'Active Session'),
+              title: (cidMatches(cid, state.conversationId) && sessionTitle.textContent !== 'Antigravity Studio' ? sessionTitle.textContent : null) || (buf.isRunning ? 'Running Turn' : 'Active Session'),
               preview: buf.isRunning ? (buf.currentAction || 'Agent is working...') : '',
               step_count: buf.activeTurns ? buf.activeTurns.size : 0,
               last_modified_time: new Date().toISOString(),
@@ -8619,7 +8632,7 @@
           return;
         }
         sessionListContainer.innerHTML = displayList.map((s, idx) => {
-          const isActive = s.conversation_id === state.conversationId;
+          const isActive = cidMatches(s.conversation_id, state.conversationId);
           const relTime = formatRelativeTime(s.last_modified_time);
           const rawWs = (s.workspaces && s.workspaces.length > 0) ? s.workspaces[0] : '';
           const wsDisplay = rawWs ? formatWorkspacePath(rawWs) : '';

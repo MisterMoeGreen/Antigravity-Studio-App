@@ -4687,7 +4687,7 @@ class AntigravityStorageEngine:
         # 4. Filter automated background task completion prompts
         if re.search(r"The background task\s+['\"].*?['\"]\s+has finished", text, re.IGNORECASE):
             return ""
-        if re.search(r"\[Background Task (Completed|Stopped)\]", text, re.IGNORECASE):
+        if re.search(r"\[Background Tasks? (Completed|Stopped)\]", text, re.IGNORECASE):
             return ""
 
         return text.strip()
@@ -5607,7 +5607,7 @@ class AgyProcessOrchestrator:
                                 or exit_code in (137, 143)
                             )
 
-                            if is_from_current_session and not is_running_in_spawned_turn and not is_user_stopped:
+                            if is_from_current_session and not is_user_stopped:
                                 status_label = "Completed" if exit_code == 0 else f"Failed (exit code {exit_code})"
                                 emit_native_notif_event({
                                     "event": "task_completed",
@@ -5618,14 +5618,14 @@ class AgyProcessOrchestrator:
                                     "exit_code": exit_code,
                                 })
 
-                                if not is_acp_ingested:
-                                    self._pending_task_completions[cid].append({
-                                        "task_key": task_key,
-                                        "summary": summary,
-                                        "exit_code": exit_code,
-                                        "duration": duration,
-                                        "output_snippet": output_snippet[:600],
-                                    })
+                                self._pending_task_completions[cid].append({
+                                    "task_key": task_key,
+                                    "summary": summary,
+                                    "exit_code": exit_code,
+                                    "duration": duration,
+                                    "output_snippet": output_snippet[:600],
+                                })
+                                if not is_running_in_spawned_turn:
                                     self._schedule_background_feedback(cid)
                         else:
                             if full_task_id not in self.active_background_tasks:
@@ -5847,14 +5847,25 @@ class AgyProcessOrchestrator:
 
         self._spontaneous_turn_watchdogs[cid] = asyncio.create_task(_watchdog())
 
+    def _pop_pending_task_completions(self, cid: str) -> list[dict[str, Any]]:
+        """Atomically pops all pending task completions matching cid prefix-aware (ARGON-19-04)."""
+        if not cid:
+            return []
+        matching_keys = [k for k in self._pending_task_completions if cid_matches(k, cid)]
+        res: list[dict[str, Any]] = []
+        for k in matching_keys:
+            res.extend(self._pending_task_completions.pop(k, []))
+        return res
+
     def _schedule_background_feedback(self, cid: str) -> None:
         """
         Schedules debounced agent feedback for completed background tasks.
         If the user submits a prompt before this executes, pending tasks
         are seamlessly prepended to the user's prompt so no race condition occurs.
         """
-        if cid in self._pending_task_timers:
-            self._pending_task_timers[cid].cancel()
+        matching_timers = [k for k in self._pending_task_timers if cid_matches(k, cid)]
+        for k in matching_timers:
+            self._pending_task_timers.pop(k).cancel()
 
         async def _feedback_runner():
             try:
@@ -5868,7 +5879,7 @@ class AgyProcessOrchestrator:
                 if ctx.is_running or ctx.turn_lock.locked():
                     return
 
-                pending = self._pending_task_completions.pop(cid, [])
+                pending = self._pop_pending_task_completions(cid)
                 if not pending:
                     return
 
@@ -5908,7 +5919,9 @@ class AgyProcessOrchestrator:
             except Exception as e:
                 logger.warning("Error in background feedback runner for %s: %s", cid, e)
             finally:
-                self._pending_task_timers.pop(cid, None)
+                matching_cleanup = [k for k in self._pending_task_timers if cid_matches(k, cid)]
+                for k in matching_cleanup:
+                    self._pending_task_timers.pop(k, None)
 
         self._pending_task_timers[cid] = asyncio.create_task(_feedback_runner())
 
@@ -6484,6 +6497,8 @@ class AgyProcessOrchestrator:
                         "status": "CANCELLED" if stop_reason == "cancelled" else "DONE",
                         "stop_reason": stop_reason,
                         "usage": usage_summary,
+                        "markdown": ctx.active_snapshot.raw_markdown if ctx.active_snapshot else "",
+                        "content": ctx.active_snapshot.raw_markdown if ctx.active_snapshot else "",
                     }
                 )
 
@@ -6596,6 +6611,9 @@ class AgyProcessOrchestrator:
                         "unread_sessions": list(self.unread_sessions),
                     }
                 )
+                # Auto-trigger feedback for any background tasks that finished while this turn was active
+                if final_cid and any(cid_matches(k, final_cid) and self._pending_task_completions[k] for k in self._pending_task_completions):
+                    self._schedule_background_feedback(final_cid)
                 self._gc_idle_sessions()
 
     _SESSION_IDLE_TTL = 30 * 60  # 30 minutes
@@ -10562,9 +10580,10 @@ class AgyWebServer:
             # If there are pending background task completions for this session,
             # cancel the standalone feedback turn and prepend them directly to the prompt!
             if cid:
-                pending_comps = self.orchestrator._pending_task_completions.pop(cid, [])
-                if cid in self.orchestrator._pending_task_timers:
-                    self.orchestrator._pending_task_timers.pop(cid).cancel()
+                pending_comps = self.orchestrator._pop_pending_task_completions(cid)
+                matching_timers = [k for k in self.orchestrator._pending_task_timers if cid_matches(k, cid)]
+                for k in matching_timers:
+                    self.orchestrator._pending_task_timers.pop(k).cancel()
 
                 if pending_comps:
                     comp_lines = "\n\n".join(
@@ -10748,6 +10767,7 @@ class AgyWebServer:
                     "messages": history,
                     "is_running": ctx.is_running,
                     "current_action": ctx.current_action,
+                    "force_refresh": bool(data.get("force_refresh")),
                     "active_turn": {
                         "turn_id": ctx.active_snapshot.turn_id,
                         "model": ctx.active_snapshot.model,
