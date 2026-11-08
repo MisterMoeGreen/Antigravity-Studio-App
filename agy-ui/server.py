@@ -4416,12 +4416,9 @@ class AntigravityStorageEngine:
         fallback to conversations/<conversation_id>.db if transcript.jsonl is missing.
         """
         brain_path = resolve_brain_dir(conversation_id) or (BRAIN_DIR / conversation_id)
-        transcript_path = (
-            brain_path
-            / ".system_generated"
-            / "logs"
-            / "transcript.jsonl"
-        )
+        logs_dir = brain_path / ".system_generated" / "logs"
+        transcript_full_path = logs_dir / "transcript_full.jsonl"
+        transcript_path = transcript_full_path if transcript_full_path.exists() else (logs_dir / "transcript.jsonl")
         messages: list[dict[str, Any]] = []
 
         if transcript_path.exists():
