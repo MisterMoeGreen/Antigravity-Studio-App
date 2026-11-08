@@ -7364,8 +7364,22 @@
             break;
 
           case 'mcp_server_added':
-            showToast(`MCP server "${msg.name}" added`);
+            const addedName = (msg.server && msg.server.name) || msg.name || 'server';
+            showToast(`MCP server "${addedName}" saved!`);
+            closeMCPModal();
+            if (btnConfirmAddMCP) {
+              btnConfirmAddMCP.disabled = false;
+              btnConfirmAddMCP.textContent = 'Save Server';
+            }
             sendWs({ type: 'list_mcp_servers' });
+            break;
+
+          case 'mcp_operation_failed':
+            showToast(msg.error ? `Error: ${msg.error}` : 'MCP operation failed');
+            if (btnConfirmAddMCP) {
+              btnConfirmAddMCP.disabled = false;
+              btnConfirmAddMCP.textContent = 'Save Server';
+            }
             break;
 
           case 'mcp_server_toggled':
@@ -10495,11 +10509,20 @@
             return;
           }
 
-          const name = inputMCPName ? inputMCPName.value.trim() : '';
+          let name = inputMCPName ? inputMCPName.value.trim() : '';
           if (!name) {
             showToast('Server name is required');
             return;
           }
+          name = name.replace(/\s+/g, '-');
+          if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+            showToast('Server name can only contain letters, numbers, hyphens, and underscores');
+            return;
+          }
+
+          btnConfirmAddMCP.disabled = true;
+          btnConfirmAddMCP.textContent = 'Saving...';
+          showToast(`Saving MCP server "${name}"...`);
 
           if (currentMCPTransport === 'http') {
             const url = inputMCPUrl ? inputMCPUrl.value.trim() : '';
@@ -10580,7 +10603,6 @@
               checksum: checksum
             });
           }
-          closeMCPModal();
         });
       }
 
@@ -10718,7 +10740,7 @@
           const connectOAuthBtn = card.querySelector('[data-action="connect_oauth"]');
           if (connectOAuthBtn) {
             connectOAuthBtn.addEventListener('click', () => {
-              showToast(`Opening OAuth sign-in for ${s.name}...`);
+              showToast(`Starting OAuth for ${s.name}...`);
               sendWs({ type: 'initiate_mcp_oauth', name: s.name });
             });
           }

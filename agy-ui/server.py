@@ -2433,6 +2433,7 @@ async def add_mcp_server(
     client_id: Optional[str] = None,
     scopes: Optional[str] = None,
 ) -> dict[str, Any]:
+    name = re.sub(r"\s+", "-", str(name or "").strip())
     if not re.match(r"^[a-zA-Z0-9_-]+$", name):
         raise ValueError("Server name must be alphanumeric with hyphens or underscores")
 
@@ -11119,6 +11120,12 @@ class AgyWebServer:
                 })
             except Exception as exc:
                 await websocket.send(json.dumps({
+                    "type": "mcp_operation_failed",
+                    "operation": "add",
+                    "name": name,
+                    "error": str(exc),
+                }))
+                await websocket.send(json.dumps({
                     "type": "system_card",
                     "title": "Add MCP Server Failed",
                     "markdown": f"Could not add MCP server: `{exc}`",
@@ -11140,6 +11147,12 @@ class AgyWebServer:
                 }))
             except Exception as exc:
                 logger.error("Failed to initiate OAuth for %s: %s", name, exc)
+                await websocket.send(json.dumps({
+                    "type": "mcp_operation_failed",
+                    "operation": "oauth",
+                    "name": name,
+                    "error": str(exc),
+                }))
                 await websocket.send(json.dumps({
                     "type": "system_card",
                     "title": "OAuth Initiation Failed",
@@ -11197,6 +11210,12 @@ class AgyWebServer:
                 })
             except Exception as exc:
                 logger.error("Failed to reprovision binary for %s: %s", name, exc)
+                await websocket.send(json.dumps({
+                    "type": "mcp_operation_failed",
+                    "operation": "reprovision",
+                    "name": name,
+                    "error": str(exc),
+                }))
                 await websocket.send(json.dumps({
                     "type": "system_card",
                     "title": "Provisioning Failed",
