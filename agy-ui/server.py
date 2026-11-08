@@ -5068,12 +5068,11 @@ class AgyProcessOrchestrator:
         full_task_id = f"{cid}/{canon_task_key}" if cid else canon_task_key
 
         # Mark task as explicitly stopped by user to prevent respawn loops
-        self._stopped_by_user_tasks.add(canon_task_key)
         self._stopped_by_user_tasks.add(full_task_id)
-        self._stopped_by_user_tasks.add(task_key)
-        self._seen_completed_tasks.add(canon_task_key)
         self._seen_completed_tasks.add(full_task_id)
-        self._seen_completed_tasks.add(task_key)
+        if not cid:
+            self._stopped_by_user_tasks.add(canon_task_key)
+            self._seen_completed_tasks.add(canon_task_key)
 
         t_info = (
             self.active_background_tasks.get(canon_task_key)
@@ -5172,7 +5171,8 @@ class AgyProcessOrchestrator:
                 try:
                     persisted_tasks = json.loads(completed_tasks_file.read_text(encoding="utf-8"))
                     if isinstance(persisted_tasks, list):
-                        self._seen_completed_tasks.update(persisted_tasks)
+                        # Filter out any unscoped bare task keys (e.g. "task-638") to avoid cross-conversation collision
+                        self._seen_completed_tasks.update(t for t in persisted_tasks if "/" in t)
                 except Exception:
                     pass
 
@@ -5185,7 +5185,6 @@ class AgyProcessOrchestrator:
                         content = mfile.read_text(encoding="utf-8", errors="replace")
                         for m in re.finditer(r"task-(\d+)", content):
                             t_num = f"task-{m.group(1)}"
-                            self._seen_completed_tasks.add(t_num)
                             self._seen_completed_tasks.add(f"{cid_parent}/{t_num}")
                     except Exception:
                         pass
@@ -5194,7 +5193,6 @@ class AgyProcessOrchestrator:
                 for tfile in BRAIN_DIR.glob("*/.system_generated/tasks/task-*.log"):
                     cid_parent = tfile.parent.parent.parent.name
                     t_stem = tfile.stem
-                    self._seen_completed_tasks.add(t_stem)
                     self._seen_completed_tasks.add(f"{cid_parent}/{t_stem}")
 
                 try:
@@ -5237,9 +5235,7 @@ class AgyProcessOrchestrator:
                         full_task_id = f"{cid}/{task_key}"
 
                         if (
-                            task_key in self._seen_completed_tasks
-                            or full_task_id in self._seen_completed_tasks
-                            or task_key in self._stopped_by_user_tasks
+                            full_task_id in self._seen_completed_tasks
                             or full_task_id in self._stopped_by_user_tasks
                         ):
                             continue
@@ -5332,7 +5328,7 @@ class AgyProcessOrchestrator:
                                 pass
 
                         if not is_completed:
-                            if task_key in self._stopped_by_user_tasks or full_task_id in self._stopped_by_user_tasks:
+                            if full_task_id in self._stopped_by_user_tasks:
                                 is_completed = True
                                 is_cancelled = True
                                 completion_data = {"content": f"Task {task_key} stopped", "cancelled": True}
@@ -5352,7 +5348,6 @@ class AgyProcessOrchestrator:
                                     completion_data = {"content": f"Task {task_key} completed"}
 
                         if is_completed:
-                            self._seen_completed_tasks.add(task_key)
                             self._seen_completed_tasks.add(full_task_id)
                             try:
                                 atomic_write_secure(str(completed_tasks_file), json.dumps(list(self._seen_completed_tasks)) + "\n", mode=0o600)
@@ -5419,7 +5414,6 @@ class AgyProcessOrchestrator:
 
                             is_user_stopped = bool(
                                 is_cancelled
-                                or task_key in self._stopped_by_user_tasks
                                 or full_task_id in self._stopped_by_user_tasks
                                 or exit_code in (137, 143)
                             )
@@ -5467,7 +5461,6 @@ class AgyProcessOrchestrator:
 
                             is_user_stopped = bool(
                                 is_cancelled
-                                or task_key in self._stopped_by_user_tasks
                                 or full_task_id in self._stopped_by_user_tasks
                                 or exit_code in (137, 143)
                             )
@@ -5493,7 +5486,7 @@ class AgyProcessOrchestrator:
                                     })
                                     self._schedule_background_feedback(cid)
                         else:
-                            if full_task_id not in self.active_background_tasks and task_key not in self.active_background_tasks:
+                            if full_task_id not in self.active_background_tasks:
                                 try:
                                     mtime = task_file.stat().st_mtime
                                     age = time.time() - mtime
@@ -5501,7 +5494,6 @@ class AgyProcessOrchestrator:
                                     mtime = 0.0
                                     age = 0.0
                                 if age > 7200 or mtime < self.server_start_time:
-                                    self._seen_completed_tasks.add(task_key)
                                     self._seen_completed_tasks.add(full_task_id)
                                     continue
 
@@ -5611,7 +5603,7 @@ class AgyProcessOrchestrator:
                     canon_key = bg_info.get("task_id") or (bg_id.split("/")[-1] if "/" in bg_id else bg_id)
                     bg_cid = bg_info.get("conversation_id")
                     full_id = f"{bg_cid}/{canon_key}" if bg_cid else canon_key
-                    if (canon_key in self._seen_completed_tasks or full_id in self._seen_completed_tasks or bg_id in self._seen_completed_tasks):
+                    if (full_id in self._seen_completed_tasks or bg_id in self._seen_completed_tasks):
                         self.active_background_tasks.pop(bg_id, None)
                         self.active_background_tasks.pop(canon_key, None)
                         self.active_background_tasks.pop(full_id, None)
@@ -7140,8 +7132,7 @@ class AgyProcessOrchestrator:
                     t_canon = m_tid.group(0) if m_tid else raw_tid
                     if t_canon:
                         self.stop_background_task(ctx.conversation_id, t_canon)
-                        t_pop = self.active_background_tasks.pop(t_canon, None) or self.active_background_tasks.pop(f"{ctx.conversation_id}/{t_canon}", None)
-                        self._seen_completed_tasks.add(t_canon)
+                        t_pop = self.active_background_tasks.pop(f"{ctx.conversation_id}/{t_canon}", None) or self.active_background_tasks.pop(t_canon, None)
                         self._seen_completed_tasks.add(f"{ctx.conversation_id}/{t_canon}")
                         dur = (time.time() - t_pop.get("start_time", time.time())) if t_pop else 0.0
                         sm = (t_pop.get("summary") if t_pop else None) or t_canon
@@ -7169,8 +7160,7 @@ class AgyProcessOrchestrator:
                     for m in re.finditer(r"task-\d+", str(t_out)):
                         t_c = m.group(0)
                         self.stop_background_task(ctx.conversation_id, t_c)
-                        t_pop = self.active_background_tasks.pop(t_c, None) or self.active_background_tasks.pop(f"{ctx.conversation_id}/{t_c}", None)
-                        self._seen_completed_tasks.add(t_c)
+                        t_pop = self.active_background_tasks.pop(f"{ctx.conversation_id}/{t_c}", None) or self.active_background_tasks.pop(t_c, None)
                         self._seen_completed_tasks.add(f"{ctx.conversation_id}/{t_c}")
                         dur = (time.time() - t_pop.get("start_time", time.time())) if t_pop else 0.0
                         sm = (t_pop.get("summary") if t_pop else None) or t_c
@@ -10505,7 +10495,6 @@ class AgyWebServer:
             t_info = self.orchestrator.active_background_tasks.pop(full_task_id, None)
             t_info_legacy = self.orchestrator.active_background_tasks.pop(task_key, None)
             t_info = t_info or t_info_legacy
-            self.orchestrator._seen_completed_tasks.add(task_key)
             self.orchestrator._seen_completed_tasks.add(full_task_id)
 
             summary = (t_info.get("summary") if t_info else None) or task_key

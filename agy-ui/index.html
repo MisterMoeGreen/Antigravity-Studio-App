@@ -5546,11 +5546,6 @@
           return;
         }
         if (activeCid && activeCid !== 'default' && activeCid !== 'session-draft') {
-          const curBuf = state.sessionBuffers.get(activeCid);
-          if (curBuf && curBuf.isRunning && curBuf.activeTurnId) {
-            console.log('[Lifecycle] Session currently has in-flight streaming turn, skipping full history wipe');
-            return;
-          }
           console.log('[Lifecycle] Resuming active session, requesting fresh transcript:', activeCid);
           initiateSessionSwitch(activeCid, true);
         }
