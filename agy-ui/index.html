@@ -413,7 +413,6 @@
       overflow-y: auto;
       overflow-x: hidden;
       padding: 14px 12px 20px;
-      scroll-behavior: smooth;
       -webkit-overflow-scrolling: touch;
       display: flex;
       flex-direction: column;
@@ -6069,8 +6068,6 @@
         };
         updateTimer();
         liveProgress.intervalId = setInterval(updateTimer, 100);
-
-        scrollToBottom(true);
       }
 
       function setLiveProgress(kind, actionText) {
@@ -6087,7 +6084,6 @@
         if (state.conversationId) {
           forwardLiveProgressToNative(state.conversationId, actionText, '', -1);
         }
-        scrollToBottom(false);
       }
 
       function stopLiveProgress() {
@@ -6409,6 +6405,11 @@
               renderSessionDrawerList();
               break;
             }
+            const isSameActiveSession = (state.conversationId === msg.conversation_id);
+            const prevScrollTop = chatViewport.scrollTop;
+            const wasNearBottom = (chatViewport.scrollHeight - chatViewport.scrollTop - chatViewport.clientHeight) < 100;
+            const histBuf = getOrCreateSessionBuffer(msg.conversation_id);
+
             state.conversationId = msg.conversation_id;
             sessionTitle.textContent = msg.title || 'New Conversation';
             if (msg.config) {
@@ -6417,8 +6418,22 @@
             if (msg.workspace) {
               updateWorkspaceStatusBar(msg.workspace, msg.git_branch);
             }
-            state.activeTurns.clear();
-            renderFullHistory(msg.messages || []);
+
+            const messagesMatch = isSameActiveSession &&
+              Array.isArray(histBuf.messages) &&
+              Array.isArray(msg.messages) &&
+              histBuf.messages.length === msg.messages.length &&
+              chatViewport.querySelectorAll('.msg-row').length > 0;
+
+            if (!messagesMatch) {
+              state.activeTurns.clear();
+              renderFullHistory(msg.messages || [], {
+                preserveScroll: isSameActiveSession,
+                prevScrollTop,
+                wasNearBottom,
+              });
+              histBuf.messages = msg.messages || [];
+            }
             renderSessionDrawerList();
             if (Array.isArray(msg.active_background_tasks)) {
               reconcileActiveBackgroundTasks(msg.active_background_tasks, msg.conversation_id);
@@ -6489,7 +6504,9 @@
                   }
                 }
                 syncHeaderAndControlsForSession(histBuf);
-                scrollToBottom(true);
+                if (wasNearBottom) {
+                  jumpToBottom(false);
+                }
               } else {
                 syncHeaderAndControlsForSession(null);
               }
@@ -6676,6 +6693,7 @@
               statusDot.className = 'status-dot';
               statusText.textContent = 'Ready';
               updatePinButtonState(false);
+              jumpToBottom(true);
             } else if (cid && cid !== state.conversationId) {
               const buf = getOrCreateSessionBuffer(cid);
               buf.unread = true;
@@ -7037,7 +7055,7 @@
                   preEl.scrollTop = preEl.scrollHeight;
                 }
               }
-              jumpToBottom(true);
+              scrollToBottom(false);
             }
             break;
           }
@@ -7121,7 +7139,12 @@
         if (w) w.remove();
       }
 
-      function renderFullHistory(messages) {
+      function renderFullHistory(messages, options = {}) {
+        const {
+          preserveScroll = false,
+          prevScrollTop = 0,
+          wasNearBottom = true,
+        } = options;
         state.activeTurns.clear();
         chatViewport.innerHTML = '';
         if (!messages || messages.length === 0) {
@@ -7130,7 +7153,7 @@
         }
         for (const m of messages) {
           if (m.role === 'user') {
-            appendUserBubble(m.content, [], m.step_index);
+            appendUserBubble(m.content, [], m.step_index, false);
           } else if (m.role === 'terminal') {
             renderStoredTerminalCard(m);
           } else {
@@ -7158,15 +7181,24 @@
               }
             }
             if (m.usage && (m.usage.input_tokens || m.usage.output_tokens)) {
-              finalizeTurnCard(tid, { usage: m.usage, status: m.status || 'SUCCESS' });
+              finalizeTurnCard(tid, { usage: m.usage, status: m.status || 'SUCCESS' }, false);
             }
           }
         }
-        jumpToBottom(false);
+
+        const applyPosition = () => {
+          if (preserveScroll && !wasNearBottom) {
+            chatViewport.scrollTo({ top: prevScrollTop, behavior: 'instant' });
+          } else {
+            chatViewport.scrollTo({ top: chatViewport.scrollHeight, behavior: 'instant' });
+          }
+        };
+
+        applyPosition();
         requestAnimationFrame(() => {
-          jumpToBottom(false);
-          setTimeout(() => jumpToBottom(false), 50);
-          setTimeout(() => jumpToBottom(false), 150);
+          applyPosition();
+          setTimeout(applyPosition, 40);
+          setTimeout(applyPosition, 120);
         });
       }
 
@@ -7304,7 +7336,7 @@
         }
       });
 
-      function appendUserBubble(text, attachments = [], stepIndex = null) {
+      function appendUserBubble(text, attachments = [], stepIndex = null, autoScroll = true) {
         const cleaned = cleanPromptText(text);
         if (!cleaned && (!attachments || attachments.length === 0)) {
           return;
@@ -7343,7 +7375,9 @@
         });
 
         appendRowToChat(row);
-        scrollToBottom(true);
+        if (autoScroll) {
+          scrollToBottom(true);
+        }
       }
 
       function ensureAssistantTurnCard(turnId, modelName, openThoughtsByDefault = true) {
@@ -7432,7 +7466,6 @@
         if (collapseImmediately) {
           t.thoughtDetails.removeAttribute('open');
         }
-        scrollToBottom(false);
       }
 
       function appendTurnToken(turnId, delta) {
@@ -7516,11 +7549,9 @@
           setLiveProgress('tool', actionText);
           setRuntimeStatus('running', actionText);
         }
-
-        scrollToBottom(false);
       }
 
-      function finalizeTurnCard(turnId, msg) {
+      function finalizeTurnCard(turnId, msg, autoScroll = false) {
         const t = state.activeTurns.get(turnId);
         if (!t) return;
         if (t.rawMarkdown) {
@@ -7566,7 +7597,9 @@
             <span>${escapeHtml(msg.status || 'SUCCESS')}</span>
           `;
         }
-        scrollToBottom(false);
+        if (autoScroll) {
+          scrollToBottom(false);
+        }
       }
 
       function appendSystemCard(title, markdown) {
@@ -7933,15 +7966,15 @@
         if (smooth) {
           chatViewport.scrollTo({ top: chatViewport.scrollHeight, behavior: 'smooth' });
         } else {
-          chatViewport.scrollTop = chatViewport.scrollHeight;
+          chatViewport.scrollTo({ top: chatViewport.scrollHeight, behavior: 'instant' });
         }
       }
 
       function scrollToBottom(force = false) {
         const distanceFromBottom =
           chatViewport.scrollHeight - chatViewport.scrollTop - chatViewport.clientHeight;
-        if (force || distanceFromBottom < 220) {
-          chatViewport.scrollTop = chatViewport.scrollHeight;
+        if (force || distanceFromBottom < 80) {
+          chatViewport.scrollTo({ top: chatViewport.scrollHeight, behavior: 'instant' });
         }
       }
 
