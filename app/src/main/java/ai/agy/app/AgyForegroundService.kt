@@ -33,6 +33,8 @@ class AgyForegroundService : Service() {
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var batteryReceiver: BroadcastReceiver? = null
     private var vaultServerSocket: ServerSocket? = null
+    @Volatile
+    private var isStopping = false
 
     companion object {
         const val TAG = "AgyService"
@@ -52,7 +54,7 @@ class AgyForegroundService : Service() {
         when (intent?.action) {
             ACTION_STOP_SERVICE -> {
                 Log.i(TAG, "Stop action requested via notification")
-                stopServiceGracefully()
+                stopServiceGracefully(killHostProcess = true)
                 return START_NOT_STICKY
             }
             ACTION_UPDATE_NOTIFICATION -> {
@@ -278,10 +280,11 @@ class AgyForegroundService : Service() {
         }
     }
 
-    private fun cleanupStaleDaemonProcesses() {
+    private fun cleanupStaleDaemonProcesses(killAllUnderUid: Boolean = false) {
         val root = "/data/data/$packageName/files"
         val usr = "$root/usr"
         val myPid = android.os.Process.myPid()
+        val myUid = android.os.Process.myUid()
         try {
             val pidFile = File("$usr/tmp/server.pid")
             if (pidFile.exists()) {
@@ -293,16 +296,23 @@ class AgyForegroundService : Service() {
                 }
                 pidFile.delete()
             }
-            // Scan /proc for any leftover server.py or agy daemon instances belonging to this UID
+            // Scan /proc for leftover processes belonging to this UID
             val procDir = File("/proc")
             procDir.listFiles()?.forEach { file ->
                 if (file.isDirectory && file.name.all { it.isDigit() }) {
                     val pid = file.name.toIntOrNull() ?: return@forEach
                     if (pid != myPid) {
                         try {
-                            val cmdline = File(file, "cmdline").readText()
-                            if (cmdline.contains("server.py") || cmdline.contains("/opt/agy/agy") || cmdline.contains("agy acp")) {
-                                android.system.Os.kill(pid, 9)
+                            if (killAllUnderUid) {
+                                val stat = android.system.Os.stat(file.absolutePath)
+                                if (stat.st_uid == myUid) {
+                                    android.system.Os.kill(pid, 9)
+                                }
+                            } else {
+                                val cmdline = File(file, "cmdline").readText()
+                                if (cmdline.contains("server.py") || cmdline.contains("/opt/agy/agy") || cmdline.contains("agy acp")) {
+                                    android.system.Os.kill(pid, 9)
+                                }
                             }
                         } catch (_: Exception) {}
                     }
@@ -385,10 +395,20 @@ class AgyForegroundService : Service() {
         registerReceiver(receiver, filter)
     }
 
-    private fun stopServiceGracefully() {
-        Log.i(TAG, "Stopping Antigravity background service and daemon...")
+    private fun stopServiceGracefully(killHostProcess: Boolean = true) {
+        if (isStopping) return
+        isStopping = true
+        Log.i(TAG, "Full teardown requested: terminating all processes for UID (killHostProcess=$killHostProcess)...")
         _readyPortFlow.value = null
         _authTokenFlow.value = null
+
+        // 1. Release wake lock immediately to allow device to enter deep sleep / Doze
+        wakeLock?.let {
+            if (it.isHeld) it.release()
+            wakeLock = null
+        }
+
+        // 2. Clear ephemeral session token and cancel background service scope
         try {
             File("/data/data/$packageName/files/usr/tmp/.auth_token").delete()
         } catch (_: Exception) {}
@@ -399,13 +419,8 @@ class AgyForegroundService : Service() {
             daemonProcess?.destroyForcibly()
             daemonProcess = null
         } catch (_: Exception) {}
-        try {
-            thread(isDaemon = true, name = "AgyCleanup") {
-                cleanupStaleDaemonProcesses()
-            }
-        } catch (_: Exception) {
-            cleanupStaleDaemonProcesses()
-        }
+
+        // 3. Unregister network/battery monitors and close vault socket
         networkCallback?.let {
             val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             try { cm.unregisterNetworkCallback(it) } catch (_: Exception) {}
@@ -419,17 +434,28 @@ class AgyForegroundService : Service() {
             try { it.close() } catch (_: Exception) {}
             vaultServerSocket = null
         }
-        wakeLock?.let {
-            if (it.isHeld) it.release()
-            wakeLock = null
+
+        // 4. Force-kill all child, PRoot, MCP, compiler, and daemon processes under this UID
+        cleanupStaleDaemonProcesses(killAllUnderUid = true)
+
+        // 5. Dismiss notification and stop foreground service
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+            stopSelf()
+        } catch (_: Exception) {}
+
+        // 6. Hard-kill host process (Force Stop equivalent)
+        if (killHostProcess) {
+            val myPid = android.os.Process.myPid()
+            Log.i(TAG, "Killing host process $myPid (force-stop equivalent)")
+            android.os.Process.killProcess(myPid)
+            kotlin.system.exitProcess(0)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-        } else {
-            @Suppress("DEPRECATION")
-            stopForeground(true)
-        }
-        stopSelf()
     }
 
     private fun startVaultBridgeServer(token: String): Int {
@@ -586,7 +612,7 @@ class AgyForegroundService : Service() {
     }
 
     override fun onDestroy() {
-        stopServiceGracefully()
+        stopServiceGracefully(killHostProcess = false)
         super.onDestroy()
     }
 
