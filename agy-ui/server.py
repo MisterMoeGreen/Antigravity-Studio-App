@@ -942,6 +942,15 @@ def sync_and_sanitize_mcp_vault_and_config(force: bool = False) -> dict[str, Any
                         vault_changed = True
 
                     has_target = bool(target_bin and Path(target_bin).exists())
+                    if not has_target:
+                        cmd_base = Path(v_entry.get("command") or s_name).name
+                        cand = MCP_BIN_DIR / McpBinaryProvisioner.sanitize_name(s_name) / cmd_base
+                        if cand.exists() and cand.is_file() and cand.stat().st_size > 0:
+                            target_bin = str(cand)
+                            v_entry["target_bin"] = target_bin
+                            v_entry["provisioned"] = True
+                            vault_changed = True
+                            has_target = True
                     if not v_enabled:
                         if s_meta.get("command") != "/bin/false":
                             if s_meta.get("command"):
@@ -1985,6 +1994,33 @@ class McpBinaryProvisioner:
         staging_dir = MCP_BIN_DIR / sanitized_server
         staging_dir.mkdir(parents=True, exist_ok=True)
         target_bin = staging_dir / cmd_base
+
+        # Fast cache check: if already staged and verified, reuse without re-downloading
+        if target_bin.exists() and target_bin.is_file() and target_bin.stat().st_size > 0:
+            if expected_checksum and expected_checksum.strip():
+                clean_exp = expected_checksum.strip().lower()
+                try:
+                    existing_hash = hashlib.sha256(target_bin.read_bytes()).hexdigest().lower()
+                    if existing_hash == clean_exp:
+                        cls.validate_elf_binary(target_bin)
+                        os.chmod(target_bin, 0o755)
+                        logger.info("Stdio binary '%s' already staged with matching checksum: %s", cmd_base, target_bin)
+                        if progress_cb:
+                            await progress_cb(f"Reusing verified {cmd_base}.", 100)
+                        return target_bin, clean_exp
+                except Exception as exc:
+                    logger.debug("Existing binary checksum check failed: %s", exc)
+            else:
+                try:
+                    existing_hash = hashlib.sha256(target_bin.read_bytes()).hexdigest().lower()
+                    cls.validate_elf_binary(target_bin)
+                    os.chmod(target_bin, 0o755)
+                    logger.info("Stdio binary '%s' already staged at %s", cmd_base, target_bin)
+                    if progress_cb:
+                        await progress_cb(f"Reusing existing {cmd_base}.", 100)
+                    return target_bin, existing_hash
+                except Exception as exc:
+                    logger.debug("Existing binary check failed: %s", exc)
 
         logger.info("Provisioning Stdio MCP binary '%s' for '%s' from %s", cmd_base, sanitized_server, download_url)
         if progress_cb:
@@ -3914,6 +3950,8 @@ async def generate_config_export_bundle(categories: list[str], password: str) ->
                         s_copy["auth_mode"] = "oauth2"
                         if v_entry.get("client_id") or sinfo.get("client_id"):
                             s_copy["client_id"] = v_entry.get("client_id") or sinfo.get("client_id")
+                        if v_entry.get("client_secret") or sinfo.get("client_secret"):
+                            s_copy["client_secret"] = v_entry.get("client_secret") or sinfo.get("client_secret")
                         if v_entry.get("scopes") or sinfo.get("scopes"):
                             s_copy["scopes"] = v_entry.get("scopes") or sinfo.get("scopes")
                         s_copy.pop("headers", None)
@@ -3958,6 +3996,8 @@ async def generate_config_export_bundle(categories: list[str], password: str) ->
                         if v_auth == "oauth2":
                             if vinfo.get("client_id"):
                                 export_servers[vname]["client_id"] = vinfo["client_id"]
+                            if vinfo.get("client_secret"):
+                                export_servers[vname]["client_secret"] = vinfo["client_secret"]
                             if vinfo.get("scopes"):
                                 export_servers[vname]["scopes"] = vinfo["scopes"]
                         else:
@@ -4290,6 +4330,46 @@ async def restore_configurations_bundle(
                                 if raw_url and f"/mcp-proxy/{mname}" not in raw_url:
                                     v_entry["upstreamUrl"] = raw_url
                                     updated_existing = True
+                            if mcfg_dict.get("client_secret") and not v_entry.get("client_secret"):
+                                v_entry["client_secret"] = mcfg_dict["client_secret"]
+                                updated_existing = True
+                            if mcfg_dict.get("client_id") and not v_entry.get("client_id"):
+                                v_entry["client_id"] = mcfg_dict["client_id"]
+                                updated_existing = True
+                            if mcfg_dict.get("scopes") and not v_entry.get("scopes"):
+                                v_entry["scopes"] = mcfg_dict["scopes"]
+                                updated_existing = True
+
+                            # If existing Stdio MCP is missing target_bin or binary not staged:
+                            if v_entry.get("transport") == "stdio" or (mcfg_dict.get("command") and "serverUrl" not in mcfg_dict):
+                                d_url = mcfg_dict.get("downloadUrl") or v_entry.get("downloadUrl")
+                                c_sum = mcfg_dict.get("checksum") or v_entry.get("checksum")
+                                t_bin = v_entry.get("target_bin")
+                                cmd_name = v_entry.get("command") or mcfg_dict.get("command", "")
+                                if (not t_bin or not Path(t_bin).exists()) and cmd_name:
+                                    staged_bin = None
+                                    pinned_csum = c_sum
+                                    if d_url:
+                                        try:
+                                            await notify_progress(f"Provisioning Stdio binary for {mname}...", 78)
+                                            staged_bin, pinned_csum = await McpBinaryProvisioner.provision_stdio_binary(
+                                                server_name=mname,
+                                                command=cmd_name,
+                                                download_url=d_url,
+                                                expected_checksum=c_sum,
+                                            )
+                                        except Exception as exc:
+                                            logger.warning("Failed auto-provisioning existing %s: %s", mname, exc)
+                                    if not staged_bin:
+                                        cand = MCP_BIN_DIR / McpBinaryProvisioner.sanitize_name(mname) / Path(cmd_name).name
+                                        if cand.exists() and cand.is_file() and cand.stat().st_size > 0:
+                                            staged_bin = cand
+                                    if staged_bin:
+                                        v_entry["target_bin"] = str(staged_bin)
+                                        v_entry["checksum"] = pinned_csum or ""
+                                        v_entry["provisioned"] = True
+                                        updated_existing = True
+
                             if updated_existing:
                                 has_new_mcp = True
                             summary["mcps"]["preserved"].append(mname)
@@ -4314,13 +4394,17 @@ async def restore_configurations_bundle(
                                 if f"/mcp-proxy/{mname}" in raw_url:
                                     raw_url = mcfg_copy.get("upstreamUrl") or ""
                                 auth_mode = mcfg_copy.get("auth_mode", "api_key")
+                                client_id = mcfg_copy.get("client_id", "")
+                                client_secret = mcfg_copy.get("client_secret", "")
+                                scopes = mcfg_copy.get("scopes", "")
                                 vault[mname] = {
                                     "enabled": not is_disabled,
                                     "transport": "http",
                                     "upstreamUrl": raw_url,
                                     "auth_mode": auth_mode,
-                                    "client_id": mcfg_copy.get("client_id", ""),
-                                    "scopes": mcfg_copy.get("scopes", ""),
+                                    "client_id": client_id,
+                                    "client_secret": client_secret,
+                                    "scopes": scopes,
                                     "authenticated": False if auth_mode == "oauth2" else True,
                                     "headers": {} if auth_mode == "oauth2" else headers_dict,
                                     "created_at": int(time.time()),
@@ -4330,38 +4414,118 @@ async def restore_configurations_bundle(
                                     mcfg_copy["upstreamUrl"] = raw_url
                                 if auth_mode == "oauth2":
                                     mcfg_copy["auth_mode"] = "oauth2"
+                                    if client_id:
+                                        mcfg_copy["client_id"] = client_id
+                                    if client_secret:
+                                        mcfg_copy["client_secret"] = client_secret
+                                    if scopes:
+                                        mcfg_copy["scopes"] = scopes
                                 mcfg_copy.pop("headers", None)
                                 mcfg_copy.pop("url", None)
                             else:
                                 d_url = mcfg_copy.get("downloadUrl")
                                 c_sum = mcfg_copy.get("checksum")
+                                cmd_name = mcfg_copy.get("command", "") if mcfg_copy.get("command") != "/bin/false" else ""
+                                user_args = list(mcfg_copy.get("args") or [])
+                                env_vars = dict(mcfg_copy.get("env") or {})
+                                staged_bin = None
+                                pinned_csum = c_sum
+
+                                if d_url and cmd_name:
+                                    try:
+                                        await notify_progress(f"Provisioning Stdio binary for {mname}...", 78)
+                                        staged_bin, pinned_csum = await McpBinaryProvisioner.provision_stdio_binary(
+                                            server_name=mname,
+                                            command=cmd_name,
+                                            download_url=d_url,
+                                            expected_checksum=c_sum,
+                                        )
+                                    except Exception as exc:
+                                        logger.warning("Failed auto-provisioning %s during restore: %s", mname, exc)
+
+                                if not staged_bin and cmd_name:
+                                    cand = MCP_BIN_DIR / McpBinaryProvisioner.sanitize_name(mname) / Path(cmd_name).name
+                                    if cand.exists() and cand.is_file() and cand.stat().st_size > 0:
+                                        staged_bin = cand
+                                        logger.info("Found existing staged binary for %s: %s", mname, staged_bin)
+
+                                if staged_bin:
+                                    clean_user_args = [a for a in user_args if a != str(staged_bin) and a != "-c" and not str(a).startswith("exec ")]
+                                    if not clean_user_args:
+                                        detected = McpBinaryProvisioner.detect_subcommand(staged_bin)
+                                        if detected:
+                                            clean_user_args = [detected]
+                                    user_args = clean_user_args
+
                                 vault[mname] = {
                                     "enabled": not is_disabled,
                                     "transport": "stdio",
-                                    "command": mcfg_copy.get("command", "") if mcfg_copy.get("command") != "/bin/false" else "",
-                                    "args": mcfg_copy.get("args", []),
-                                    "env": dict(mcfg_copy.get("env") or {}),
+                                    "command": cmd_name,
+                                    "target_bin": str(staged_bin) if staged_bin else "",
+                                    "args": user_args,
+                                    "env": env_vars,
                                     "downloadUrl": d_url or "",
-                                    "checksum": c_sum or "",
-                                    "provisioned": False,
+                                    "checksum": pinned_csum or "",
+                                    "provisioned": bool(staged_bin),
                                     "created_at": int(time.time()),
                                 }
+
                                 if is_disabled:
                                     mcfg_copy["command"] = "/bin/false"
                                     mcfg_copy["args"] = []
                                     mcfg_copy.pop("env", None)
-                                elif d_url:
-                                    async def _auto_prov(sn=mname, cmd=mcfg_copy.get("command", ""), url=d_url, csum=c_sum):
-                                        try:
-                                            await McpBinaryProvisioner.provision_stdio_binary(sn, cmd, url, csum)
-                                            v = load_mcp_vault()
-                                            if sn in v:
-                                                v[sn]["provisioned"] = True
-                                                save_mcp_vault(v)
-                                            logger.info("Auto-provisioned binary for %s", sn)
-                                        except Exception as e:
-                                            logger.warning("Failed auto-provisioning %s: %s", sn, e)
-                                    asyncio.create_task(_auto_prov())
+                                else:
+                                    if staged_bin:
+                                        mcfg_copy["command"] = str(USR_DIR / "bin" / "agy-sh")
+                                        mcfg_copy["args"] = [str(staged_bin)] + user_args
+                                    else:
+                                        mcfg_copy["command"] = cmd_name
+                                        mcfg_copy["args"] = user_args
+                                    if env_vars:
+                                        mcfg_copy["env"] = env_vars
+                                    if d_url:
+                                        mcfg_copy["downloadUrl"] = d_url
+                                    if pinned_csum:
+                                        mcfg_copy["checksum"] = pinned_csum
+
+                                    # Run agy mcp add CLI to set executable path and register with agy engine!
+                                    try:
+                                        merged_env = {
+                                            "PATH": f"{USR_DIR}/bin:/system/bin",
+                                            "LD_LIBRARY_PATH": f"{USR_DIR}/lib",
+                                            "LD_PRELOAD": f"{USR_DIR}/lib/libagy_shim.so",
+                                            "SSL_CERT_FILE": f"{USR_DIR}/etc/tls/cert.pem",
+                                        }
+                                        for ek, ev in env_vars.items():
+                                            if ek and ev:
+                                                merged_env[ek] = resolve_secret_reference(ev)
+                                        cli_cmd = [str(AGY_BIN), "mcp", "add", "--type", "stdio"]
+                                        for ek, ev in merged_env.items():
+                                            if ek and ev:
+                                                cli_cmd.extend(["-e", f"{ek}={ev}"])
+                                        if staged_bin:
+                                            cli_cmd.extend([
+                                                mname,
+                                                str(USR_DIR / "bin" / "agy-sh"),
+                                                str(staged_bin),
+                                            ])
+                                            if user_args:
+                                                cli_cmd.extend(user_args)
+                                        else:
+                                            cli_cmd.extend([mname, cmd_name])
+                                            if user_args:
+                                                cli_cmd.extend(user_args)
+
+                                        proc = await asyncio.create_subprocess_exec(
+                                            *cli_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                                        )
+                                        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15.0)
+                                        if proc.returncode != 0:
+                                            logger.warning("agy mcp add CLI returned %d for %s: %s", proc.returncode, mname, stderr.decode('utf-8', 'replace'))
+                                        else:
+                                            logger.info("Successfully registered MCP %s via agy mcp add on restore", mname)
+                                    except Exception as exc:
+                                        logger.warning("Failed running agy mcp add for %s on restore: %s", mname, exc)
 
                             servers[mname] = mcfg_copy
                             summary["mcps"]["restored"].append(mname)

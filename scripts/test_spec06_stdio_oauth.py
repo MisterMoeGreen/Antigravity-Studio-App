@@ -340,6 +340,141 @@ class TestBackupExportImportSpec06(unittest.TestCase):
 
         asyncio.run(_test())
 
+    def test_export_and_import_oauth_client_secret(self):
+        async def _test():
+            # 1. Test Export with client_secret
+            mock_vault = {
+                "github-oauth": {
+                    "transport": "http",
+                    "upstreamUrl": "https://api.githubcopilot.com/mcp/",
+                    "auth_mode": "oauth2",
+                    "client_id": "Iv1.myclientid",
+                    "client_secret": "my-secret-token-xyz",
+                    "scopes": "repo read:user",
+                    "enabled": True,
+                }
+            }
+
+            with patch.object(server, "load_mcp_vault", return_value=mock_vault), \
+                 patch.object(server, "load_api_keys_store", return_value={"keys": {}}):
+                fname, enc_bundle, dpath = await server.generate_config_export_bundle(
+                    categories=["mcps"],
+                    password="SecretPassword123!"
+                )
+                decrypted = server.decrypt_v2_bundle(enc_bundle, "SecretPassword123!")
+                mcp_match = re.search(r"## Section: MCP Servers[\s\S]*?```json\s*([\s\S]*?)\s*```", decrypted)
+                self.assertIsNotNone(mcp_match)
+                export_mcps = json.loads(mcp_match.group(1))
+                self.assertIn("github-oauth", export_mcps)
+                self.assertEqual(export_mcps["github-oauth"]["client_secret"], "my-secret-token-xyz")
+                self.assertEqual(export_mcps["github-oauth"]["client_id"], "Iv1.myclientid")
+
+            # 2. Test Import with client_secret
+            import hashlib
+            body_text = (
+                "## Section: MCP Servers\n\n"
+                "```json\n"
+                "{\n"
+                '  "github-oauth": {\n'
+                '    "serverUrl": "https://api.githubcopilot.com/mcp/",\n'
+                '    "auth_mode": "oauth2",\n'
+                '    "client_id": "Iv1.myclientid",\n'
+                '    "client_secret": "my-secret-token-xyz",\n'
+                '    "scopes": "repo read:user"\n'
+                "  }\n"
+                "}\n"
+                "```\n"
+            )
+            chash = hashlib.sha256(body_text.strip().encode("utf-8")).hexdigest().lower()
+            bundle_body = (
+                "<!-- ANTIGRAVITY_STUDIO_EXPORT_V1 -->\n"
+                "---\n"
+                "generator: Antigravity Studio\n"
+                "export_version: '1.0'\n"
+                f'checksum: "sha256:{chash}"\n'
+                "---\n\n"
+                f"{body_text}"
+            )
+
+            imported_vault = {}
+            with patch.object(server, "load_mcp_vault", return_value=imported_vault), \
+                 patch.object(server, "save_mcp_vault"):
+                summary = await server.restore_configurations_bundle(bundle_body)
+                self.assertIn("github-oauth", summary["mcps"]["restored"])
+                self.assertIn("github-oauth", imported_vault)
+                self.assertEqual(imported_vault["github-oauth"]["client_secret"], "my-secret-token-xyz")
+                self.assertEqual(imported_vault["github-oauth"]["client_id"], "Iv1.myclientid")
+                self.assertFalse(imported_vault["github-oauth"]["authenticated"])
+
+        asyncio.run(_test())
+
+    def test_import_restores_stdio_executes_provisioning_and_sets_executable(self):
+        async def _test():
+            import hashlib
+            body_text = (
+                "## Section: MCP Servers\n\n"
+                "```json\n"
+                "{\n"
+                '  "github-local": {\n'
+                '    "command": "github-mcp-server",\n'
+                '    "args": ["stdio"],\n'
+                '    "downloadUrl": "https://example.com/github-mcp-server_linux_arm64.tar.gz",\n'
+                '    "checksum": "34d5a268f65cd1e9b7107fa976f3571ccd575f9df00cec489fec79a039923a22",\n'
+                '    "env": {"TOKEN": "$GH_TOKEN"}\n'
+                "  }\n"
+                "}\n"
+                "```\n"
+            )
+            chash = hashlib.sha256(body_text.strip().encode("utf-8")).hexdigest().lower()
+            bundle_body = (
+                "<!-- ANTIGRAVITY_STUDIO_EXPORT_V1 -->\n"
+                "---\n"
+                "generator: Antigravity Studio\n"
+                "export_version: '1.0'\n"
+                f'checksum: "sha256:{chash}"\n'
+                "---\n\n"
+                f"{body_text}"
+            )
+
+            mock_staged_bin = Path(self.temp_dir.name) / "github-mcp-server"
+            mock_staged_bin.touch(mode=0o755)
+
+            imported_vault = {}
+            mock_proc = AsyncMock()
+            mock_proc.returncode = 0
+            mock_proc.communicate = AsyncMock(return_value=(b"Server added", b""))
+
+            with patch.object(server, "load_mcp_vault", return_value=imported_vault), \
+                 patch.object(server, "save_mcp_vault"), \
+                 patch.object(server.McpBinaryProvisioner, "provision_stdio_binary", AsyncMock(return_value=(mock_staged_bin, "34d5a268f65cd1e9b7107fa976f3571ccd575f9df00cec489fec79a039923a22"))), \
+                 patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+
+                summary = await server.restore_configurations_bundle(bundle_body)
+                self.assertIn("github-local", summary["mcps"]["restored"])
+
+                # 1. Verify vault was populated with target_bin and provisioned=True
+                self.assertIn("github-local", imported_vault)
+                v_entry = imported_vault["github-local"]
+                self.assertEqual(v_entry["target_bin"], str(mock_staged_bin))
+                self.assertTrue(v_entry["provisioned"])
+                self.assertEqual(v_entry["args"], ["stdio"])
+
+                # 2. Verify mcp_config.json command was updated to agy-sh
+                self.assertTrue(self.mcp_config_path.exists())
+                saved_cfg = json.loads(self.mcp_config_path.read_text(encoding="utf-8"))
+                srv_cfg = saved_cfg["mcpServers"]["github-local"]
+                self.assertIn("agy-sh", srv_cfg["command"])
+                self.assertEqual(srv_cfg["args"], [str(mock_staged_bin), "stdio"])
+
+                # 3. Verify agy mcp add CLI command was executed on import
+                mock_exec.assert_called()
+                called_args = mock_exec.call_args[0]
+                self.assertIn("mcp", called_args)
+                self.assertIn("add", called_args)
+                self.assertIn("github-local", called_args)
+
+        asyncio.run(_test())
+
     def test_import_restores_oauth_with_clean_reauth(self):
         async def _test():
             import hashlib
