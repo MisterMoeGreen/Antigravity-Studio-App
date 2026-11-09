@@ -935,6 +935,13 @@ def sync_and_sanitize_mcp_vault_and_config(force: bool = False) -> dict[str, Any
                         s_meta["disabled"] = not v_enabled
                         config_changed = True
                 else:
+                    target_bin = v_entry.get("target_bin")
+                    if target_bin and "/usr/opt/mcp-bin/" in str(target_bin):
+                        target_bin = str(target_bin).replace("/usr/opt/mcp-bin/", f"{GEMINI_DIR.as_posix()}/mcp-bin/")
+                        v_entry["target_bin"] = target_bin
+                        vault_changed = True
+
+                    has_target = bool(target_bin and Path(target_bin).exists())
                     if not v_enabled:
                         if s_meta.get("command") != "/bin/false":
                             if s_meta.get("command"):
@@ -952,11 +959,28 @@ def sync_and_sanitize_mcp_vault_and_config(force: bool = False) -> dict[str, Any
                             s_meta["disabled"] = True
                             config_changed = True
                     else:
-                        if s_meta.get("command") == "/bin/false":
+                        agy_sh_cmd = str(USR_DIR / "bin" / "agy-sh")
+                        if has_target:
+                            user_args = [a for a in v_entry.get("args", []) if a != str(target_bin) and a != "-c" and not str(a).startswith("exec ")]
+                            if not user_args:
+                                detected_sub = McpBinaryProvisioner.detect_subcommand(Path(target_bin))
+                                if detected_sub:
+                                    user_args = [detected_sub]
+                                    v_entry["args"] = user_args
+                                    vault_changed = True
+
+                            expected_args = [str(target_bin)] + user_args
+                            if s_meta.get("command") != agy_sh_cmd or s_meta.get("args") != expected_args:
+                                s_meta["command"] = agy_sh_cmd
+                                s_meta["args"] = expected_args
+                                config_changed = True
+                        elif s_meta.get("command") == "/bin/false":
                             s_meta["command"] = v_entry.get("command", "")
                             s_meta["args"] = v_entry.get("args", [])
-                            if v_entry.get("env"):
-                                s_meta["env"] = v_entry.get("env")
+                            config_changed = True
+
+                        if v_entry.get("env") and not s_meta.get("env"):
+                            s_meta["env"] = v_entry.get("env")
                             config_changed = True
                         if s_meta.get("disabled"):
                             s_meta["disabled"] = False
@@ -1592,19 +1616,32 @@ def load_masked_mcp_servers() -> list[dict[str, Any]]:
         if trans == "http":
             copy_srv["auth_mode"] = v_entry.get("auth_mode") or copy_srv.get("auth_mode", "api_key")
             copy_srv["client_id"] = v_entry.get("client_id") or copy_srv.get("client_id", "")
+            copy_srv["client_secret"] = mask_api_key(v_entry.get("client_secret", "")) if v_entry.get("client_secret") else ""
             copy_srv["scopes"] = v_entry.get("scopes") or copy_srv.get("scopes", "")
             copy_srv["authenticated"] = v_entry.get("authenticated", False) if copy_srv["auth_mode"] == "oauth2" else True
         else:
-            raw_cmd = v_entry.get("command") or copy_srv.get("command", "")
-            raw_args = v_entry.get("args") if v_entry.get("args") is not None else copy_srv.get("args", [])
-            if raw_cmd.endswith("/agy-sh") and isinstance(raw_args, list) and len(raw_args) >= 3 and raw_args[0] == "-c":
-                m = re.search(r'exec\s+"([^"]+)"', raw_args[1])
-                if m:
-                    copy_srv["command"] = Path(m.group(1)).name
-                    copy_srv["args"] = raw_args[3:]
+            raw_cmd = copy_srv.get("command") or v_entry.get("command", "")
+            raw_args = copy_srv.get("args") if copy_srv.get("args") is not None else v_entry.get("args", [])
+            target_bin = v_entry.get("target_bin", "")
+
+            if (str(raw_cmd).endswith("/agy-sh") or raw_cmd == "agy-sh") and isinstance(raw_args, list):
+                if len(raw_args) >= 3 and raw_args[0] == "-c":
+                    m = re.search(r'exec\s+"([^"]+)"', raw_args[1])
+                    if m:
+                        copy_srv["command"] = Path(m.group(1)).name
+                        copy_srv["args"] = raw_args[3:]
+                    else:
+                        copy_srv["command"] = v_entry.get("command") or raw_cmd
+                        copy_srv["args"] = raw_args
+                elif len(raw_args) >= 1 and ("mcp-bin" in str(raw_args[0]) or str(raw_args[0]).startswith("/")):
+                    copy_srv["command"] = Path(raw_args[0]).name
+                    copy_srv["args"] = raw_args[1:]
                 else:
-                    copy_srv["command"] = raw_cmd
+                    copy_srv["command"] = v_entry.get("command") or raw_cmd
                     copy_srv["args"] = raw_args
+            elif target_bin and Path(target_bin).exists():
+                copy_srv["command"] = Path(target_bin).name
+                copy_srv["args"] = [a for a in raw_args if a != target_bin]
             else:
                 copy_srv["command"] = raw_cmd
                 copy_srv["args"] = raw_args
@@ -1769,7 +1806,7 @@ async def probe_mcp_health() -> dict[str, dict[str, str]]:
     return results
 
 
-MCP_BIN_DIR = USR_DIR / "opt" / "mcp-bin"
+MCP_BIN_DIR = GEMINI_DIR / "mcp-bin"
 RESERVED_SYSTEM_BINARIES = {
     "agy", "agy-sh", "sh", "bash", "python", "python3", "node", "npm", "npx",
     "git", "curl", "tar", "zstd", "patchelf"
@@ -1778,8 +1815,74 @@ MAX_MCP_DOWNLOAD_BYTES = 150 * 1024 * 1024  # 150 MB
 MAX_MCP_UNCOMPRESSED_BYTES = 300 * 1024 * 1024  # 300 MB
 
 
+def migrate_mcp_storage() -> None:
+    """Migrates any existing MCP binaries and configs from /usr/opt/mcp-bin to GEMINI_DIR/mcp-bin,
+    and updates mcp_vault.json and mcp_config.json references to ensure seamless execution in PRoot.
+    """
+    old_opt_dir = USR_DIR / "opt" / "mcp-bin"
+    new_bin_dir = GEMINI_DIR / "mcp-bin"
+    try:
+        new_bin_dir.mkdir(parents=True, exist_ok=True)
+        if old_opt_dir.is_dir():
+            for child in old_opt_dir.iterdir():
+                target = new_bin_dir / child.name
+                if not target.exists():
+                    shutil.move(str(child), str(target))
+                elif child.is_dir():
+                    for f in child.iterdir():
+                        tf = target / f.name
+                        if not tf.exists():
+                            shutil.move(str(f), str(tf))
+    except Exception as exc:
+        logger.debug("Mcp storage migration directory move error: %s", exc)
+
+    try:
+        vault = load_mcp_vault()
+        v_changed = False
+        for sname, sdata in vault.items():
+            if sdata.get("transport") == "stdio":
+                tbin = sdata.get("target_bin", "")
+                if "/usr/opt/mcp-bin/" in str(tbin):
+                    new_tbin = str(tbin).replace("/usr/opt/mcp-bin/", f"{GEMINI_DIR.as_posix()}/mcp-bin/")
+                    sdata["target_bin"] = new_tbin
+                    v_changed = True
+                if not sdata.get("args") and tbin and Path(tbin).exists():
+                    sub = McpBinaryProvisioner.detect_subcommand(Path(tbin))
+                    if sub:
+                        sdata["args"] = [sub]
+                        v_changed = True
+        if v_changed:
+            save_mcp_vault(vault)
+    except Exception as exc:
+        logger.debug("Mcp storage vault migration error: %s", exc)
+
+
 class McpBinaryProvisioner:
     """Manages on-demand provisioning, safe uncompressing, ELF validation, and isolated staging of Stdio MCP binaries."""
+
+    @classmethod
+    def detect_subcommand(cls, file_path: Path) -> Optional[str]:
+        """Probes any binary via --help to dynamically discover if it requires a 'stdio' or 'serve' subcommand."""
+        if not file_path.exists():
+            return None
+        try:
+            res = subprocess.run(
+                [str(USR_DIR / "bin" / "agy-sh"), str(file_path), "--help"],
+                capture_output=True,
+                text=True,
+                timeout=4.0
+            )
+            out = (res.stdout + " " + res.stderr).lower()
+            if "available commands:" in out or "commands:" in out or "subcommands:" in out:
+                if re.search(r"\bstdio\b", out):
+                    return "stdio"
+                elif re.search(r"\b--stdio\b", out):
+                    return "--stdio"
+                elif re.search(r"\bserve\b", out):
+                    return "serve"
+        except Exception as exc:
+            logger.debug("Subcommand detection error for %s: %s", file_path.name, exc)
+        return None
 
     @staticmethod
     def sanitize_name(name: str) -> str:
@@ -2052,7 +2155,67 @@ class McpBinaryProvisioner:
 
 
 _pending_oauth_sessions: dict[str, dict[str, Any]] = {}
+_completed_oauth_sessions: dict[str, dict[str, Any]] = {}
 _oauth_refresh_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+OAUTH_SESSIONS_FILE = TMP_DIR / ".oauth_sessions.json"
+
+
+def _load_oauth_sessions() -> tuple[dict[str, Any], dict[str, Any]]:
+    global _pending_oauth_sessions, _completed_oauth_sessions
+    try:
+        if OAUTH_SESSIONS_FILE.exists():
+            data = json.loads(OAUTH_SESSIONS_FILE.read_text(encoding="utf-8"))
+            now = time.time()
+            p = {k: v for k, v in data.get("pending", {}).items() if now - v.get("created_at", 0) <= 900}
+            c = {k: v for k, v in data.get("completed", {}).items() if now - v.get("completed_at", 0) <= 1800}
+            _pending_oauth_sessions.update(p)
+            _completed_oauth_sessions.update(c)
+    except Exception as exc:
+        logger.debug("Failed loading OAuth sessions file: %s", exc)
+    return _pending_oauth_sessions, _completed_oauth_sessions
+
+
+def _save_oauth_sessions() -> None:
+    try:
+        now = time.time()
+        p = {k: v for k, v in _pending_oauth_sessions.items() if now - v.get("created_at", 0) <= 900}
+        c = {k: v for k, v in _completed_oauth_sessions.items() if now - v.get("completed_at", 0) <= 1800}
+        atomic_write_secure(str(OAUTH_SESSIONS_FILE), json.dumps({"pending": p, "completed": c}, indent=2), mode=0o600)
+    except Exception as exc:
+        logger.debug("Failed saving OAuth sessions file: %s", exc)
+
+
+def _render_oauth_success_html(server_name: str) -> str:
+    safe_sname = re.sub(r"[^a-zA-Z0-9_-]", "", server_name)
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Authentication Successful</title>
+  <style>
+    body {{ background: #121212; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; text-align: center; }}
+    .card {{ background: #1e1e1e; border: 1px solid #333; border-radius: 12px; padding: 24px; max-width: 400px; width: 100%; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }}
+    .icon {{ font-size: 44px; color: #10b981; margin-bottom: 12px; }}
+    h2 {{ margin: 0 0 8px 0; font-size: 20px; color: #fff; }}
+    p {{ margin: 0 0 16px 0; font-size: 14px; color: #9ca3af; }}
+    .btn {{ background: #2563eb; color: #fff; border: none; padding: 10px 20px; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; text-decoration: none; display: inline-block; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">&#10003;</div>
+    <h2>Authentication Successful</h2>
+    <p>Connected to <b>{safe_sname}</b>. Returning to Antigravity Studio...</p>
+    <button class="btn" onclick="window.close()">Return to App</button>
+  </div>
+  <script>
+    setTimeout(function() {{
+      window.close();
+    }}, 600);
+  </script>
+</body>
+</html>"""
 
 
 class McpOAuth2Manager:
@@ -2183,16 +2346,19 @@ class McpOAuth2Manager:
         state = secrets.token_hex(24)
 
         scopes = s_entry.get("scopes", "").strip()
+        client_secret = s_entry.get("client_secret", "").strip()
 
         _pending_oauth_sessions[state] = {
             "server_name": server_name,
             "code_verifier": code_verifier,
             "token_endpoint": token_ep,
             "client_id": client_id,
+            "client_secret": client_secret,
             "redirect_uri": redirect_uri,
             "scopes": scopes,
             "created_at": time.time(),
         }
+        _save_oauth_sessions()
 
         params = {
             "response_type": "code",
@@ -2229,8 +2395,38 @@ class McpOAuth2Manager:
                 f"<html><body style='background:#121212;color:#ef4444;font-family:sans-serif;padding:30px;text-align:center;'><h2>Authentication Failed</h2><p>{error_desc}</p></body></html>".encode("utf-8"),
             )
 
+        _load_oauth_sessions()
+
+        if state and state in _completed_oauth_sessions:
+            c_info = _completed_oauth_sessions[state]
+            safe_sname = re.sub(r"[^a-zA-Z0-9_-]", "", c_info.get("server_name", "server"))
+            return Response(
+                int(HTTPStatus.OK),
+                "OK",
+                Headers([("Content-Type", "text/html; charset=utf-8")]),
+                _render_oauth_success_html(safe_sname).encode("utf-8"),
+            )
+
         session = _pending_oauth_sessions.pop(state, None)
+        if not session:
+            _load_oauth_sessions()
+            session = _pending_oauth_sessions.pop(state, None)
+
         if not session or time.time() - session.get("created_at", 0) > 900:  # 15 min expiry
+            vault = load_mcp_vault()
+            recent_srv = None
+            for sname, sdata in vault.items():
+                if sdata.get("auth_mode") == "oauth2" and sdata.get("authenticated"):
+                    if time.time() - sdata.get("created_at", 0) < 900 or time.time() - sdata.get("authenticated_at", 0) < 900:
+                        recent_srv = sname
+                        break
+            if recent_srv:
+                return Response(
+                    int(HTTPStatus.OK),
+                    "OK",
+                    Headers([("Content-Type", "text/html; charset=utf-8")]),
+                    _render_oauth_success_html(recent_srv).encode("utf-8"),
+                )
             return Response(
                 int(HTTPStatus.BAD_REQUEST),
                 "Bad Request",
@@ -2242,6 +2438,7 @@ class McpOAuth2Manager:
         token_ep = session["token_endpoint"]
         code_verifier = session["code_verifier"]
         client_id = session["client_id"]
+        client_secret = session.get("client_secret", "")
         redirect_uri = session["redirect_uri"]
 
         token_payload = {
@@ -2251,6 +2448,8 @@ class McpOAuth2Manager:
             "client_id": client_id,
             "code_verifier": code_verifier,
         }
+        if client_secret:
+            token_payload["client_secret"] = resolve_secret_reference(client_secret)
 
         # Token exchange
         token_data: dict[str, Any] = {}
@@ -2288,12 +2487,15 @@ class McpOAuth2Manager:
         expires_in = float(token_data.get("expires_in", 3600))
         expires_at = time.time() + expires_in
 
-        if not access_token:
+        if "error" in token_data or not access_token:
+            err_code = token_data.get("error", "missing_token")
+            err_desc = token_data.get("error_description") or token_data.get("error_uri") or "No access token received from authorization server."
+            logger.error("Token exchange failed for %s: %s - %s", server_name, err_code, err_desc)
             return Response(
                 int(HTTPStatus.BAD_REQUEST),
                 "Bad Request",
                 Headers([("Content-Type", "text/html; charset=utf-8")]),
-                b"<html><body style='background:#121212;color:#ef4444;font-family:sans-serif;padding:30px;text-align:center;'><h2>No Access Token Received</h2></body></html>",
+                f"<html><body style='background:#121212;color:#ef4444;font-family:sans-serif;padding:30px;text-align:center;'><h2 style='color:#ef4444;'>Authentication Error: {err_code}</h2><p style='color:#e2e8f0;margin-top:12px;font-size:14px;'>{err_desc}</p><p style='font-size:12px;color:#94a3b8;margin-top:20px;'>If using GitHub OAuth, ensure both Client ID and Client Secret from your GitHub Developer OAuth App are configured in Settings.</p></body></html>".encode("utf-8"),
             )
 
         # Store tokens securely in Android Keystore Vault
@@ -2313,7 +2515,14 @@ class McpOAuth2Manager:
         if server_name in vault:
             vault[server_name]["authenticated"] = True
             vault[server_name]["auth_mode"] = "oauth2"
+            vault[server_name]["authenticated_at"] = time.time()
             save_mcp_vault(vault)
+
+        _completed_oauth_sessions[state] = {
+            "server_name": server_name,
+            "completed_at": time.time(),
+        }
+        _save_oauth_sessions()
 
         # Broadcast WebSocket notification and dismiss Custom Tab
         await web_server.broadcast({
@@ -2329,41 +2538,11 @@ class McpOAuth2Manager:
             "servers": load_masked_mcp_servers(),
         })
 
-        safe_sname = re.sub(r"[^a-zA-Z0-9_-]", "", server_name)
-        html = f"""<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Authentication Successful</title>
-  <style>
-    body {{ background: #121212; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; text-align: center; }}
-    .card {{ background: #1e1e1e; border: 1px solid #333; border-radius: 12px; padding: 24px; max-width: 400px; width: 100%; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }}
-    .icon {{ font-size: 44px; color: #10b981; margin-bottom: 12px; }}
-    h2 {{ margin: 0 0 8px 0; font-size: 20px; color: #fff; }}
-    p {{ margin: 0 0 16px 0; font-size: 14px; color: #9ca3af; }}
-    .btn {{ background: #2563eb; color: #fff; border: none; padding: 10px 20px; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; text-decoration: none; display: inline-block; }}
-  </style>
-</head>
-<body>
-  <div class="card">
-    <div class="icon">&#10003;</div>
-    <h2>Authentication Successful</h2>
-    <p>Connected to <b>{safe_sname}</b>. Returning to Antigravity Studio...</p>
-    <button class="btn" onclick="window.close()">Return to App</button>
-  </div>
-  <script>
-    setTimeout(function() {{
-      window.close();
-    }}, 600);
-  </script>
-</body>
-</html>"""
         return Response(
             int(HTTPStatus.OK),
             "OK",
             Headers([("Content-Type", "text/html; charset=utf-8")]),
-            html.encode("utf-8"),
+            _render_oauth_success_html(server_name).encode("utf-8"),
         )
 
     @classmethod
@@ -2454,7 +2633,9 @@ async def add_mcp_server(
     checksum: Optional[str] = None,
     auth_mode: str = "api_key",
     client_id: Optional[str] = None,
+    client_secret: Optional[str] = None,
     scopes: Optional[str] = None,
+    progress_cb: Optional[Any] = None,
 ) -> dict[str, Any]:
     name = re.sub(r"\s+", "-", str(name or "").strip())
     if not re.match(r"^[a-zA-Z0-9_-]+$", name):
@@ -2473,12 +2654,15 @@ async def add_mcp_server(
                 final_headers[hk] = hv
 
         is_oauth = (auth_mode == "oauth2")
+        existing_secret = vault.get(name, {}).get("client_secret", "")
+        final_secret = existing_secret if (client_secret and "••••" in client_secret) else (client_secret or existing_secret or "")
         vault[name] = {
             "enabled": True,
             "transport": "http",
             "upstreamUrl": url_or_command,
             "auth_mode": "oauth2" if is_oauth else "api_key",
             "client_id": client_id or "",
+            "client_secret": final_secret,
             "scopes": scopes or "",
             "authenticated": False if is_oauth else True,
             "headers": {} if is_oauth else final_headers,
@@ -2504,14 +2688,22 @@ async def add_mcp_server(
                 command=url_or_command,
                 download_url=download_url.strip(),
                 expected_checksum=checksum,
+                progress_cb=progress_cb,
             )
+
+        user_args = list(args or [])
+        if staged_bin and not user_args:
+            detected = McpBinaryProvisioner.detect_subcommand(staged_bin)
+            if detected:
+                logger.info("Auto-detected subcommand '%s' for Stdio binary '%s'", detected, Path(staged_bin).name)
+                user_args.append(detected)
 
         vault[name] = {
             "enabled": True,
             "transport": "stdio",
             "command": url_or_command,
             "target_bin": str(staged_bin) if staged_bin else "",
-            "args": args or [],
+            "args": user_args,
             "env": final_env,
             "downloadUrl": download_url.strip() if download_url else "",
             "checksum": pinned_csum or "",
@@ -2537,15 +2729,14 @@ async def add_mcp_server(
             cmd.extend([
                 name,
                 str(USR_DIR / "bin" / "agy-sh"),
-                "-c",
-                f'exec "{staged_bin}" "$@"',
-                "--",
+                str(staged_bin),
             ])
+            if user_args:
+                cmd.extend(user_args)
         else:
             cmd.extend([name, url_or_command])
-
-        if args:
-            cmd.extend(args)
+            if user_args:
+                cmd.extend(user_args)
 
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -2568,6 +2759,9 @@ async def add_mcp_server(
                             cdata["mcpServers"][name]["scopes"] = scopes
                     cdata["mcpServers"][name].pop("headers", None)
                 else:
+                    if staged_bin:
+                        cdata["mcpServers"][name]["command"] = str(USR_DIR / "bin" / "agy-sh")
+                        cdata["mcpServers"][name]["args"] = [str(staged_bin)] + user_args
                     if download_url:
                         cdata["mcpServers"][name]["downloadUrl"] = download_url.strip()
                     if pinned_csum:
@@ -2605,8 +2799,20 @@ async def toggle_mcp_server(name: str, enabled: bool) -> dict[str, Any]:
                         cdata["mcpServers"][name]["command"] = "/bin/false"
                         save_mcp_vault(vault)
                     else:
-                        cdata["mcpServers"][name]["command"] = server_entry.get("command", "")
-                        cdata["mcpServers"][name]["args"] = server_entry.get("args", [])
+                        target_bin = server_entry.get("target_bin")
+                        if target_bin and Path(target_bin).exists():
+                            cdata["mcpServers"][name]["command"] = str(USR_DIR / "bin" / "agy-sh")
+                            user_args = [a for a in server_entry.get("args", []) if a != str(target_bin) and a != "-c" and not str(a).startswith("exec ")]
+                            if not user_args:
+                                detected_sub = McpBinaryProvisioner.detect_subcommand(Path(target_bin))
+                                if detected_sub:
+                                    user_args = [detected_sub]
+                                    server_entry["args"] = user_args
+                                    save_mcp_vault(vault)
+                            cdata["mcpServers"][name]["args"] = [str(target_bin)] + user_args
+                        else:
+                            cdata["mcpServers"][name]["command"] = server_entry.get("command", "")
+                            cdata["mcpServers"][name]["args"] = server_entry.get("args", [])
                         if server_entry.get("env"):
                             cdata["mcpServers"][name]["env"] = server_entry.get("env")
                 else:
@@ -11117,7 +11323,16 @@ class AgyWebServer:
             checksum = data.get("checksum")
             auth_mode = data.get("auth_mode") or data.get("authMode") or "api_key"
             client_id = data.get("client_id") or data.get("clientId")
+            client_secret = data.get("client_secret") or data.get("clientSecret")
             scopes = data.get("scopes")
+            async def _prov_cb(text: str, pct: int):
+                await self.broadcast({
+                    "type": "mcp_progress",
+                    "server": name,
+                    "text": text,
+                    "percent": pct,
+                })
+
             try:
                 res = await add_mcp_server(
                     name=name,
@@ -11130,7 +11345,9 @@ class AgyWebServer:
                     checksum=checksum,
                     auth_mode=auth_mode,
                     client_id=client_id,
+                    client_secret=client_secret,
                     scopes=scopes,
+                    progress_cb=_prov_cb,
                 )
                 servers = load_masked_mcp_servers()
                 await self.broadcast({"type": "mcp_servers_list", "servers": servers})
@@ -13145,6 +13362,7 @@ async def main() -> None:
 
     sync_gemini_md_prompt()
     migrate_legacy_api_keys_store()
+    migrate_mcp_storage()
     sync_and_sanitize_mcp_vault_and_config()
     app = AgyWebServer()
     stop_event = asyncio.Event()

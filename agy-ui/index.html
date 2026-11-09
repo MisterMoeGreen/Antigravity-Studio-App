@@ -1920,13 +1920,21 @@
       margin-top: 4px;
     }
     .modal-btn {
-      padding: 8px 16px;
+      padding: 10px 18px;
       border-radius: 10px;
       font-size: 13.5px;
       font-weight: 600;
       cursor: pointer;
       border: none;
       transition: opacity 0.15s;
+      touch-action: manipulation;
+      min-height: 44px;
+      min-width: 80px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+      -webkit-user-select: none;
     }
     .modal-btn:active {
       opacity: 0.8;
@@ -4848,7 +4856,7 @@
 
   <!-- Modal: Add MCP Server -->
   <div class="modal-dialog" id="modalAddMCP" style="display:none;">
-    <div class="modal-card" style="max-height:90vh;display:flex;flex-direction:column;">
+    <div class="modal-card" style="max-height:90vh;display:flex;flex-direction:column;position:relative;">
       <div class="modal-header">
         <div class="modal-title">Add MCP Server</div>
         <button class="icon-btn modal-close-btn" id="btnCloseAddMCPModal" style="width:28px;height:28px;">
@@ -4888,11 +4896,24 @@
               <div class="preset-chips-container" id="mcpHeaderKeyChips" style="margin-top:2px;display:flex;flex-wrap:wrap;gap:4px;"></div>
             </div>
             <div id="mcpAuthOAuthFields" style="display:none;">
-              <div class="settings-info-banner" style="margin-top:4px;">
-                <strong>🔐 Interactive OAuth 2.1 with PKCE:</strong> Automatically discovers RFC 9728 metadata or RFC 8414 authorization servers. Dynamic Client Registration is used if advertised.
+              <div class="settings-info-banner" style="margin-top:4px;line-height:1.45;">
+                <div style="margin-bottom:6px;">
+                  <strong>🔐 Interactive OAuth 2.1 with PKCE:</strong> Automatically discovers RFC 9728 metadata or RFC 8414 authorization servers. Dynamic Client Registration is used if advertised.
+                </div>
+                <div style="font-size:11.5px;color:var(--text-secondary);display:flex;align-items:center;justify-content:space-between;gap:8px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.08);flex-wrap:wrap;">
+                  <span>Callback URI:</span>
+                  <div style="display:inline-flex;align-items:center;gap:6px;max-width:100%;">
+                    <code id="mcpOAuthCallbackUri" style="font-family:var(--font-mono, monospace);font-size:11px;background:rgba(0,0,0,0.25);padding:2px 6px;border-radius:4px;color:var(--accent-primary,#6366f1);user-select:all;-webkit-user-select:all;word-break:break-all;cursor:pointer;" title="Tap to copy">http://127.0.0.1:8081/oauth/callback</code>
+                    <button type="button" class="icon-btn" id="btnCopyOAuthCallbackUri" style="width:26px;height:26px;min-height:26px;min-width:26px;padding:3px;flex-shrink:0;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;touch-action:manipulation;" title="Copy Callback URI">
+                      <svg class="fa-icon" viewBox="0 0 448 512" style="width:12px;height:12px;" aria-hidden="true"><path fill="currentColor" d="M384 336H192c-8.8 0-16-7.2-16-16V64c0-8.8 7.2-16 16-16l140.1 0L384 99.9V320c0 8.8-7.2 16-16 16zM192 0C156.7 0 128 28.7 128 64V320c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V99.9c0-17-6.7-33.3-18.7-45.3L377.4 6.7C365.3-5.3 349 0 332 0H192zM64 128c-35.3 0-64 28.7-64 64V448c0 35.3 28.7 64 64 64H256c35.3 0 64-28.7 64-64V416H208v32c0 8.8-7.2 16-16 16H64c-8.8 0-16-7.2-16-16V192c0-8.8 7.2-16 16-16h32V128H64z"/></svg>
+                    </button>
+                  </div>
+                </div>
               </div>
               <label style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Client ID (optional, for GitHub/Google/Slack):</label>
               <input type="text" id="inputMCPOAuthClientId" class="search-input" placeholder="e.g. Iv1.xxx or app-client-id" />
+              <label style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Client Secret (optional, required by GitHub OAuth):</label>
+              <input type="password" id="inputMCPOAuthClientSecret" class="search-input" placeholder="e.g. $GITHUB_CLIENT_SECRET or secret" />
               <label style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Scopes (optional, space-separated):</label>
               <input type="text" id="inputMCPOAuthScopes" class="search-input" placeholder="e.g. repo read:user or mcp" />
             </div>
@@ -4905,7 +4926,7 @@
             <label style="font-size:12px;color:var(--text-secondary);margin-top:4px;">SHA-256 Checksum (optional, auto-pinned via TOFU):</label>
             <input type="text" id="inputMCPChecksum" class="search-input" placeholder="Optional hex digest to verify download integrity" />
             <label style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Arguments (comma or space separated):</label>
-            <input type="text" id="inputMCPArgs" class="search-input" placeholder="stdio or script argument" />
+            <input type="text" id="inputMCPArgs" class="search-input" placeholder="Optional arguments (e.g. stdio, auto-detected if blank)" />
             <label style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Environment Variables (JSON object):</label>
             <textarea id="txtMCPEnv" class="settings-prompt-textarea" style="min-height:80px;" placeholder='{"API_KEY": "$GITHUB_TOKEN"}'></textarea>
             <div style="font-size:11px;color:var(--text-secondary);margin-top:4px;display:flex;justify-content:space-between;align-items:center;">
@@ -4927,6 +4948,14 @@
           <textarea id="txtAIMCPDetails" class="settings-prompt-textarea" style="min-height:100px;" placeholder="Specify needed capabilities or endpoint URLs (e.g. uses $JOULES_MONTANA_MCP)..."></textarea>
           <div style="font-size:11px;color:var(--text-secondary);margin-top:4px;">Available Key References:</div>
           <div class="preset-chips-container" id="mcpAIKeyChips" style="margin-top:2px;display:flex;flex-wrap:wrap;gap:4px;"></div>
+        </div>
+      </div>
+      <!-- Inline Download & Setup Progress Banner (v1.9.0) -->
+      <div id="mcpDownloadProgressBox" style="display:none;align-items:center;gap:12px;padding:12px 14px;background:rgba(99,102,241,0.08);border-top:1px solid rgba(99,102,241,0.2);">
+        <div class="live-spinner" style="width:16px;height:16px;border-width:2.5px;flex-shrink:0;"></div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:12.5px;font-weight:600;color:var(--text-primary);line-height:1.3;" id="mcpLoadingTitle">Downloading Binary...</div>
+          <div style="font-size:11px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;" id="mcpLoadingSubtitle">Fetching ARM64 package and configuring sandbox...</div>
         </div>
       </div>
       <div class="modal-footer">
@@ -7363,7 +7392,19 @@
             sendWs({ type: 'list_mcp_servers' });
             break;
 
+          case 'mcp_progress':
+            const _mcpProgBox = document.getElementById('mcpDownloadProgressBox');
+            const _mcpSubProg = document.getElementById('mcpLoadingSubtitle');
+            if (_mcpProgBox && _mcpProgBox.style.display !== 'none') {
+              if (_mcpSubProg && msg.text) {
+                _mcpSubProg.textContent = msg.text;
+              }
+            }
+            break;
+
           case 'mcp_server_added':
+            const _mcpProgBoxAdd = document.getElementById('mcpDownloadProgressBox');
+            if (_mcpProgBoxAdd) _mcpProgBoxAdd.style.display = 'none';
             const addedName = (msg.server && msg.server.name) || msg.name || 'server';
             showToast(`MCP server "${addedName}" saved!`);
             closeMCPModal();
@@ -7375,11 +7416,17 @@
             break;
 
           case 'mcp_operation_failed':
+            const _mcpProgBoxFail = document.getElementById('mcpDownloadProgressBox');
+            if (_mcpProgBoxFail) _mcpProgBoxFail.style.display = 'none';
             showToast(msg.error ? `Error: ${msg.error}` : 'MCP operation failed');
             if (btnConfirmAddMCP) {
               btnConfirmAddMCP.disabled = false;
               btnConfirmAddMCP.textContent = 'Save Server';
             }
+            if (btnCancelAddMCP) btnCancelAddMCP.disabled = false;
+            if (btnCloseAddMCPModal) btnCloseAddMCPModal.disabled = false;
+            const _mcpModalBodyFail = document.querySelector('#modalAddMCP .modal-body');
+            if (_mcpModalBodyFail) _mcpModalBodyFail.style.pointerEvents = 'auto';
             break;
 
           case 'mcp_server_toggled':
@@ -10303,7 +10350,10 @@
       const mcpAuthApiKeyFields = document.getElementById('mcpAuthApiKeyFields');
       const mcpAuthOAuthFields = document.getElementById('mcpAuthOAuthFields');
       const inputMCPOAuthClientId = document.getElementById('inputMCPOAuthClientId');
+      const inputMCPOAuthClientSecret = document.getElementById('inputMCPOAuthClientSecret');
       const inputMCPOAuthScopes = document.getElementById('inputMCPOAuthScopes');
+      const mcpOAuthCallbackUri = document.getElementById('mcpOAuthCallbackUri');
+      const btnCopyOAuthCallbackUri = document.getElementById('btnCopyOAuthCallbackUri');
       const inputMCPDownloadUrl = document.getElementById('inputMCPDownloadUrl');
       const inputMCPChecksum = document.getElementById('inputMCPChecksum');
 
@@ -10370,7 +10420,33 @@
           mcpAuthModeApiKey.classList.remove('active');
           if (mcpAuthApiKeyFields) mcpAuthApiKeyFields.style.display = 'none';
           if (mcpAuthOAuthFields) mcpAuthOAuthFields.style.display = 'block';
+          updateMCPCallbackUri();
         });
+      }
+
+      const updateMCPCallbackUri = () => {
+        const curPort = window.location.port || '8081';
+        const uri = `http://127.0.0.1:${curPort}/oauth/callback`;
+        if (mcpOAuthCallbackUri) mcpOAuthCallbackUri.textContent = uri;
+      };
+      updateMCPCallbackUri();
+
+      const handleCopyMCPCallbackUri = (e) => {
+        if (e) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        const curPort = window.location.port || '8081';
+        const uriToCopy = (mcpOAuthCallbackUri && mcpOAuthCallbackUri.textContent.trim()) || `http://127.0.0.1:${curPort}/oauth/callback`;
+        copyTextToClipboard(uriToCopy);
+      };
+
+      if (btnCopyOAuthCallbackUri) {
+        btnCopyOAuthCallbackUri.addEventListener('click', handleCopyMCPCallbackUri);
+        btnCopyOAuthCallbackUri.addEventListener('touchend', handleCopyMCPCallbackUri);
+      }
+      if (mcpOAuthCallbackUri) {
+        mcpOAuthCallbackUri.addEventListener('click', handleCopyMCPCallbackUri);
       }
 
       // Track cursor position inside Headers and Env textareas for direct insertion
@@ -10466,12 +10542,14 @@
             if (inputMCPDownloadUrl) inputMCPDownloadUrl.value = '';
             if (inputMCPChecksum) inputMCPChecksum.value = '';
             if (inputMCPOAuthClientId) inputMCPOAuthClientId.value = '';
+            if (inputMCPOAuthClientSecret) inputMCPOAuthClientSecret.value = '';
             if (inputMCPOAuthScopes) inputMCPOAuthScopes.value = '';
             if (inputMCPArgs) inputMCPArgs.value = '';
             if (txtMCPEnv) txtMCPEnv.value = '';
             if (inputAIMCPName) inputAIMCPName.value = '';
             if (txtAIMCPDetails) txtAIMCPDetails.value = '';
             if (mcpAuthModeApiKey) mcpAuthModeApiKey.click();
+            updateMCPCallbackUri();
             updateMCPKeyChips();
             if (!state.availableApiKeys || state.availableApiKeys.length === 0) {
               sendWs({ type: 'list_api_keys' });
@@ -10482,128 +10560,203 @@
 
       const closeMCPModal = () => {
         if (modalAddMCP) modalAddMCP.style.display = 'none';
+        const progBox = document.getElementById('mcpDownloadProgressBox');
+        if (progBox) progBox.style.display = 'none';
+        if (btnConfirmAddMCP) {
+          btnConfirmAddMCP.disabled = false;
+          btnConfirmAddMCP.textContent = 'Save Server';
+        }
+        if (btnCancelAddMCP) btnCancelAddMCP.disabled = false;
+        if (btnCloseAddMCPModal) btnCloseAddMCPModal.disabled = false;
+        const mcpBody = document.querySelector('#modalAddMCP .modal-body');
+        if (mcpBody) mcpBody.style.pointerEvents = 'auto';
       };
       if (btnCloseAddMCPModal) btnCloseAddMCPModal.addEventListener('click', closeMCPModal);
       if (btnCancelAddMCP) btnCancelAddMCP.addEventListener('click', closeMCPModal);
 
       if (btnConfirmAddMCP) {
-        btnConfirmAddMCP.addEventListener('click', () => {
-          if (currentMCPAddTab === 'ai') {
-            const name = inputAIMCPName ? inputAIMCPName.value.trim() : '';
-            const details = txtAIMCPDetails ? txtAIMCPDetails.value.trim() : '';
-            if (!name) {
-              showToast('Service name is required');
-              return;
+        let _lastMCPConfirmTime = 0;
+        const handleConfirmAddMCP = (e) => {
+          const now = Date.now();
+          if (now - _lastMCPConfirmTime < 500) return;
+          _lastMCPConfirmTime = now;
+          if (e && e.type === 'touchend') {
+            e.preventDefault();
+          }
+          if (document.activeElement && typeof document.activeElement.blur === 'function') {
+            document.activeElement.blur();
+          }
+
+          const setMCPSavingState = (isDownloading, actionText) => {
+            if (btnConfirmAddMCP) {
+              btnConfirmAddMCP.disabled = true;
+              btnConfirmAddMCP.innerHTML = `<span class="live-spinner" style="display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,0.3);border-top-color:#fff;border-radius:50%;animation:spin 0.8s linear infinite;margin-right:6px;vertical-align:middle;"></span>${actionText || (isDownloading ? 'Downloading...' : 'Saving...')}`;
             }
-            closeMCPModal();
-            closeSettingsHub();
-            const promptText = `Setup MCP Server "${name}":\n${details}`;
-            prepareWizardDraftSession(`Setup MCP: ${name}`, promptText);
-            sendWs({
-              type: 'setup_mcp_prompt',
-              name: name,
-              details: details,
-              model: state.model,
-              effort: state.effort
-            });
-            return;
-          }
+            if (btnCancelAddMCP) btnCancelAddMCP.disabled = true;
+            if (btnCloseAddMCPModal) btnCloseAddMCPModal.disabled = true;
+            const mcpBody = document.querySelector('#modalAddMCP .modal-body');
+            if (mcpBody) mcpBody.style.pointerEvents = 'none';
 
-          let name = inputMCPName ? inputMCPName.value.trim() : '';
-          if (!name) {
-            showToast('Server name is required');
-            return;
-          }
-          name = name.replace(/\s+/g, '-');
-          if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
-            showToast('Server name can only contain letters, numbers, hyphens, and underscores');
-            return;
-          }
-
-          btnConfirmAddMCP.disabled = true;
-          btnConfirmAddMCP.textContent = 'Saving...';
-          showToast(`Saving MCP server "${name}"...`);
-
-          if (currentMCPTransport === 'http') {
-            const url = inputMCPUrl ? inputMCPUrl.value.trim() : '';
-            if (!url) {
-              showToast('URL is required for HTTP transport');
-              return;
-            }
-            if (currentMCPAuthMode === 'oauth2') {
-              const clientId = inputMCPOAuthClientId ? inputMCPOAuthClientId.value.trim() : '';
-              const scopes = inputMCPOAuthScopes ? inputMCPOAuthScopes.value.trim() : '';
-              sendWs({
-                type: 'add_mcp_server',
-                name: name,
-                transport: 'http',
-                url: url,
-                url_or_command: url,
-                auth_mode: 'oauth2',
-                client_id: clientId,
-                scopes: scopes
-              });
+            const progBox = document.getElementById('mcpDownloadProgressBox');
+            const progTitle = document.getElementById('mcpLoadingTitle');
+            const progSub = document.getElementById('mcpLoadingSubtitle');
+            if (isDownloading) {
+              if (progTitle) progTitle.textContent = 'Setting Up Stdio Binary...';
+              if (progSub) progSub.textContent = 'Downloading ARM64 binary and configuring sandbox execution...';
+              if (progBox) progBox.style.display = 'flex';
             } else {
-              let headers = {};
-              if (txtMCPHeaders && txtMCPHeaders.value.trim()) {
+              if (progBox) progBox.style.display = 'none';
+            }
+          };
+
+          const resetMCPSavingState = () => {
+            if (btnConfirmAddMCP) {
+              btnConfirmAddMCP.disabled = false;
+              btnConfirmAddMCP.textContent = 'Save Server';
+            }
+            if (btnCancelAddMCP) btnCancelAddMCP.disabled = false;
+            if (btnCloseAddMCPModal) btnCloseAddMCPModal.disabled = false;
+            const mcpBody = document.querySelector('#modalAddMCP .modal-body');
+            if (mcpBody) mcpBody.style.pointerEvents = 'auto';
+            const progBox = document.getElementById('mcpDownloadProgressBox');
+            if (progBox) progBox.style.display = 'none';
+          };
+
+          try {
+            if (currentMCPAddTab === 'ai') {
+              const name = inputAIMCPName ? inputAIMCPName.value.trim() : '';
+              const details = txtAIMCPDetails ? txtAIMCPDetails.value.trim() : '';
+              if (!name) {
+                showToast('Service name is required');
+                return;
+              }
+              closeMCPModal();
+              closeSettingsHub();
+              const promptText = `Setup MCP Server "${name}":\n${details}`;
+              prepareWizardDraftSession(`Setup MCP: ${name}`, promptText);
+              sendWs({
+                type: 'setup_mcp_prompt',
+                name: name,
+                details: details,
+                model: state.model,
+                effort: state.effort
+              });
+              return;
+            }
+
+            let name = inputMCPName ? inputMCPName.value.trim() : '';
+            if (!name) {
+              showToast('Server name is required');
+              return;
+            }
+            name = name.replace(/\s+/g, '-');
+            if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+              showToast('Server name can only contain letters, numbers, hyphens, and underscores');
+              return;
+            }
+
+            if (currentMCPTransport === 'http') {
+              const url = inputMCPUrl ? inputMCPUrl.value.trim() : '';
+              if (!url) {
+                showToast('URL is required for HTTP transport');
+                return;
+              }
+
+              setMCPSavingState(false, 'Saving...');
+              showToast(`Saving MCP server "${name}"...`);
+
+              if (currentMCPAuthMode === 'oauth2') {
+                const clientId = inputMCPOAuthClientId ? inputMCPOAuthClientId.value.trim() : '';
+                const clientSecret = inputMCPOAuthClientSecret ? inputMCPOAuthClientSecret.value.trim() : '';
+                const scopes = inputMCPOAuthScopes ? inputMCPOAuthScopes.value.trim() : '';
+                sendWs({
+                  type: 'add_mcp_server',
+                  name: name,
+                  transport: 'http',
+                  url: url,
+                  url_or_command: url,
+                  auth_mode: 'oauth2',
+                  client_id: clientId,
+                  client_secret: clientSecret,
+                  scopes: scopes
+                });
+              } else {
+                let headers = {};
+                if (txtMCPHeaders && txtMCPHeaders.value.trim()) {
+                  try {
+                    headers = JSON.parse(txtMCPHeaders.value.trim());
+                  } catch (_) {
+                    txtMCPHeaders.value.split('\n').forEach(line => {
+                      if (line.includes(':')) {
+                        const idx = line.indexOf(':');
+                        headers[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+                      }
+                    });
+                  }
+                }
+                sendWs({
+                  type: 'add_mcp_server',
+                  name: name,
+                  transport: 'http',
+                  url: url,
+                  url_or_command: url,
+                  auth_mode: 'api_key',
+                  headers: headers
+                });
+              }
+            } else {
+              const command = inputMCPCommand ? inputMCPCommand.value.trim() : '';
+              if (!command) {
+                showToast('Command is required for Stdio transport');
+                return;
+              }
+              const downloadUrl = (inputMCPDownloadUrl ? inputMCPDownloadUrl.value.trim() : '').replace(/\s+/g, '');
+              const checksum = (inputMCPChecksum ? inputMCPChecksum.value.trim() : '').replace(/\s+/g, '');
+              const args = (inputMCPArgs && inputMCPArgs.value.trim())
+                ? inputMCPArgs.value.trim().split(/\s+/)
+                : [];
+              let env = {};
+              if (txtMCPEnv && txtMCPEnv.value.trim()) {
                 try {
-                  headers = JSON.parse(txtMCPHeaders.value.trim());
+                  env = JSON.parse(txtMCPEnv.value.trim());
                 } catch (_) {
-                  txtMCPHeaders.value.split('\n').forEach(line => {
-                    if (line.includes(':')) {
-                      const idx = line.indexOf(':');
-                      headers[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+                  txtMCPEnv.value.split('\n').forEach(line => {
+                    if (line.includes('=')) {
+                      const idx = line.indexOf('=');
+                      env[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
                     }
                   });
                 }
               }
+
+              if (downloadUrl) {
+                setMCPSavingState(true, 'Downloading...');
+              } else {
+                setMCPSavingState(false, 'Saving...');
+              }
+              showToast(`Saving MCP server "${name}"...`);
+
               sendWs({
                 type: 'add_mcp_server',
                 name: name,
-                transport: 'http',
-                url: url,
-                url_or_command: url,
-                auth_mode: 'api_key',
-                headers: headers
+                transport: 'stdio',
+                command: command,
+                url_or_command: command,
+                args: args,
+                env: env,
+                download_url: downloadUrl,
+                checksum: checksum
               });
             }
-          } else {
-            const command = inputMCPCommand ? inputMCPCommand.value.trim() : '';
-            if (!command) {
-              showToast('Command is required for Stdio transport');
-              return;
-            }
-            const downloadUrl = inputMCPDownloadUrl ? inputMCPDownloadUrl.value.trim() : '';
-            const checksum = inputMCPChecksum ? inputMCPChecksum.value.trim() : '';
-            const args = (inputMCPArgs && inputMCPArgs.value.trim())
-              ? inputMCPArgs.value.trim().split(/\s+/)
-              : [];
-            let env = {};
-            if (txtMCPEnv && txtMCPEnv.value.trim()) {
-              try {
-                env = JSON.parse(txtMCPEnv.value.trim());
-              } catch (_) {
-                txtMCPEnv.value.split('\n').forEach(line => {
-                  if (line.includes('=')) {
-                    const idx = line.indexOf('=');
-                    env[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
-                  }
-                });
-              }
-            }
-            sendWs({
-              type: 'add_mcp_server',
-              name: name,
-              transport: 'stdio',
-              command: command,
-              url_or_command: command,
-              args: args,
-              env: env,
-              download_url: downloadUrl,
-              checksum: checksum
-            });
+          } catch (err) {
+            console.error('Save MCP failed:', err);
+            showToast('Error: ' + err.message);
+            resetMCPSavingState();
           }
-        });
+        };
+
+        btnConfirmAddMCP.addEventListener('click', handleConfirmAddMCP);
+        btnConfirmAddMCP.addEventListener('touchend', handleConfirmAddMCP);
       }
 
       if (btnReRegisterMCPs) {
@@ -10711,6 +10864,7 @@
                 if (tabBtnMCPAI) tabBtnMCPAI.classList.remove('active');
                 if (mcpManualSection) mcpManualSection.style.display = 'flex';
                 if (mcpAISection) mcpAISection.style.display = 'none';
+                updateMCPCallbackUri();
                 if (btnConfirmAddMCP) btnConfirmAddMCP.textContent = 'Save Server';
                 if (typeof updateMCPKeyChips === 'function') updateMCPKeyChips();
                 if (inputMCPName) inputMCPName.value = s.name || '';
@@ -10720,6 +10874,7 @@
                   if (s.auth_mode === 'oauth2') {
                     if (mcpAuthModeOAuth) mcpAuthModeOAuth.click();
                     if (inputMCPOAuthClientId) inputMCPOAuthClientId.value = s.client_id || '';
+                    if (inputMCPOAuthClientSecret) inputMCPOAuthClientSecret.value = s.client_secret || '';
                     if (inputMCPOAuthScopes) inputMCPOAuthScopes.value = s.scopes || '';
                   } else {
                     if (mcpAuthModeApiKey) mcpAuthModeApiKey.click();
