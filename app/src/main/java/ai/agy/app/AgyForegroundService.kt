@@ -83,10 +83,12 @@ class AgyForegroundService : Service() {
 
         serviceScope.launch {
             EnvironmentBootstrapper.initialize(this@AgyForegroundService)
+            if (!isActive || isStopping) return@launch
             reconcileSymlinkFarmAndLock(this@AgyForegroundService)
             registerDnsWatcher()
             registerTelemetryBridge()
             cleanupStaleDaemonProcesses()
+            if (!isActive || isStopping) return@launch
 
             val port = pickAvailablePort(8081, listOf(8082, 8090, 8091))
             val token = java.util.UUID.randomUUID().toString().replace("-", "")
@@ -98,6 +100,7 @@ class AgyForegroundService : Service() {
     }
 
     private fun acquireWakeLock() {
+        if (isStopping) return
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         if (wakeLock == null) {
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AgyStudio::DaemonWakeLock").apply {
@@ -195,6 +198,7 @@ class AgyForegroundService : Service() {
     }
 
     private fun startPythonDaemon(port: Int, token: String) {
+        if (isStopping) return
         val root = "/data/data/$packageName/files"
         val usr = "$root/usr"
         val home = "$root/home"
@@ -290,38 +294,43 @@ class AgyForegroundService : Service() {
             if (pidFile.exists()) {
                 val oldPid = pidFile.readText().trim().toIntOrNull()
                 if (oldPid != null && oldPid > 0 && oldPid != myPid) {
-                    try {
-                        android.system.Os.kill(oldPid, 9)
-                    } catch (_: Exception) {}
+                    try { android.system.Os.kill(-oldPid, 9) } catch (_: Exception) {}
+                    try { android.system.Os.kill(oldPid, 9) } catch (_: Exception) {}
                 }
                 pidFile.delete()
             }
-            // Scan /proc for leftover processes belonging to this UID
-            val procDir = File("/proc")
-            procDir.listFiles()?.forEach { file ->
-                if (file.isDirectory && file.name.all { it.isDigit() }) {
-                    val pid = file.name.toIntOrNull() ?: return@forEach
-                    if (pid != myPid) {
-                        try {
-                            if (killAllUnderUid) {
-                                val stat = android.system.Os.stat(file.absolutePath)
-                                if (stat.st_uid == myUid) {
-                                    android.system.Os.kill(pid, 9)
+            val passes = if (killAllUnderUid) 2 else 1
+            repeat(passes) {
+                val procDir = File("/proc")
+                procDir.listFiles()?.forEach { file ->
+                    if (file.isDirectory && file.name.all { it.isDigit() }) {
+                        val pid = file.name.toIntOrNull() ?: return@forEach
+                        if (pid != myPid) {
+                            try {
+                                if (killAllUnderUid) {
+                                    val stat = android.system.Os.stat(file.absolutePath)
+                                    if (stat.st_uid == myUid) {
+                                        try { android.system.Os.kill(-pid, 9) } catch (_: Exception) {}
+                                        android.system.Os.kill(pid, 9)
+                                    }
+                                } else {
+                                    val cmdline = File(file, "cmdline").readText()
+                                    if (cmdline.contains("server.py") || cmdline.contains("/opt/agy/agy") || cmdline.contains("agy acp")) {
+                                        try { android.system.Os.kill(-pid, 9) } catch (_: Exception) {}
+                                        android.system.Os.kill(pid, 9)
+                                    }
                                 }
-                            } else {
-                                val cmdline = File(file, "cmdline").readText()
-                                if (cmdline.contains("server.py") || cmdline.contains("/opt/agy/agy") || cmdline.contains("agy acp")) {
-                                    android.system.Os.kill(pid, 9)
-                                }
-                            }
-                        } catch (_: Exception) {}
+                            } catch (_: Exception) {}
+                        }
                     }
                 }
             }
-            val pkillBin = File("$usr/bin/pkill")
-            if (pkillBin.exists()) {
-                Runtime.getRuntime().exec(arrayOf(pkillBin.absolutePath, "-9", "-f", "server.py")).waitFor()
-                Runtime.getRuntime().exec(arrayOf(pkillBin.absolutePath, "-9", "-f", "/opt/agy/agy")).waitFor()
+            if (!killAllUnderUid) {
+                val pkillBin = File("$usr/bin/pkill")
+                if (pkillBin.exists()) {
+                    Runtime.getRuntime().exec(arrayOf(pkillBin.absolutePath, "-9", "-f", "server.py")).waitFor()
+                    Runtime.getRuntime().exec(arrayOf(pkillBin.absolutePath, "-9", "-f", "/opt/agy/agy")).waitFor()
+                }
             }
         } catch (_: Exception) {}
     }
@@ -402,25 +411,27 @@ class AgyForegroundService : Service() {
         _readyPortFlow.value = null
         _authTokenFlow.value = null
 
-        // 1. Release wake lock immediately to allow device to enter deep sleep / Doze
+        // 1. Cancel background coroutine scope first so IO readers cannot re-acquire WakeLock
+        try {
+            serviceScope.cancel()
+        } catch (_: Exception) {}
+
+        // 2. Release wake lock immediately to allow device to enter deep sleep / Doze
         wakeLock?.let {
             if (it.isHeld) it.release()
             wakeLock = null
         }
 
-        // 2. Clear ephemeral session token and cancel background service scope
+        // 3. Clear ephemeral session token and destroy direct daemon child
         try {
             File("/data/data/$packageName/files/usr/tmp/.auth_token").delete()
-        } catch (_: Exception) {}
-        try {
-            serviceScope.cancel()
         } catch (_: Exception) {}
         try {
             daemonProcess?.destroyForcibly()
             daemonProcess = null
         } catch (_: Exception) {}
 
-        // 3. Unregister network/battery monitors and close vault socket
+        // 4. Unregister network/battery monitors and close vault socket
         networkCallback?.let {
             val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             try { cm.unregisterNetworkCallback(it) } catch (_: Exception) {}
@@ -435,10 +446,13 @@ class AgyForegroundService : Service() {
             vaultServerSocket = null
         }
 
-        // 4. Force-kill all child, PRoot, MCP, compiler, and daemon processes under this UID
+        // 5. Force-kill all child, PRoot, MCP, compiler, and daemon processes under this UID
         cleanupStaleDaemonProcesses(killAllUnderUid = true)
 
-        // 5. Dismiss notification and stop foreground service
+        // 6. Dismiss all notifications (including pinned live notifications) and stop foreground service
+        try {
+            getSystemService(NotificationManager::class.java)?.cancelAll()
+        } catch (_: Exception) {}
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -449,12 +463,15 @@ class AgyForegroundService : Service() {
             stopSelf()
         } catch (_: Exception) {}
 
-        // 6. Hard-kill host process (Force Stop equivalent)
+        // 7. Finish MainActivity (if open) and schedule hard-kill after Binder lifecycle completes
         if (killHostProcess) {
-            val myPid = android.os.Process.myPid()
-            Log.i(TAG, "Killing host process $myPid (force-stop equivalent)")
-            android.os.Process.killProcess(myPid)
-            kotlin.system.exitProcess(0)
+            MainActivity.finishAndRemoveTaskIfActive()
+            Handler(Looper.getMainLooper()).postDelayed({
+                val myPid = android.os.Process.myPid()
+                Log.i(TAG, "Killing host process $myPid (force-stop equivalent)")
+                android.os.Process.killProcess(myPid)
+                kotlin.system.exitProcess(0)
+            }, 150L)
         }
     }
 

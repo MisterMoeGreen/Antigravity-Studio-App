@@ -46,6 +46,17 @@ class MainActivity : AppCompatActivity() {
                 )
             }
         }
+
+        fun finishAndRemoveTaskIfActive() {
+            val act = activeInstance ?: return
+            act.runOnUiThread {
+                try {
+                    act.finishAndRemoveTask()
+                } catch (_: Exception) {
+                    try { act.finishAffinity() } catch (_: Exception) {}
+                }
+            }
+        }
     }
 
     private val fileChooserLauncher = registerForActivityResult(
