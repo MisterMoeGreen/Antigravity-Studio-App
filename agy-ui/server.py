@@ -355,6 +355,32 @@ def patch_raw_summary_workspace(data: bytes, new_ws_uri: str) -> bytes:
             new_fields.append((fn, wt, val))
     return _encode_proto_fields(new_fields)
 
+def patch_executor_metadata(data: bytes, new_ws_uri: str) -> bytes:
+    """Rewrites the workspace URI (subfield 12) inside executor_metadata turn snapshots."""
+    fields = _decode_proto_fields(data)
+    new_fields = []
+    new_ws_encoded = new_ws_uri.encode("utf-8")
+    for fn, wt, val in fields:
+        if wt == 2 and isinstance(val, (bytes, bytearray)):
+            try:
+                sub_fields = _decode_proto_fields(val)
+                modified = False
+                new_sub = []
+                for sfn, swt, sval in sub_fields:
+                    if sfn == 12 and swt == 2 and isinstance(sval, (bytes, bytearray)) and sval.startswith(b"file://"):
+                        new_sub.append((sfn, swt, new_ws_encoded))
+                        modified = True
+                    else:
+                        new_sub.append((sfn, swt, sval))
+                if modified:
+                    new_fields.append((fn, wt, _encode_proto_fields(new_sub)))
+                    continue
+            except Exception:
+                pass
+        new_fields.append((fn, wt, val))
+    return _encode_proto_fields(new_fields)
+
+
 APP_DIR = Path(__file__).resolve().parent
 INDEX_HTML_PATH = APP_DIR / "index.html"
 UPLOADS_DIR = APP_DIR / "uploads"
@@ -4989,6 +5015,15 @@ class AntigravityStorageEngine:
                     if row and row[1]:
                         patched_blob = patch_trajectory_metadata_blob(row[1], ws_uri)
                         cur.execute("UPDATE trajectory_metadata_blob SET data = ? WHERE id = ?", (patched_blob, row[0]))
+                    try:
+                        for em_idx, em_data in cur.execute("SELECT idx, data FROM executor_metadata").fetchall():
+                            if em_data:
+                                cur.execute(
+                                    "UPDATE executor_metadata SET data = ? WHERE idx = ?",
+                                    (patch_executor_metadata(em_data, ws_uri), em_idx),
+                                )
+                    except Exception as em_exc:
+                        logger.warning("Failed patching executor_metadata for %s: %s", cid, em_exc)
                 conn.close()
                 logger.info("Updated trajectory_metadata_blob for %s to %s", cid, clean_path)
             except Exception as exc:
@@ -6125,6 +6160,8 @@ class AgyProcessOrchestrator:
         self._acp_initialized: bool = False
         self._acp_reader_task: Optional[asyncio.Task] = None
         self._acp_stderr_task: Optional[asyncio.Task] = None
+        self._acp_cwd: Optional[str] = None
+        self._desired_acp_cwd: Optional[str] = None
 
         # Background Task Telemetry (ARGON-18-03)
         self.server_start_time: float = time.time()
@@ -6327,8 +6364,13 @@ class AgyProcessOrchestrator:
 
             cmd = [str(AGY_BIN), "acp", "--dangerously-skip-permissions"]
             logger.info("Spawning persistent agy acp daemon: %s", " ".join(cmd))
+            want_cwd = self._desired_acp_cwd
             def_ws = get_default_workspace()
-            acp_cwd = def_ws if (def_ws and Path(def_ws).is_dir()) else str(HOME_DIR)
+            if want_cwd and Path(want_cwd).is_dir():
+                acp_cwd = want_cwd
+            else:
+                acp_cwd = def_ws if (def_ws and Path(def_ws).is_dir()) else str(HOME_DIR)
+            self._acp_cwd = acp_cwd
             self.acp_proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdin=asyncio.subprocess.PIPE,
@@ -6372,6 +6414,26 @@ class AgyProcessOrchestrator:
             except Exception as e:
                 logger.error("Failed to initialize agy acp daemon: %s", e)
                 raise
+
+    async def sync_acp_cwd(self, workspace: Optional[str], current_cid: str = "") -> bool:
+        """Restarts the ACP daemon in `workspace` so tool execution (pwd, run_command) follows it.
+        The Go daemon uses its process cwd for command execution, so this is the only reliable way.
+        Skipped when other sessions are mid-turn to avoid interrupting them."""
+        if not workspace or not Path(workspace).is_dir():
+            return False
+        ws = str(Path(workspace).resolve())
+        self._desired_acp_cwd = ws
+        if self._acp_cwd == ws:
+            return False
+        if self.acp_proc is None or self.acp_proc.returncode is not None:
+            return False
+        busy = [c for c in self._sessions.values() if c.is_running and c.conversation_id != current_cid]
+        if busy:
+            logger.info("Deferring ACP cwd switch to %s: %d other session(s) running", ws, len(busy))
+            return False
+        logger.info("Recycling ACP daemon to switch cwd %s -> %s", self._acp_cwd, ws)
+        await self.recycle_acp_daemon()
+        return True
 
     async def close_acp_session(self, cid: str) -> None:
         """Closes and evicts a specific session from the agy acp daemon (ARGON-18-02)."""
@@ -7485,7 +7547,11 @@ class AgyProcessOrchestrator:
                     )
                     return
 
-                # Ensure persistent ACP daemon is ready
+                # Ensure ACP daemon runs in this session's workspace, then is ready
+                try:
+                    await self.sync_acp_cwd(ctx.workspace, current_cid=cid)
+                except Exception as cwd_err:
+                    logger.warning("ACP cwd sync failed: %s", cwd_err)
                 await self.ensure_acp_daemon()
 
                 # Resolve or initialize ACP session
@@ -7553,7 +7619,7 @@ class AgyProcessOrchestrator:
                         try:
                             try:
                                 # Primary: session/resume restores session without replaying history (ARGON-18-01)
-                                await self.acp_call("session/resume", {"sessionId": cid, "workspaceUris": [ws_uri]}, timeout=15.0)
+                                await self.acp_call("session/resume", {"sessionId": cid, "cwd": str(ws_candidate or HOME_DIR), "workspaceUris": [ws_uri]}, timeout=15.0)
                                 acp_session_id = cid
                             except Exception as resume_err:
                                 logger.debug("session/resume failed for %s, trying session/load: %s", cid, resume_err)
@@ -12844,18 +12910,16 @@ class AgyWebServer:
                         ctx.workspace = target_str
                         self.storage.update_conversation_workspace(cid, target_str)
                         if cid in self.orchestrator._acp_sessions:
+                            # Evict from daemon memory; next turn reloads from patched disk state
+                            # and sync_acp_cwd() restarts the daemon in the new folder.
                             try:
-                                acp_sid = self.orchestrator._acp_sessions[cid]
-                                await self.orchestrator.acp_call(
-                                    "session/resume",
-                                    {
-                                        "sessionId": acp_sid,
-                                        "workspaceUris": [f"file://{target_str}"],
-                                    },
-                                    timeout=15.0,
-                                )
+                                await self.orchestrator.close_acp_session(cid)
                             except Exception as acp_err:
-                                logger.warning("Failed to update workspace in ACP session %s: %s", cid, acp_err)
+                                logger.warning("Failed to evict ACP session %s: %s", cid, acp_err)
+                        try:
+                            await self.orchestrator.sync_acp_cwd(target_str, current_cid=cid)
+                        except Exception as cwd_err:
+                            logger.warning("ACP cwd sync failed: %s", cwd_err)
                     else:
                         self.orchestrator.draft_context.workspace = target_str
                     self.orchestrator.config.workspace = target_str
