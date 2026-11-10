@@ -409,7 +409,7 @@ def get_agy_version() -> str:
 
     return _cached_agy_version or os.environ.get("AGY_RUNTIME_VERSION", "1.4.7")
 
-APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.9.0")
+APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.9.1")
 APP_BUILD = os.environ.get("AGY_APP_VERSION_CODE", "84")
 AGY_VERSION = get_agy_version()
 
@@ -5956,11 +5956,15 @@ def get_git_branch(workspace_dir: str) -> Optional[str]:
 def get_default_workspace() -> str:
     settings = load_app_settings()
     saved_ws = settings.get("default_workspace")
-    if saved_ws and Path(saved_ws).is_dir():
-        return str(Path(saved_ws).resolve())
+    if saved_ws:
+        expanded = Path(os.path.expanduser(str(saved_ws))).resolve()
+        if expanded.is_dir():
+            return str(expanded)
     env_ws = os.environ.get("AGY_WORKSPACE")
-    if env_ws and Path(env_ws).is_dir():
-        return str(Path(env_ws).resolve())
+    if env_ws:
+        expanded_env = Path(os.path.expanduser(str(env_ws))).resolve()
+        if expanded_env.is_dir():
+            return str(expanded_env)
     docs = Path("/storage/emulated/0/Documents")
     if docs.is_dir():
         return str(docs)
@@ -6323,12 +6327,14 @@ class AgyProcessOrchestrator:
 
             cmd = [str(AGY_BIN), "acp", "--dangerously-skip-permissions"]
             logger.info("Spawning persistent agy acp daemon: %s", " ".join(cmd))
+            def_ws = get_default_workspace()
+            acp_cwd = def_ws if (def_ws and Path(def_ws).is_dir()) else str(HOME_DIR)
             self.acp_proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=str(HOME_DIR),
+                cwd=acp_cwd,
                 env=proc_env,
                 limit=16 * 1024 * 1024,
                 start_new_session=True,
@@ -7489,7 +7495,9 @@ class AgyProcessOrchestrator:
                         async with self._new_session_lock:
                             self._initializing_ctx = ctx
                             try:
-                                ws_uri = f"file://{ctx.workspace}" if ctx.workspace and Path(ctx.workspace).is_dir() else f"file://{HOME_DIR}"
+                                def_ws = get_default_workspace()
+                                ws_candidate = ctx.workspace if (ctx.workspace and Path(ctx.workspace).is_dir()) else def_ws
+                                ws_uri = f"file://{ws_candidate}" if (ws_candidate and Path(ws_candidate).is_dir()) else f"file://{HOME_DIR}"
                                 new_res = await self.acp_call("session/new", {"workspaceUris": [ws_uri]}, timeout=30.0)
                                 real_cid = str(new_res.get("sessionId") or "")
                                 if not real_cid:
@@ -7539,7 +7547,9 @@ class AgyProcessOrchestrator:
                                 self._initializing_ctx = None
                     else:
                         self._acp_loading_sessions.add(cid)
-                        ws_uri = f"file://{ctx.workspace}" if ctx.workspace and Path(ctx.workspace).is_dir() else f"file://{HOME_DIR}"
+                        def_ws = get_default_workspace()
+                        ws_candidate = ctx.workspace if (ctx.workspace and Path(ctx.workspace).is_dir()) else def_ws
+                        ws_uri = f"file://{ws_candidate}" if (ws_candidate and Path(ws_candidate).is_dir()) else f"file://{HOME_DIR}"
                         try:
                             try:
                                 # Primary: session/resume restores session without replaying history (ARGON-18-01)
@@ -12363,6 +12373,9 @@ class AgyWebServer:
             use_mode = req_mode or def_mode
             use_effort = req_effort or def_effort
 
+            self.default_workspace = get_default_workspace()
+            self.orchestrator.default_workspace = self.default_workspace
+            self.orchestrator.config.workspace = self.default_workspace
             self.orchestrator.active_view_cid = None
             save_app_settings({"last_active_cid": None})
             self.orchestrator.draft_context = SessionExecutionContext(
@@ -12782,13 +12795,31 @@ class AgyWebServer:
             if req_path:
                 target = Path(os.path.expanduser(req_path)).resolve()
                 if target.is_dir():
-                    self.default_workspace = str(target)
+                    target_str = str(target)
+                    self.default_workspace = target_str
+                    self.orchestrator.default_workspace = target_str
+                    self.orchestrator.draft_context.workspace = target_str
+                    if not self.orchestrator.active_view_cid:
+                        self.orchestrator.config.workspace = target_str
+                        branch = get_git_branch(target_str)
+                        await self.broadcast({
+                            "type": "config_updated",
+                            "conversation_id": None,
+                            "config": {
+                                "conversation_id": None,
+                                "model": self.orchestrator.config.model,
+                                "mode": self.orchestrator.config.mode,
+                                "effort": self.orchestrator.config.effort,
+                                "workspace": target_str,
+                                "git_branch": branch,
+                            },
+                        })
                     settings = load_app_settings()
-                    settings["default_workspace"] = str(target)
+                    settings["default_workspace"] = target_str
                     save_app_settings(settings)
                     await self.broadcast({
                         "type": "default_workspace_updated",
-                        "default_workspace": str(target),
+                        "default_workspace": target_str,
                     })
                     await self.broadcast({
                         "type": "system_card",
@@ -12802,6 +12833,8 @@ class AgyWebServer:
             req_path = str(data.get("path") or "").strip()
             raw_cid = data.get("conversation_id")
             cid = str(raw_cid).strip() if raw_cid else ""
+            if cid in self.orchestrator._migrated_cids:
+                cid = self.orchestrator._migrated_cids[cid]
             if req_path:
                 target = Path(os.path.expanduser(req_path)).resolve()
                 if target.is_dir():
@@ -12810,6 +12843,19 @@ class AgyWebServer:
                         ctx = self.orchestrator.get_or_create_context(cid)
                         ctx.workspace = target_str
                         self.storage.update_conversation_workspace(cid, target_str)
+                        if cid in self.orchestrator._acp_sessions:
+                            try:
+                                acp_sid = self.orchestrator._acp_sessions[cid]
+                                await self.orchestrator.acp_call(
+                                    "session/resume",
+                                    {
+                                        "sessionId": acp_sid,
+                                        "workspaceUris": [f"file://{target_str}"],
+                                    },
+                                    timeout=15.0,
+                                )
+                            except Exception as acp_err:
+                                logger.warning("Failed to update workspace in ACP session %s: %s", cid, acp_err)
                     else:
                         self.orchestrator.draft_context.workspace = target_str
                     self.orchestrator.config.workspace = target_str

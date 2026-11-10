@@ -5677,6 +5677,10 @@
           closeOverlays();
           state.isExplicitDraft = true;
           state.conversationId = null;
+          if (state.defaultWorkspace) {
+            state.workspace = state.defaultWorkspace;
+            updateWorkspaceStatusBar(state.defaultWorkspace);
+          }
           try { localStorage.removeItem('agy_last_active_cid'); } catch (_) {}
           if (window.AndroidApp && typeof window.AndroidApp.setActiveSession === 'function') {
             window.AndroidApp.setActiveSession(null);
@@ -6631,6 +6635,10 @@
             updateConfigPills(msg.config);
             if (msg.default_workspace) {
               updateDrawerDefaultWorkspace(msg.default_workspace);
+              if (!state.conversationId && (!state.workspace || state.workspace === '~/workspace')) {
+                state.workspace = msg.default_workspace;
+                updateWorkspaceStatusBar(msg.default_workspace);
+              }
             }
             state.sessions = msg.sessions || [];
             const savedUnreads = loadUnreadFromStorage();
@@ -6723,6 +6731,10 @@
           case 'default_workspace_updated':
             if (msg.default_workspace) {
               updateDrawerDefaultWorkspace(msg.default_workspace);
+              if (!state.conversationId || state.isExplicitDraft) {
+                state.workspace = msg.default_workspace;
+                updateWorkspaceStatusBar(msg.default_workspace);
+              }
             }
             break;
 
@@ -8946,6 +8958,10 @@
           closeOverlays();
           state.isExplicitDraft = true;
           state.conversationId = null;
+          if (state.defaultWorkspace) {
+            state.workspace = state.defaultWorkspace;
+            updateWorkspaceStatusBar(state.defaultWorkspace);
+          }
           try { localStorage.removeItem('agy_last_active_cid'); } catch (_) {}
           if (window.AndroidApp && typeof window.AndroidApp.setActiveSession === 'function') {
             window.AndroidApp.setActiveSession(null);
@@ -9602,6 +9618,10 @@
                 path: selected,
               });
               updateDrawerDefaultWorkspace(selected);
+              if (!state.conversationId || state.isExplicitDraft) {
+                state.workspace = selected;
+                updateWorkspaceStatusBar(selected);
+              }
               showToast('Default workspace set: ' + formatWorkspacePath(selected));
             } else {
               state.workspace = selected;
