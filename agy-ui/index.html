@@ -2381,6 +2381,30 @@
       color: var(--text-secondary);
       border: 1px solid var(--border-subtle);
     }
+    .subview-action-btn.danger {
+      background: rgba(239, 68, 68, 0.12);
+      color: #ef4444;
+      border: 1px solid rgba(239, 68, 68, 0.35);
+    }
+    .account-status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 11.5px;
+      font-weight: 600;
+    }
+    .account-status-pill.authenticated {
+      background: rgba(16, 185, 129, 0.14);
+      color: #10b981;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    .account-status-pill.unauthenticated {
+      background: rgba(245, 158, 11, 0.14);
+      color: #f59e0b;
+      border: 1px solid rgba(245, 158, 11, 0.3);
+    }
     .subview-body {
       flex: 1;
       overflow-y: auto;
@@ -4192,6 +4216,18 @@
           Configure mobile system prompts, developer SSH keys, API credentials, custom skills, and MCP servers.
         </div>
         <div class="settings-menu-group">
+          <!-- Account -->
+          <div class="settings-menu-item" data-target="viewAccount">
+            <div class="settings-menu-icon">
+              <svg class="fa-icon" viewBox="0 0 512 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M399 384.2C376.9 345.8 335.4 320 288 320l-64 0c-47.4 0-88.9 25.8-111 64.2c35.2 39.2 86.2 63.8 143 63.8s107.8-24.7 143-63.8zM0 256a256 256 0 1 1 512 0A256 256 0 1 1 0 256zm256 16a72 72 0 1 0 0-144 72 72 0 1 0 0 144z"/></svg>
+            </div>
+            <div class="settings-menu-info">
+              <div class="settings-menu-title">Account</div>
+              <div class="settings-menu-desc" id="settingsAccountMenuDesc">Google account & authentication</div>
+            </div>
+            <svg class="settings-menu-chevron fa-icon" viewBox="0 0 320 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg>
+          </div>
+
           <!-- Custom Instructions -->
           <div class="settings-menu-item" data-target="viewPrompts">
             <div class="settings-menu-icon">
@@ -4708,6 +4744,59 @@
       </div>
     </div>
 
+    <!-- View: Account -->
+    <div class="settings-subview" id="viewAccount">
+      <div class="subview-header">
+        <button class="icon-btn subview-back-btn" data-back="viewAccount" title="Back to menu">
+          <svg class="fa-icon" viewBox="0 0 448 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M9.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.2 288 416 288c17.7 0 32-14.3 32-32s-14.3-32-32-32l-306.7 0L214.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg>
+        </button>
+        <div class="subview-title">Account</div>
+        <button class="icon-btn" id="btnCloseAccountView" title="Close Settings">
+          <svg class="fa-icon" viewBox="0 0 384 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M342.6 150.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L192 210.7 86.6 105.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L146.7 256 41.4 361.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192 301.3 297.4 406.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L237.3 256 342.6 150.6z"/></svg>
+        </button>
+      </div>
+      <div class="subview-body" style="padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));">
+        <div class="settings-card" style="padding:16px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:14px;display:flex;flex-direction:column;gap:14px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+            <div style="display:flex;align-items:center;gap:12px;min-width:0;flex:1;">
+              <div style="width:42px;height:42px;border-radius:12px;background:rgba(99,102,241,0.14);color:var(--accent-primary);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                <svg class="fa-icon" viewBox="0 0 512 512" style="width:20px;height:20px;" aria-hidden="true" focusable="false"><path fill="currentColor" d="M399 384.2C376.9 345.8 335.4 320 288 320l-64 0c-47.4 0-88.9 25.8-111 64.2c35.2 39.2 86.2 63.8 143 63.8s107.8-24.7 143-63.8zM0 256a256 256 0 1 1 512 0A256 256 0 1 1 0 256zm256 16a72 72 0 1 0 0-144 72 72 0 1 0 0 144z"/></svg>
+              </div>
+              <div style="min-width:0;flex:1;">
+                <div style="font-size:15px;font-weight:600;color:var(--text-primary);word-break:break-word;" id="accountEmailText">Checking status...</div>
+                <div style="font-size:12px;color:var(--text-secondary);margin-top:2px;" id="accountMethodText">Google OAuth</div>
+              </div>
+            </div>
+            <span class="account-status-pill unauthenticated" id="accountStatusBadge">Checking...</span>
+          </div>
+
+          <!-- Authenticated Actions -->
+          <div id="accountSignedInActions" style="display:none;flex-direction:column;gap:10px;">
+            <button type="button" class="subview-action-btn primary" id="btnAccountReauth" style="width:100%;min-height:44px;touch-action:manipulation;">
+              Reauthenticate / Switch Account
+            </button>
+            <button type="button" class="updates-secondary-btn" id="btnAccountLogout" style="width:100%;min-height:44px;touch-action:manipulation;">
+              Log Out
+            </button>
+          </div>
+
+          <!-- Unauthenticated Actions -->
+          <div id="accountSignedOutActions" style="display:none;flex-direction:column;gap:10px;">
+            <div style="font-size:12.5px;color:var(--text-secondary);line-height:1.45;">
+              Sign in with your Google account to connect Antigravity CLI and run AI conversations.
+            </div>
+            <button type="button" class="subview-action-btn primary" id="btnAccountLogin" style="width:100%;min-height:44px;touch-action:manipulation;">
+              Sign In with Google
+            </button>
+          </div>
+        </div>
+
+        <div class="settings-info-banner">
+          OAuth credentials are stored securely in internal app storage and are never exposed in chat or logs.
+        </div>
+      </div>
+    </div>
+
   </div>
 
   <!-- Modal: Generate SSH Key -->
@@ -5196,6 +5285,7 @@
         isRunning: false,
         isAuthenticating: false,
         isAuthenticated: false,
+        account: { authenticated: false, email: null, auth_method: null },
         conversationId: null,
         activePreviewRequestId: null,
         model: localStorage.getItem('agy_user_model') || 'gemini-3.8-flash',
@@ -5449,6 +5539,10 @@
           if (this.btnClose) {
             this.btnClose.addEventListener('click', () => {
               this.hide();
+              if (state.isAuthenticating) {
+                state.isAuthenticating = false;
+                sendWs({ type: 'cancel_auth' });
+              }
             });
           }
 
@@ -6706,11 +6800,14 @@
             }
             if (msg.is_authenticated === false) {
               state.isAuthenticated = false;
+              state.account = msg.account || { authenticated: false, email: null, auth_method: null };
               authOverlay.show('required');
             } else if (msg.is_authenticated === true) {
               state.isAuthenticated = true;
+              state.account = msg.account || { authenticated: true, email: null, auth_method: null };
               authOverlay.hide();
             }
+            renderAccountView();
             if (msg.engine) {
               state.engine = msg.engine;
               if (typeof updateEngineUI === 'function') updateEngineUI(msg.engine);
@@ -7280,6 +7377,12 @@
           case 'auth_success':
             state.isAuthenticated = true;
             state.isAuthenticating = false;
+            if (msg.account) {
+              state.account = msg.account;
+            } else {
+              state.account = Object.assign({}, state.account, { authenticated: true });
+            }
+            renderAccountView();
             authOverlay.setSubmitting(false);
             authOverlay.showAlert('Sign-In Confirmed! Setting up runtime...', 'success');
             setInitializingControlsState(false);
@@ -7288,6 +7391,24 @@
             }, 600);
             sendWs({ type: 'refresh_models' });
             showToast('Google Sign-In Successful!');
+            break;
+
+          case 'account_status':
+            state.isAuthenticated = !!msg.authenticated;
+            state.account = {
+              authenticated: !!msg.authenticated,
+              email: msg.email || null,
+              auth_method: msg.auth_method || null,
+            };
+            renderAccountView();
+            break;
+
+          case 'auth_logged_out':
+            state.isAuthenticated = false;
+            state.isAuthenticating = false;
+            state.account = msg.account || { authenticated: false, email: null, auth_method: null };
+            renderAccountView();
+            showToast('Logged out of Google account');
             break;
 
           case 'auth_failed':
@@ -7623,6 +7744,9 @@
                 timingEl.textContent = `${msg.duration_ms || 0}ms`;
               }
             }
+            if (msg.workspace) {
+              updateWorkspaceStatusBar(msg.workspace, msg.git_branch);
+            }
             if (state.activeTerminalCommandId === msg.command_id) {
               state.activeTerminalCommandId = null;
               resetSendButtonToIdle();
@@ -7630,9 +7754,6 @@
                 const wsShort = state.workspace ? state.workspace.replace(/^.*[\\\/]/, '') : 'workspace';
                 promptInput.placeholder = `$ Run terminal command in ~/${wsShort}...`;
               }
-            }
-            if (msg.workspace) {
-              updateWorkspaceStatusBar(msg.workspace, msg.git_branch);
             }
             break;
           }
@@ -9727,7 +9848,7 @@
       const btnCloseSettingsHub = document.getElementById('btnCloseSettingsHub');
 
       let currentSettingsView = 'viewSettingsMenu';
-      const settingsViews = ['viewSettingsMenu', 'viewPrompts', 'viewSSH', 'viewApiKeys', 'viewSkills', 'viewMCP', 'viewPackages', 'viewUpdates', 'viewExportImport'];
+      const settingsViews = ['viewSettingsMenu', 'viewAccount', 'viewPrompts', 'viewSSH', 'viewApiKeys', 'viewSkills', 'viewMCP', 'viewPackages', 'viewUpdates', 'viewExportImport'];
 
       function openSettingsHub() {
         if (!settingsHub) return;
@@ -9735,6 +9856,7 @@
         settingsHub.setAttribute('aria-hidden', 'false');
         navigateSettingsView('viewSettingsMenu');
         // Initial data sync
+        sendWs({ type: 'get_account_status' });
         sendWs({ type: 'get_user_prompt' });
         sendWs({ type: 'list_ssh_keys' });
         sendWs({ type: 'list_api_keys' });
@@ -9782,7 +9904,10 @@
         currentSettingsView = targetId;
 
         // Specific loader per view
-        if (targetId === 'viewPrompts') {
+        if (targetId === 'viewAccount') {
+          renderAccountView();
+          sendWs({ type: 'get_account_status' });
+        } else if (targetId === 'viewPrompts') {
           sendWs({ type: 'get_user_prompt' });
         } else if (targetId === 'viewSSH') {
           sendWs({ type: 'list_ssh_keys' });
@@ -9827,6 +9952,105 @@
           if (backTarget) goBackSettingsView(backTarget);
         });
       });
+
+      // ---------------------------------------------------------------------
+      // Account Settings View Logic
+      // ---------------------------------------------------------------------
+      const settingsAccountMenuDesc = document.getElementById('settingsAccountMenuDesc');
+      const accountEmailText = document.getElementById('accountEmailText');
+      const accountMethodText = document.getElementById('accountMethodText');
+      const accountStatusBadge = document.getElementById('accountStatusBadge');
+      const accountSignedInActions = document.getElementById('accountSignedInActions');
+      const accountSignedOutActions = document.getElementById('accountSignedOutActions');
+      const btnCloseAccountView = document.getElementById('btnCloseAccountView');
+      const btnAccountReauth = document.getElementById('btnAccountReauth');
+      const btnAccountLogout = document.getElementById('btnAccountLogout');
+      const btnAccountLogin = document.getElementById('btnAccountLogin');
+
+      function formatAuthMethodLabel(method) {
+        if (!method) return 'Google OAuth';
+        if (method === 'consumer') return 'Google OAuth (Personal)';
+        if (method === 'enterprise') return 'Google OAuth (Workspace / Enterprise)';
+        return `Google OAuth (${method})`;
+      }
+
+      function renderAccountView() {
+        const acct = state.account || {};
+        const authed = !!(acct.authenticated || state.isAuthenticated);
+        const email = acct.email || '';
+        const methodLabel = formatAuthMethodLabel(acct.auth_method);
+
+        if (settingsAccountMenuDesc) {
+          settingsAccountMenuDesc.textContent = authed
+            ? (email || 'Signed in with Google')
+            : 'Not signed in';
+        }
+        if (accountEmailText) {
+          accountEmailText.textContent = authed
+            ? (email || 'Google Account')
+            : 'Not Signed In';
+        }
+        if (accountMethodText) {
+          accountMethodText.textContent = authed
+            ? methodLabel
+            : 'No active Google OAuth session';
+        }
+        if (accountStatusBadge) {
+          accountStatusBadge.textContent = authed ? 'Signed In' : 'Not Signed In';
+          accountStatusBadge.className = `account-status-pill ${authed ? 'authenticated' : 'unauthenticated'}`;
+        }
+        if (accountSignedInActions) {
+          accountSignedInActions.style.display = authed ? 'flex' : 'none';
+        }
+        if (accountSignedOutActions) {
+          accountSignedOutActions.style.display = authed ? 'none' : 'flex';
+        }
+        if (btnAccountLogout) {
+          btnAccountLogout.disabled = false;
+          btnAccountLogout.textContent = 'Log Out';
+        }
+      }
+
+      function launchExistingAuthFlow(reason) {
+        state.isAuthenticating = true;
+        authOverlay.show(reason);
+        if (authOverlay.btnGoogle) authOverlay.btnGoogle.disabled = true;
+        if (authOverlay.labelGoogle) authOverlay.labelGoogle.textContent = 'Generating Sign-In Link...';
+        sendWs({ type: 'trigger_login' });
+        setTimeout(() => {
+          if (authOverlay.btnGoogle) authOverlay.btnGoogle.disabled = false;
+          const curHref = authOverlay.linkDirect ? (authOverlay.linkDirect.getAttribute('href') || '') : '';
+          if (authOverlay.labelGoogle && authOverlay.labelGoogle.textContent === 'Generating Sign-In Link...') {
+            authOverlay.labelGoogle.textContent = curHref.startsWith('https://accounts.google.com')
+              ? 'Re-open Sign-In Page'
+              : 'Sign In with Google';
+          }
+        }, 5000);
+      }
+
+      if (btnCloseAccountView) {
+        btnCloseAccountView.addEventListener('click', closeSettingsHub);
+      }
+      if (btnAccountReauth) {
+        btnAccountReauth.addEventListener('click', () => {
+          launchExistingAuthFlow('reauth');
+        });
+      }
+      if (btnAccountLogin) {
+        btnAccountLogin.addEventListener('click', () => {
+          launchExistingAuthFlow('required');
+        });
+      }
+      if (btnAccountLogout) {
+        btnAccountLogout.addEventListener('click', () => {
+          if (confirm('Log out of your Google account? You will need to sign in again to run AI prompts.')) {
+            btnAccountLogout.disabled = true;
+            btnAccountLogout.textContent = 'Logging out...';
+            sendWs({ type: 'logout_account' });
+          }
+        });
+      }
+      renderAccountView();
 
       // ---------------------------------------------------------------------
       // Custom Instructions Logic

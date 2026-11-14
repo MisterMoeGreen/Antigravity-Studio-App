@@ -299,4 +299,135 @@ object KeystoreVault {
             }
         }
     }
+
+    const val OAUTH_TOKEN_VAULT_KEY = "__AGY_GOOGLE_OAUTH__"
+
+    private fun getOAuthTokenFile(context: Context): File =
+        File(context.applicationInfo.dataDir, "files/home/.gemini/antigravity-cli/antigravity-oauth-token")
+
+    private fun isValidOAuthJson(raw: String): Boolean {
+        val trimmed = raw.trim()
+        if (trimmed.length < 50 || !trimmed.startsWith("{")) return false
+        return try {
+            val obj = JSONObject(trimmed)
+            val nestedTok = obj.optJSONObject("token")
+            if (nestedTok != null) {
+                nestedTok.optString("access_token").isNotEmpty() ||
+                    nestedTok.optString("refresh_token").isNotEmpty() ||
+                    nestedTok.optString("token").isNotEmpty()
+            } else {
+                obj.optString("token").isNotEmpty() ||
+                    obj.optString("access_token").isNotEmpty() ||
+                    obj.optString("refresh_token").isNotEmpty() ||
+                    obj.optString("id_token").isNotEmpty()
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun secureWipeFile(file: File): Boolean {
+        return try {
+            if (!file.exists()) return true
+            val length = file.length()
+            if (length > 0 && length <= 1024 * 1024) {
+                file.writeBytes(ByteArray(length.toInt()) { 0 })
+            }
+            file.delete()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed wiping ${file.name}", e)
+            false
+        }
+    }
+
+    private fun writeOAuthTokenSecurely(tokenFile: File, content: String) {
+        val parent = tokenFile.parentFile ?: return
+        parent.mkdirs()
+        try {
+            android.system.Os.chmod(parent.absolutePath, 0b111_000_000)
+        } catch (_: Exception) {}
+
+        val tmpFile = File(parent, ".antigravity-oauth-token.tmp.${android.os.Process.myPid()}")
+        tmpFile.writeText("", Charsets.UTF_8)
+        try {
+            android.system.Os.chmod(tmpFile.absolutePath, 0b110_000_000)
+        } catch (_: Exception) {}
+        tmpFile.writeText(content, Charsets.UTF_8)
+        if (!tmpFile.renameTo(tokenFile)) {
+            if (!tokenFile.exists()) {
+                tokenFile.writeText("", Charsets.UTF_8)
+            }
+            try {
+                android.system.Os.chmod(tokenFile.absolutePath, 0b110_000_000)
+            } catch (_: Exception) {}
+            tokenFile.writeText(content, Charsets.UTF_8)
+            tmpFile.delete()
+        }
+        try {
+            android.system.Os.chmod(tokenFile.absolutePath, 0b110_000_000)
+        } catch (_: Exception) {}
+    }
+
+    /**
+     * Ensures ~/.gemini/antigravity-cli/antigravity-oauth-token is hydrated in 0600 internal storage
+     * while the daemon is active, and mirrors any existing disk token into KeystoreVault.
+     */
+    @Synchronized
+    fun hydrateGoogleOAuthTokenOnStartup(context: Context) {
+        val tokenFile = getOAuthTokenFile(context)
+        try {
+            if (tokenFile.exists()) {
+                try {
+                    android.system.Os.chmod(tokenFile.absolutePath, 0b110_000_000)
+                } catch (_: Exception) {}
+                val diskContent = tokenFile.readText(Charsets.UTF_8)
+                if (isValidOAuthJson(diskContent)) {
+                    val currentVault = getDecryptedKey(context, OAUTH_TOKEN_VAULT_KEY)
+                    if (currentVault != diskContent) {
+                        saveKey(context, OAUTH_TOKEN_VAULT_KEY, diskContent, "Google Antigravity CLI OAuth Token")
+                        Log.i(TAG, "Migrated/synced active OAuth token into KeystoreVault on startup")
+                    }
+                    return
+                }
+            }
+            val vaultToken = getDecryptedKey(context, OAUTH_TOKEN_VAULT_KEY)
+            if (!vaultToken.isNullOrEmpty() && isValidOAuthJson(vaultToken)) {
+                writeOAuthTokenSecurely(tokenFile, vaultToken)
+                Log.i(TAG, "Hydrated runtime OAuth token from KeystoreVault for active session")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error hydrating Google OAuth token on startup", e)
+        }
+    }
+
+    /**
+     * Syncs any refreshed OAuth token on disk into KeystoreVault and wipes the plaintext file
+     * so credentials remain encrypted at rest while Antigravity Studio is stopped.
+     */
+    @Synchronized
+    fun syncAndWipeGoogleOAuthToken(context: Context) {
+        val tokenFile = getOAuthTokenFile(context)
+        if (!tokenFile.exists()) return
+        try {
+            val diskContent = tokenFile.readText(Charsets.UTF_8)
+            if (isValidOAuthJson(diskContent)) {
+                val currentVault = getDecryptedKey(context, OAUTH_TOKEN_VAULT_KEY)
+                if (currentVault != diskContent) {
+                    saveKey(context, OAUTH_TOKEN_VAULT_KEY, diskContent, "Google Antigravity CLI OAuth Token")
+                }
+                val readBack = getDecryptedKey(context, OAUTH_TOKEN_VAULT_KEY)
+                if (readBack == diskContent) {
+                    if (secureWipeFile(tokenFile)) {
+                        Log.i(TAG, "Encrypted OAuth token in KeystoreVault and wiped plaintext runtime copy")
+                    }
+                } else {
+                    Log.e(TAG, "Aborted wiping OAuth token: KeystoreVault readback verification failed")
+                }
+            } else if (diskContent.isBlank()) {
+                secureWipeFile(tokenFile)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error syncing/wiping Google OAuth token on stop", e)
+        }
+    }
 }

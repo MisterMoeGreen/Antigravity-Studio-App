@@ -31,6 +31,7 @@
     </queries>
 
     <application
+        android:allowBackup="false"
         android:label="Antigravity Studio"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"

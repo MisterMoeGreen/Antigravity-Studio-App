@@ -94,6 +94,7 @@ class AgyForegroundService : Service() {
             registerTelemetryBridge()
             cleanupStaleDaemonProcesses()
             if (!isActive || isStopping) return@launch
+            KeystoreVault.hydrateGoogleOAuthTokenOnStartup(this@AgyForegroundService)
 
             val port = pickAvailablePort(8081, listOf(8082, 8090, 8091))
             val token = java.util.UUID.randomUUID().toString().replace("-", "")
@@ -453,6 +454,9 @@ class AgyForegroundService : Service() {
 
         // 5. Force-kill all child, PRoot, MCP, compiler, and daemon processes under this UID
         cleanupStaleDaemonProcesses(killAllUnderUid = true)
+
+        // 5b. Persist any refreshed Google OAuth token in KeystoreVault and wipe plaintext runtime file
+        KeystoreVault.syncAndWipeGoogleOAuthToken(this)
 
         // 6. Dismiss all notifications (including pinned live notifications) and stop foreground service
         try {

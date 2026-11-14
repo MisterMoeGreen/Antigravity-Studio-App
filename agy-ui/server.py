@@ -194,12 +194,47 @@ def _clean_glibc_env(extra: Optional[dict[str, str]] = None) -> dict[str, str]:
     return env
 
 
+_last_oauth_hydrate_miss_ts: float = 0.0
+OAUTH_VAULT_KEY = "__AGY_GOOGLE_OAUTH__"
+_last_synced_oauth_sha256: Optional[str] = None
+
+
+def _is_valid_oauth_payload_dict(data: Any) -> bool:
+    """Checks structure and non-expiry of a decoded OAuth credential JSON object."""
+    if not isinstance(data, dict):
+        return False
+    tok = data.get("token")
+    nested = tok if isinstance(tok, dict) else {}
+    has_refresh = bool(data.get("refresh_token") or nested.get("refresh_token"))
+    has_token = bool(
+        has_refresh
+        or data.get("access_token")
+        or nested.get("access_token")
+        or nested.get("token")
+        or (isinstance(tok, str) and tok)
+    )
+    if not has_token:
+        return False
+
+    if not has_refresh:
+        for obj in (nested, data):
+            if "expires_at" in obj and float(obj["expires_at"]) < time.time():
+                return False
+    return True
+
+
 def is_oauth_token_valid() -> bool:
     """
     Evaluates whether a valid Google OAuth credential token exists on disk.
     Enforces existence, minimum file geometry (>50 bytes), JSON syntax, and expiry.
     """
     token_file = GEMINI_DIR / "antigravity-oauth-token"
+    if (
+        not token_file.exists()
+        and os.environ.get("AGY_VAULT_PORT")
+        and (time.time() - _last_oauth_hydrate_miss_ts) > 5.0
+    ):
+        hydrate_google_oauth_from_keystore()
     if not token_file.exists():
         return False
     try:
@@ -207,22 +242,130 @@ def is_oauth_token_valid() -> bool:
         if st.st_size < 50:
             return False
         data = json.loads(token_file.read_text(encoding="utf-8"))
-        tok = data.get("token")
-        if isinstance(tok, dict):
-            if not (tok.get("access_token") or tok.get("refresh_token") or tok.get("token")):
-                return False
-            if "expires_at" in tok and not tok.get("refresh_token"):
-                if float(tok["expires_at"]) < time.time():
-                    return False
-        elif not (data.get("token") or data.get("access_token")):
-            return False
-
-        if "expires_at" in data and not (isinstance(tok, dict) and tok.get("refresh_token")):
-            if float(data["expires_at"]) < time.time():
-                return False
-        return True
+        return _is_valid_oauth_payload_dict(data)
     except Exception:
         return False
+
+
+def get_google_account_info() -> dict[str, Any]:
+    """
+    Returns non-secret metadata for the currently authenticated Google account
+    (authenticated status, email, auth_method) without ever exposing raw tokens.
+    """
+    if not is_oauth_token_valid():
+        return {"authenticated": False, "email": None, "auth_method": None}
+
+    token_file = GEMINI_DIR / "antigravity-oauth-token"
+    email: Optional[str] = None
+    auth_method: Optional[str] = None
+    try:
+        data = json.loads(token_file.read_text(encoding="utf-8"))
+        tok = data.get("token") if isinstance(data.get("token"), dict) else {}
+        raw_email = data.get("id_token_email") or data.get("email") or tok.get("id_token_email") or tok.get("email")
+        id_tok = data.get("id_token") or tok.get("id_token")
+        if isinstance(raw_email, str) and raw_email.strip():
+            email = raw_email.strip()
+        elif isinstance(id_tok, str) and id_tok.count(".") == 2:
+            import base64
+            payload_b64 = id_tok.split(".")[1]
+            payload_b64 += "=" * (-len(payload_b64) % 4)
+            claims = json.loads(base64.urlsafe_b64decode(payload_b64).decode("utf-8", "ignore"))
+            if isinstance(claims.get("email"), str) and claims["email"].strip():
+                email = claims["email"].strip()
+        raw_method = data.get("auth_method") or tok.get("auth_method")
+        if isinstance(raw_method, str) and raw_method.strip():
+            auth_method = raw_method.strip()
+    except Exception:
+        pass
+    return {"authenticated": True, "email": email, "auth_method": auth_method}
+
+
+def wipe_file_zero_fill(path: Path) -> bool:
+    """Overwrites an internal credential file with zero bytes and unlinks it."""
+    try:
+        if not path.exists():
+            return True
+        size = path.stat().st_size
+        if 0 < size <= 1024 * 1024:
+            with open(path, "r+b") as f:
+                f.write(b"\x00" * size)
+                f.flush()
+                os.fsync(f.fileno())
+        path.unlink()
+        return True
+    except Exception as exc:
+        logger.warning("Failed wiping %s: %s", path.name, exc)
+        return False
+
+
+def sync_google_oauth_to_keystore(force: bool = False) -> bool:
+    """Persists the runtime OAuth token file into Android KeystoreVault if present and changed."""
+    global _last_synced_oauth_sha256, _last_oauth_hydrate_miss_ts
+    if not os.environ.get("AGY_VAULT_PORT"):
+        return False
+    token_file = GEMINI_DIR / "antigravity-oauth-token"
+    if not token_file.exists():
+        return False
+    try:
+        raw_text = token_file.read_text(encoding="utf-8")
+        if len(raw_text.strip()) < 50:
+            return False
+        data = json.loads(raw_text)
+        if not _is_valid_oauth_payload_dict(data):
+            return False
+        digest = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
+        if not force and digest == _last_synced_oauth_sha256:
+            return True
+        res = query_keystore_vault(
+            "save_key",
+            name=OAUTH_VAULT_KEY,
+            value=raw_text,
+            description="Google Antigravity CLI OAuth Token",
+        )
+        if res.get("status") == "ok":
+            _last_synced_oauth_sha256 = digest
+            _last_oauth_hydrate_miss_ts = 0.0
+            return True
+    except Exception as exc:
+        logger.debug("sync_google_oauth_to_keystore failed: %s", exc)
+    return False
+
+
+def hydrate_google_oauth_from_keystore() -> bool:
+    """Restores the OAuth token from KeystoreVault into 0600 runtime storage when missing on disk."""
+    global _last_synced_oauth_sha256, _last_oauth_hydrate_miss_ts
+    if not os.environ.get("AGY_VAULT_PORT"):
+        return False
+    token_file = GEMINI_DIR / "antigravity-oauth-token"
+    if token_file.exists():
+        try:
+            st = token_file.stat()
+            if st.st_size >= 50:
+                data = json.loads(token_file.read_text(encoding="utf-8"))
+                if _is_valid_oauth_payload_dict(data):
+                    return sync_google_oauth_to_keystore()
+        except Exception:
+            pass
+    try:
+        res = query_keystore_vault("get_key", name=OAUTH_VAULT_KEY)
+        if res.get("status") != "ok":
+            _last_oauth_hydrate_miss_ts = time.time()
+            return False
+        val = res.get("value")
+        if isinstance(val, str) and len(val.strip()) >= 50:
+            data = json.loads(val)
+            if _is_valid_oauth_payload_dict(data):
+                GEMINI_DIR.mkdir(parents=True, exist_ok=True)
+                os.chmod(str(GEMINI_DIR), 0o700)
+                atomic_write_secure(str(token_file), val, mode=0o600)
+                _last_synced_oauth_sha256 = hashlib.sha256(val.encode("utf-8")).hexdigest()
+                _last_oauth_hydrate_miss_ts = 0.0
+                return True
+        _last_oauth_hydrate_miss_ts = time.time()
+    except Exception as exc:
+        _last_oauth_hydrate_miss_ts = time.time()
+        logger.debug("hydrate_google_oauth_from_keystore failed: %s", exc)
+    return False
 
 
 def emit_native_notif_event(payload: dict) -> None:
@@ -1229,6 +1372,8 @@ def load_api_keys_store() -> dict[str, Any]:
         if raw_keys:
             store_keys = {}
             for k, v in raw_keys.items():
+                if str(k).startswith("__"):
+                    continue
                 store_keys[k] = {"value": v, "description": "", "created_at": int(time.time())}
             _decrypted_keys_cache = {"version": 1, "updated_at": int(time.time()), "keys": store_keys}
             # Only remove legacy files if vault verified to have all keys
@@ -1258,7 +1403,10 @@ def load_api_keys_store() -> dict[str, Any]:
     if API_KEYS_FILE.exists():
         try:
             os.chmod(str(API_KEYS_FILE), 0o600)
-            _decrypted_keys_cache = json.loads(API_KEYS_FILE.read_text(encoding="utf-8"))
+            loaded = json.loads(API_KEYS_FILE.read_text(encoding="utf-8"))
+            if isinstance(loaded.get("keys"), dict):
+                loaded["keys"] = {k: v for k, v in loaded["keys"].items() if not str(k).startswith("__")}
+            _decrypted_keys_cache = loaded
             return _decrypted_keys_cache
         except Exception:
             pass
@@ -1266,7 +1414,10 @@ def load_api_keys_store() -> dict[str, Any]:
     if KEYSTORE_VAULT_FILE.exists():
         try:
             os.chmod(str(KEYSTORE_VAULT_FILE), 0o600)
-            _decrypted_keys_cache = json.loads(KEYSTORE_VAULT_FILE.read_text(encoding="utf-8"))
+            loaded = json.loads(KEYSTORE_VAULT_FILE.read_text(encoding="utf-8"))
+            if isinstance(loaded.get("keys"), dict):
+                loaded["keys"] = {k: v for k, v in loaded["keys"].items() if not str(k).startswith("__")}
+            _decrypted_keys_cache = loaded
             return _decrypted_keys_cache
         except Exception:
             pass
@@ -1284,7 +1435,11 @@ def save_api_keys_store(store: dict[str, Any]) -> None:
 
 def get_active_api_keys() -> dict[str, str]:
     store = load_api_keys_store()
-    return {k: v.get("value", "") for k, v in store.get("keys", {}).items() if v.get("value")}
+    return {
+        k: v.get("value", "")
+        for k, v in store.get("keys", {}).items()
+        if not str(k).startswith("__") and v.get("value")
+    }
 
 
 def sync_api_keys_manifest() -> None:
@@ -1354,6 +1509,8 @@ def list_api_keys_masked() -> list[dict[str, Any]]:
     store = load_api_keys_store()
     result = []
     for k, v in sorted(store.get("keys", {}).items()):
+        if str(k).startswith("__"):
+            continue
         val = v.get("value", "")
         result.append({
             "name": k,
@@ -7964,6 +8121,7 @@ class AgyProcessOrchestrator:
                     if has_pending:
                         self._schedule_background_feedback(final_cid)
                 self._gc_idle_sessions()
+                sync_google_oauth_to_keystore()
 
     _SESSION_IDLE_TTL = 30 * 60  # 30 minutes
 
@@ -8098,7 +8256,10 @@ class AgyProcessOrchestrator:
             return
 
         # Zero chat pollution: overlay receives auth_success directly
-        await self.broadcast({"type": "auth_success"})
+        sync_google_oauth_to_keystore(force=True)
+        account_info = get_google_account_info()
+        await self.broadcast({"type": "auth_success", "account": account_info})
+        await self.broadcast({"type": "account_status", **account_info})
         await self.broadcast({"type": "status", "conversation_id": target_cid, "state": "idle", "detail": "Ready"})
         if self.on_auth_success_cb:
             try:
@@ -8496,6 +8657,46 @@ class AgyProcessOrchestrator:
                     "error": f"Sign-in initialization error: {err_msg}",
                 })
                 self._cleanup_auth()
+
+    async def logout_google_account(self) -> dict[str, Any]:
+        """Logs out of the current Google account by wiping local & Keystore OAuth credentials and stopping the ACP daemon."""
+        global _last_synced_oauth_sha256, _last_oauth_hydrate_miss_ts
+        async with self._auth_lock:
+            self._cleanup_auth()
+            token_file = GEMINI_DIR / "antigravity-oauth-token"
+            try:
+                if token_file.exists():
+                    wipe_file_zero_fill(token_file)
+                    logger.info("Wiped OAuth token file on logout: %s", token_file)
+            except Exception as exc:
+                logger.warning("Failed removing OAuth token file: %s", exc)
+            _last_synced_oauth_sha256 = None
+            query_keystore_vault("delete_key", name=OAUTH_VAULT_KEY)
+            _last_oauth_hydrate_miss_ts = time.time()
+            self._secure_oauth_token()
+
+        # Terminate ACP daemon without respawning so no stale in-memory credentials remain
+        async with self.acp_lock:
+            if self.acp_proc is not None:
+                try:
+                    self.acp_proc.terminate()
+                    await asyncio.wait_for(self.acp_proc.wait(), timeout=2.0)
+                except Exception:
+                    try:
+                        self.acp_proc.kill()
+                    except Exception:
+                        pass
+                self.acp_proc = None
+                self._acp_initialized = False
+            self._acp_sessions.clear()
+            self._acp_session_to_cid.clear()
+            self._pending_requests.clear()
+            if self._acp_reader_task and not self._acp_reader_task.done():
+                self._acp_reader_task.cancel()
+            if self._acp_stderr_task and not self._acp_stderr_task.done():
+                self._acp_stderr_task.cancel()
+
+        return get_google_account_info()
 
     async def _consume_stdout_stream(
         self,
@@ -9514,6 +9715,27 @@ class TerminalExecutionManager:
         self.server = server
         self.active_processes: dict[str, asyncio.subprocess.Process] = {}
 
+    def resolve_workspace(self, cid: str, explicit_workspace: str = "") -> str:
+        """Resolves effective terminal working directory preferring session context over global defaults."""
+        clean_cid = (cid or "").strip()
+        if clean_cid in self.orchestrator._migrated_cids:
+            clean_cid = self.orchestrator._migrated_cids[clean_cid]
+        if explicit_workspace and os.path.isdir(os.path.expanduser(explicit_workspace)):
+            return explicit_workspace
+        session_ws = None
+        if clean_cid and clean_cid in self.orchestrator._sessions:
+            session_ws = self.orchestrator._sessions[clean_cid].workspace
+        elif not clean_cid:
+            session_ws = getattr(self.orchestrator.draft_context, "workspace", None)
+        return (
+            explicit_workspace
+            or session_ws
+            or getattr(self.orchestrator.config, "workspace", None)
+            or (self.server.default_workspace if self.server else None)
+            or getattr(self.orchestrator, "default_workspace", None)
+            or get_default_workspace()
+        )
+
     async def run_command(self, command_id: str, command: str, cid: str, workspace: str, websocket: Any) -> None:
         cmd_str = command.strip()
         if not cmd_str:
@@ -9524,7 +9746,7 @@ class TerminalExecutionManager:
             return
 
         start_time = time.monotonic()
-        active_ws = workspace or (self.server.default_workspace if self.server else None) or getattr(self.orchestrator, "default_workspace", None) or get_default_workspace()
+        active_ws = self.resolve_workspace(cid, workspace)
         ws_dir = os.path.expanduser(active_ws)
         if not os.path.isdir(ws_dir):
             ws_dir = os.path.expanduser("~")
@@ -9632,7 +9854,7 @@ class TerminalExecutionManager:
             if (target.startswith('"') and target.endswith('"')) or (target.startswith("'") and target.endswith("'")):
                 target = target[1:-1].strip()
 
-            active_ws = workspace or (self.server.default_workspace if self.server else None) or getattr(self.orchestrator, "default_workspace", None) or get_default_workspace()
+            active_ws = self.resolve_workspace(cid, workspace)
             base_dir = Path(active_ws).expanduser()
 
             if target == "~" or target.startswith("~/"):
@@ -9645,31 +9867,43 @@ class TerminalExecutionManager:
             if new_path.is_dir():
                 new_path_str = str(new_path)
                 if self.server:
-                    self.server.default_workspace = new_path_str
-                self.orchestrator.default_workspace = new_path_str
-                self.orchestrator.config.workspace = new_path_str
-                ctx = self.orchestrator._sessions.get(cid)
-                if ctx:
-                    ctx.workspace = new_path_str
-                try:
-                    save_app_settings({"default_workspace": new_path_str})
-                except Exception:
-                    pass
-
-                branch = get_git_branch(new_path_str)
-                await self.broadcast({
-                    "type": "config_updated",
-                    "conversation_id": cid,
-                    "config": {
-                        "conversation_id": cid,
-                        "workspace": new_path_str,
-                        "git_branch": branch,
-                    },
-                })
-                await self.broadcast({
-                    "type": "default_workspace_updated",
-                    "default_workspace": new_path_str,
-                })
+                    branch = await self.server.apply_session_workspace(
+                        new_path_str, cid=cid, emit_system_card=False
+                    )
+                else:
+                    clean_cid = str(cid).strip() if cid else ""
+                    if clean_cid in self.orchestrator._migrated_cids:
+                        clean_cid = self.orchestrator._migrated_cids[clean_cid]
+                    if clean_cid:
+                        ctx = self.orchestrator.get_or_create_context(clean_cid)
+                        ctx.workspace = new_path_str
+                        self.orchestrator.storage.update_conversation_workspace(clean_cid, new_path_str)
+                        if clean_cid in self.orchestrator._acp_sessions:
+                            try:
+                                await self.orchestrator.close_acp_session(clean_cid)
+                            except Exception:
+                                pass
+                        try:
+                            await self.orchestrator.sync_acp_cwd(new_path_str, current_cid=clean_cid)
+                        except Exception:
+                            pass
+                    else:
+                        self.orchestrator.draft_context.workspace = new_path_str
+                        try:
+                            await self.orchestrator.sync_acp_cwd(new_path_str, current_cid="")
+                        except Exception:
+                            pass
+                    self.orchestrator.config.workspace = new_path_str
+                    branch = get_git_branch(new_path_str)
+                    await self.broadcast({
+                        "type": "config_updated",
+                        "conversation_id": clean_cid or None,
+                        "config": {
+                            "conversation_id": clean_cid or None,
+                            "workspace": new_path_str,
+                            "git_branch": branch,
+                        },
+                    })
                 delta = f"Changed active workspace to {new_path_str}\n"
                 await websocket.send(json.dumps({
                     "type": "terminal_output",
@@ -11125,13 +11359,15 @@ class AgyWebServer:
                             self.orchestrator.config.workspace = ws_candidate
 
                 branch = get_git_branch(self.orchestrator.config.workspace)
-                is_auth = is_oauth_token_valid()
+                account_info = get_google_account_info()
+                is_auth = account_info["authenticated"]
 
                 await websocket.send(
                     json.dumps(
                         {
                             "type": "init_state",
                             "is_authenticated": is_auth,
+                            "account": account_info,
                             "default_workspace": self.default_workspace,
                             "config": {
                                 "conversation_id": active_cid,
@@ -11268,6 +11504,7 @@ class AgyWebServer:
                             {
                                 "type": "init_state",
                                 "is_authenticated": is_oauth_token_valid(),
+                                "account": get_google_account_info(),
                                 "default_workspace": self.default_workspace,
                                 "config": {
                                     "conversation_id": None,
@@ -11313,6 +11550,68 @@ class AgyWebServer:
             self.clients.discard(websocket)
             logger.info("Client disconnected (%d active)", len(self.clients))
 
+    async def apply_session_workspace(
+        self,
+        target_str: str,
+        cid: str = "",
+        emit_system_card: bool = False,
+    ) -> Optional[str]:
+        """Applies a workspace change consistently across session context, SQLite/proto stores,
+        ACP session eviction, ACP daemon cwd restart, and WebSocket broadcasts."""
+        clean_cid = str(cid).strip() if cid else ""
+        if clean_cid in self.orchestrator._migrated_cids:
+            clean_cid = self.orchestrator._migrated_cids[clean_cid]
+
+        if clean_cid:
+            ctx = self.orchestrator.get_or_create_context(clean_cid)
+            ctx.workspace = target_str
+            self.storage.update_conversation_workspace(clean_cid, target_str)
+            if clean_cid in self.orchestrator._acp_sessions:
+                # Evict from daemon memory; next turn reloads from patched disk state
+                # and sync_acp_cwd() restarts the daemon in the new folder.
+                try:
+                    await self.orchestrator.close_acp_session(clean_cid)
+                except Exception as acp_err:
+                    logger.warning("Failed to evict ACP session %s: %s", clean_cid, acp_err)
+            try:
+                await self.orchestrator.sync_acp_cwd(target_str, current_cid=clean_cid)
+            except Exception as cwd_err:
+                logger.warning("ACP cwd sync failed: %s", cwd_err)
+        else:
+            self.orchestrator.draft_context.workspace = target_str
+            try:
+                await self.orchestrator.sync_acp_cwd(target_str, current_cid="")
+            except Exception as cwd_err:
+                logger.warning("ACP cwd sync failed: %s", cwd_err)
+
+        self.orchestrator.config.workspace = target_str
+        branch = get_git_branch(target_str)
+        active_ctx = ctx if clean_cid else self.orchestrator.draft_context
+
+        await self.broadcast({
+            "type": "config_updated",
+            "conversation_id": clean_cid or None,
+            "config": {
+                "conversation_id": clean_cid or None,
+                "model": active_ctx.model or self.orchestrator.config.model,
+                "mode": active_ctx.mode or self.orchestrator.config.mode,
+                "effort": active_ctx.effort or self.orchestrator.config.effort,
+                "workspace": target_str,
+                "git_branch": branch,
+            },
+        })
+        sessions = self.storage.list_conversations(limit=100)
+        await self.broadcast({"type": "session_list", "sessions": sessions})
+        if emit_system_card:
+            await self.broadcast({
+                "type": "system_card",
+                "title": "Session Workspace Changed",
+                "markdown": f"Working directory for this session replaced with: `{target_str}`"
+                + (f"\n\nGit branch: **`{branch}`**" if branch else ""),
+                "level": "info",
+            })
+        return branch
+
     async def handle_client_message(
         self, websocket: ServerConnection, data: dict[str, Any]
     ) -> None:
@@ -11324,6 +11623,23 @@ class AgyWebServer:
 
         if mtype in ("request_auth_url", "trigger_login"):
             asyncio.create_task(self.orchestrator.trigger_in_app_login(turn_id=None, standalone=True))
+            return
+
+        if mtype == "cancel_auth":
+            if self.orchestrator.is_authenticating:
+                self.orchestrator._cleanup_auth()
+            return
+
+        if mtype == "get_account_status":
+            await websocket.send(json.dumps({"type": "account_status", **get_google_account_info()}))
+            return
+
+        if mtype == "logout_account":
+            info = await self.orchestrator.logout_google_account()
+            self._cached_quotas = []
+            self._quotas_cached_at = 0.0
+            await self.broadcast({"type": "account_status", **info})
+            await self.broadcast({"type": "auth_logged_out", "account": info})
             return
 
         if mtype == "submit_auth_code":
@@ -12999,52 +13315,10 @@ class AgyWebServer:
             req_path = str(data.get("path") or "").strip()
             raw_cid = data.get("conversation_id")
             cid = str(raw_cid).strip() if raw_cid else ""
-            if cid in self.orchestrator._migrated_cids:
-                cid = self.orchestrator._migrated_cids[cid]
             if req_path:
                 target = Path(os.path.expanduser(req_path)).resolve()
                 if target.is_dir():
-                    target_str = str(target)
-                    if cid:
-                        ctx = self.orchestrator.get_or_create_context(cid)
-                        ctx.workspace = target_str
-                        self.storage.update_conversation_workspace(cid, target_str)
-                        if cid in self.orchestrator._acp_sessions:
-                            # Evict from daemon memory; next turn reloads from patched disk state
-                            # and sync_acp_cwd() restarts the daemon in the new folder.
-                            try:
-                                await self.orchestrator.close_acp_session(cid)
-                            except Exception as acp_err:
-                                logger.warning("Failed to evict ACP session %s: %s", cid, acp_err)
-                        try:
-                            await self.orchestrator.sync_acp_cwd(target_str, current_cid=cid)
-                        except Exception as cwd_err:
-                            logger.warning("ACP cwd sync failed: %s", cwd_err)
-                    else:
-                        self.orchestrator.draft_context.workspace = target_str
-                    self.orchestrator.config.workspace = target_str
-                    branch = get_git_branch(target_str)
-
-                    await self.broadcast({
-                        "type": "config_updated",
-                        "conversation_id": cid or None,
-                        "config": {
-                            "conversation_id": cid or None,
-                            "model": self.orchestrator.config.model,
-                            "mode": self.orchestrator.config.mode,
-                            "effort": self.orchestrator.config.effort,
-                            "workspace": target_str,
-                            "git_branch": branch,
-                        }
-                    })
-                    sessions = self.storage.list_conversations(limit=100)
-                    await self.broadcast({"type": "session_list", "sessions": sessions})
-                    await self.broadcast({
-                        "type": "system_card",
-                        "title": "Session Workspace Changed",
-                        "markdown": f"Working directory for this session replaced with: `{target}`" + (f"\n\nGit branch: **`{branch}`**" if branch else ""),
-                        "level": "info"
-                    })
+                    await self.apply_session_workspace(str(target), cid=cid, emit_system_card=True)
             return
 
         if mtype == "question_response":
@@ -13085,8 +13359,11 @@ class AgyWebServer:
         if mtype == "terminal_command":
             cmd_id = str(data.get("command_id") or f"term-{uuid.uuid4().hex[:8]}")
             command = str(data.get("command") or "").strip()
-            cid = str(data.get("conversation_id") or self.orchestrator.active_view_cid or "")
-            workspace = str(data.get("workspace") or getattr(self.orchestrator, "default_workspace", None) or self.default_workspace or "")
+            raw_cid = data.get("conversation_id") if "conversation_id" in data else self.orchestrator.active_view_cid
+            cid = str(raw_cid).strip() if raw_cid else ""
+            if cid in self.orchestrator._migrated_cids:
+                cid = self.orchestrator._migrated_cids[cid]
+            workspace = self.terminal_mgr.resolve_workspace(cid, str(data.get("workspace") or ""))
             asyncio.create_task(
                 self.terminal_mgr.run_command(cmd_id, command, cid, workspace, websocket)
             )
@@ -13737,6 +14014,7 @@ async def main() -> None:
     sync_gemini_md_prompt()
     migrate_legacy_api_keys_store()
     migrate_mcp_storage()
+    hydrate_google_oauth_from_keystore()
     sync_and_sanitize_mcp_vault_and_config()
     app = AgyWebServer()
     stop_event = asyncio.Event()
@@ -13780,6 +14058,7 @@ async def main() -> None:
                     app.orchestrator.acp_proc.kill()
         except Exception:
             pass
+        sync_google_oauth_to_keystore(force=True)
         try:
             if hasattr(app, "proxy_client"):
                 await app.proxy_client.aclose()
