@@ -26,14 +26,14 @@ What makes it unique: Antigravity Studio is the first app to run real native com
 ### Screenshots
 
 <p align="center">
-  <a href="docs/screenshots/01-agent-streaming.png"><img src="docs/screenshots/01-agent-streaming.png" width="170" alt="Agent Chat & Live Thinking" title="Agent Chat & Live Thinking" /></a>
-  <a href="docs/screenshots/02-tool-calls.png"><img src="docs/screenshots/02-tool-calls.png" width="170" alt="Tool Call Inspection" title="Tool Call Inspection" /></a>
-  <a href="docs/screenshots/03-terminal-mode.png"><img src="docs/screenshots/03-terminal-mode.png" width="170" alt="Integrated Terminal Mode" title="Integrated Terminal Mode" /></a>
-  <a href="docs/screenshots/04-model-reasoning.png"><img src="docs/screenshots/04-model-reasoning.png" width="170" alt="Model & Reasoning Effort Selector" title="Model & Reasoning Effort Selector" /></a>
-  <a href="docs/screenshots/05-navigation-drawer.png"><img src="docs/screenshots/05-navigation-drawer.png" width="170" alt="Navigation Drawer & Sessions" title="Navigation Drawer & Sessions" /></a>
-  <a href="docs/screenshots/06-workspace-picker.png"><img src="docs/screenshots/06-workspace-picker.png" width="170" alt="Session Workspace Picker" title="Session Workspace Picker" /></a>
-  <a href="docs/screenshots/07-settings-hub.png"><img src="docs/screenshots/07-settings-hub.png" width="170" alt="Settings & Hub" title="Settings & Hub" /></a>
-  <a href="docs/screenshots/08-package-manager.png"><img src="docs/screenshots/08-package-manager.png" width="170" alt="Built-in Package Manager" title="Built-in Package Manager" /></a>
+  <a href="docs/screenshots/01-agent-streaming.png"><img src="docs/screenshots/01-agent-streaming.png" width="96" alt="Agent Chat & Live Thinking" title="Agent Chat & Live Thinking" /></a>
+  <a href="docs/screenshots/02-tool-calls.png"><img src="docs/screenshots/02-tool-calls.png" width="96" alt="Tool Call Inspection" title="Tool Call Inspection" /></a>
+  <a href="docs/screenshots/03-terminal-mode.png"><img src="docs/screenshots/03-terminal-mode.png" width="96" alt="Integrated Terminal Mode" title="Integrated Terminal Mode" /></a>
+  <a href="docs/screenshots/04-model-reasoning.png"><img src="docs/screenshots/04-model-reasoning.png" width="96" alt="Model & Reasoning Effort Selector" title="Model & Reasoning Effort Selector" /></a>
+  <a href="docs/screenshots/05-navigation-drawer.png"><img src="docs/screenshots/05-navigation-drawer.png" width="96" alt="Navigation Drawer & Sessions" title="Navigation Drawer & Sessions" /></a>
+  <a href="docs/screenshots/06-workspace-picker.png"><img src="docs/screenshots/06-workspace-picker.png" width="96" alt="Session Workspace Picker" title="Session Workspace Picker" /></a>
+  <a href="docs/screenshots/07-settings-hub.png"><img src="docs/screenshots/07-settings-hub.png" width="96" alt="Settings & Hub" title="Settings & Hub" /></a>
+  <a href="docs/screenshots/08-package-manager.png"><img src="docs/screenshots/08-package-manager.png" width="96" alt="Built-in Package Manager" title="Built-in Package Manager" /></a>
 </p>
 <p align="center"><sub>Click any screenshot to view full size.</sub></p>
 
