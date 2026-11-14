@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <ctype.h>
+#include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -88,7 +89,8 @@ static inline const char* translate_path(const char* path, char* buf, size_t buf
 /* Check if target executable is Glibc binary or PRoot / agy-sh container bridge */
 static inline int is_glibc_target(const char* path) {
     if (!path) return 0;
-    if (strcmp(path, "agy") == 0 || strcmp(path, "agy.va39") == 0) return 1;
+    if (strcmp(path, "agy") == 0 || strcmp(path, "agy.va39") == 0 ||
+        strcmp(path, "agy.patched") == 0) return 1;
     if (strcmp(path, "proot") == 0 || strcmp(path, "agy-sh") == 0) return 1;
     size_t len = strlen(path);
     if (len >= 4 && strcmp(path + len - 4, "/agy") == 0) return 1;
@@ -97,19 +99,28 @@ static inline int is_glibc_target(const char* path) {
     if (len >= 10 && strcmp(path + len - 10, "/libagy.so") == 0) return 1;
     if (len >= 11 && strcmp(path + len - 11, "/libproot.so") == 0) return 1;
     if (len >= 12 && strcmp(path + len - 12, "/libagy_sh.so") == 0) return 1;
+    if (len >= 12 && strcmp(path + len - 12, "/agy.patched") == 0) return 1;
     if (len >= 18 && strcmp(path + len - 18, "/libask_question.so") == 0) return 1;
+    if (len >= 19 && strcmp(path + len - 19, "/libagy_launcher.so") == 0) return 1;
+    if (strstr(path, "/opt/agy/") != NULL) return 1;
     if (strstr(path, "ld-linux-aarch64") != NULL) return 1;
     return 0;
 }
 
-/* Build sanitized envp: strips LD_PRELOAD when entering Glibc binary to prevent linker collision */
-static char** prepare_envp(char* const envp[], int strip_preload) {
+/* Build sanitized envp using caller's stack buffer when possible (vfork/Scudo-safe) */
+static char** prepare_envp_buf(char* const envp[], int strip_preload,
+                               char** stack_buf, size_t stack_cap, int* out_heap) {
+    *out_heap = 0;
     char* const* src = envp ? envp : environ;
     size_t count = 0;
     while (src && src[count]) count++;
 
-    char** new_env = (char**)calloc(count + 2, sizeof(char*));
-    if (!new_env) return (char**)src;
+    char** new_env = stack_buf;
+    if (count + 2 > stack_cap) {
+        new_env = (char**)calloc(count + 2, sizeof(char*));
+        if (!new_env) return (char**)src;
+        *out_heap = 1;
+    }
 
     size_t j = 0;
     int has_preload = 0;
@@ -127,122 +138,409 @@ static char** prepare_envp(char* const envp[], int strip_preload) {
     return new_env;
 }
 
-typedef int (*execve_fn)(const char*, char* const[], char* const[]);
-typedef int (*openat_fn)(int, const char*, int, ...);
+#ifndef AT_EMPTY_PATH
+#define AT_EMPTY_PATH 0x1000
+#endif
 
-/* Intercept execve + user-space shebang (#!) resolution */
-int execve(const char* filename, char* const argv[], char* const envp[]) {
+typedef int (*execve_fn)(const char*, char* const[], char* const[]);
+typedef int (*execveat_fn)(int, const char*, char* const[], char* const[], int);
+typedef int (*openat_fn)(int, const char*, int, ...);
+typedef int (*posix_spawn_fn)(pid_t*, const char*, const posix_spawn_file_actions_t*,
+                              const posix_spawnattr_t*, char* const[], char* const[]);
+
+/* Extract PATH from explicit envp first, falling back to getenv("PATH") */
+static const char* get_path_from_envp(char* const envp[]) {
+    if (envp) {
+        for (size_t i = 0; envp[i]; i++) {
+            if (strncmp(envp[i], "PATH=", 5) == 0) {
+                return envp[i][5] ? (envp[i] + 5) : (APP_PREFIX "/bin:/system/bin");
+            }
+        }
+    }
+    const char* p = getenv("PATH");
+    return (p && *p) ? p : (APP_PREFIX "/bin:/system/bin");
+}
+
+/* Resolve a bare executable name against PATH (applying translate_path to candidates) */
+static int resolve_in_path(const char* file, char* const envp[], char* out, size_t out_sz) {
+    if (!file || !file[0] || strchr(file, '/') != NULL) return 0;
+
+    const char* path_env = get_path_from_envp(envp);
+    const char* cur = path_env;
+    while (1) {
+        const char* sep = strchr(cur, ':');
+        size_t seg_len = sep ? (size_t)(sep - cur) : strlen(cur);
+
+        char cand[PATH_MAX];
+        int written;
+        if (seg_len == 0) {
+            written = snprintf(cand, sizeof(cand), "./%s", file);
+        } else {
+            while (seg_len > 1 && cur[seg_len - 1] == '/') seg_len--;
+            written = snprintf(cand, sizeof(cand), "%.*s/%s", (int)seg_len, cur, file);
+        }
+
+        if (written > 0 && (size_t)written < sizeof(cand)) {
+            char trans_buf[PATH_MAX];
+            const char* resolved = translate_path(cand, trans_buf, sizeof(trans_buf));
+            struct stat st;
+            if (stat(resolved, &st) == 0 && !S_ISDIR(st.st_mode) && access(resolved, X_OK) == 0) {
+                if (snprintf(out, out_sz, "%s", resolved) < (int)out_sz) {
+                    return 1;
+                }
+            }
+        }
+
+        if (!sep) break;
+        cur = sep + 1;
+    }
+    return 0;
+}
+
+/* Inspect target file for user-space shebang (#!) resolution; stack_argv avoids heap use on vfork */
+static void resolve_shebang_args(const char* target, char* const argv[],
+                                 char* hdr, size_t hdr_sz,
+                                 char* interp_buf, size_t interp_sz,
+                                 char** stack_argv, size_t stack_argv_cap,
+                                 const char** out_target, char*** out_argv, int* out_argv_heap) {
+    *out_target = target;
+    *out_argv = NULL;
+    *out_argv_heap = 0;
+    if (!target || hdr_sz < 4) return;
+
+    static openat_fn real_openat = NULL;
+    if (!real_openat) real_openat = (openat_fn)dlsym(RTLD_NEXT, "openat");
+    int fd = real_openat ? real_openat(AT_FDCWD, target, O_RDONLY | O_CLOEXEC, 0) : -1;
+    if (fd < 0) return;
+
+    ssize_t n = read(fd, hdr, hdr_sz - 1);
+    close(fd);
+    if (n < 2 || hdr[0] != '#' || hdr[1] != '!') return;
+
+    hdr[n] = '\0';
+    char* nl = strchr(hdr, '\n');
+    if (nl) *nl = '\0';
+    char* cr = strchr(hdr, '\r');
+    if (cr) *cr = '\0';
+
+    char* p = hdr + 2;
+    while (*p && isspace((unsigned char)*p)) p++;
+    if (*p != '/') return;
+
+    char* interp = p;
+    while (*p && !isspace((unsigned char)*p)) p++;
+    char* opt_arg = NULL;
+    if (*p) {
+        *p++ = '\0';
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (*p) {
+            opt_arg = p;
+            char* end = opt_arg + strlen(opt_arg);
+            while (end > opt_arg && isspace((unsigned char)end[-1])) {
+                *--end = '\0';
+            }
+            if (!*opt_arg) opt_arg = NULL;
+        }
+    }
+
+    const char* real_interp = translate_path(interp, interp_buf, interp_sz);
+    size_t argc = 0;
+    while (argv && argv[argc]) argc++;
+
+    char** new_argv = stack_argv;
+    if (argc + 3 > stack_argv_cap) {
+        new_argv = (char**)calloc(argc + 3, sizeof(char*));
+        if (!new_argv) return;
+        *out_argv_heap = 1;
+    }
+
+    size_t idx = 0;
+    new_argv[idx++] = (char*)real_interp;
+    if (opt_arg) new_argv[idx++] = opt_arg;
+    new_argv[idx++] = (char*)target;
+    for (size_t i = 1; i < argc; i++) {
+        new_argv[idx++] = argv[i];
+    }
+    new_argv[idx] = NULL;
+
+    *out_target = real_interp;
+    *out_argv = new_argv;
+}
+
+/* Execute an already path-resolved target with shebang resolution and LD_PRELOAD control */
+static int execve_resolved(const char* target, char* const argv[], char* const envp[]) {
     static execve_fn real_execve = NULL;
     if (!real_execve) {
         real_execve = (execve_fn)dlsym(RTLD_NEXT, "execve");
     }
-    if (!filename) {
-        errno = EFAULT;
-        return -1;
-    }
 
-    char path_buf[PATH_MAX];
-    const char* target = translate_path(filename, path_buf, sizeof(path_buf));
+    char hdr[256];
+    char interp_buf[PATH_MAX];
+    char* stack_argv[64];
+    char* stack_env[256];
+    const char* exec_target = target;
+    char** new_argv = NULL;
+    int argv_heap = 0;
+    int env_heap = 0;
 
-    // Inspect target file for shebang (#!) before kernel binfmt_script sees it
-    static openat_fn real_openat = NULL;
-    if (!real_openat) real_openat = (openat_fn)dlsym(RTLD_NEXT, "openat");
-    int fd = real_openat ? real_openat(AT_FDCWD, target, O_RDONLY | O_CLOEXEC, 0) : -1;
-    if (fd >= 0) {
-        char hdr[256];
-        ssize_t n = read(fd, hdr, sizeof(hdr) - 1);
-        close(fd);
-        if (n >= 2 && hdr[0] == '#' && hdr[1] == '!') {
-            hdr[n] = '\0';
-            char* nl = strchr(hdr, '\n');
-            if (nl) *nl = '\0';
-            char* cr = strchr(hdr, '\r');
-            if (cr) *cr = '\0';
+    resolve_shebang_args(target, argv, hdr, sizeof(hdr),
+                         interp_buf, sizeof(interp_buf),
+                         stack_argv, 64, &exec_target, &new_argv, &argv_heap);
 
-            char* p = hdr + 2;
-            while (*p && isspace((unsigned char)*p)) p++;
-            if (*p == '/') {
-                char* interp = p;
-                while (*p && !isspace((unsigned char)*p)) p++;
-                char* opt_arg = NULL;
-                if (*p) {
-                    *p++ = '\0';
-                    while (*p && isspace((unsigned char)*p)) p++;
-                    if (*p) opt_arg = p;
-                }
-
-                char interp_buf[PATH_MAX];
-                const char* real_interp = translate_path(interp, interp_buf, sizeof(interp_buf));
-
-                size_t argc = 0;
-                while (argv && argv[argc]) argc++;
-                char** new_argv = (char**)calloc(argc + 3, sizeof(char*));
-                if (new_argv) {
-                    size_t idx = 0;
-                    new_argv[idx++] = (char*)real_interp;
-                    if (opt_arg) new_argv[idx++] = opt_arg;
-                    new_argv[idx++] = (char*)target;
-                    for (size_t i = 1; i < argc; i++) {
-                        new_argv[idx++] = argv[i];
-                    }
-                    new_argv[idx] = NULL;
-
-                    char** adj_env = prepare_envp(envp, is_glibc_target(real_interp));
-                    int ret = real_execve(real_interp, new_argv, adj_env);
-                    int saved_err = errno;
-                    if (adj_env != envp && adj_env != environ) free(adj_env);
-                    free(new_argv);
-                    errno = saved_err;
-                    return ret;
-                }
-            }
-        }
-    }
-
-    char** adj_env = prepare_envp(envp, is_glibc_target(target));
-    int ret = real_execve(target, argv, adj_env);
+    char* const* final_argv = new_argv ? new_argv : argv;
+    int strip_preload = is_glibc_target(target) || is_glibc_target(exec_target);
+    char** adj_env = prepare_envp_buf(envp, strip_preload, stack_env, 256, &env_heap);
+    int ret = real_execve(exec_target, final_argv, adj_env);
     int saved_err = errno;
-    if (adj_env != envp && adj_env != environ) free(adj_env);
+    if (env_heap) free(adj_env);
+    if (argv_heap) free(new_argv);
     errno = saved_err;
     return ret;
 }
 
-/* Intercept posix_spawn (used by Python 3.12 subprocess & git) */
-typedef int (*posix_spawn_fn)(pid_t*, const char*, const posix_spawn_file_actions_t*,
-                              const posix_spawnattr_t*, char* const[], char* const[]);
-int posix_spawn(pid_t* pid, const char* path,
-                const posix_spawn_file_actions_t* file_actions,
-                const posix_spawnattr_t* attrp,
-                char* const argv[], char* const envp[]) {
+/* Intercept execve + user-space shebang (#!) resolution */
+int execve(const char* filename, char* const argv[], char* const envp[]) {
+    if (!filename) {
+        errno = EFAULT;
+        return -1;
+    }
+    char path_buf[PATH_MAX];
+    const char* target = translate_path(filename, path_buf, sizeof(path_buf));
+    return execve_resolved(target, argv, envp);
+}
+
+/* Intercept execv (Bionic libc calls internal execve directly without PLT on Android 17) */
+int execv(const char* path, char* const argv[]) {
+    return execve(path, argv, environ);
+}
+
+/* Intercept execvpe with PATH search + path translation + LD_PRELOAD control */
+int execvpe(const char* file, char* const argv[], char* const envp[]) {
+    if (!file) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (strchr(file, '/') != NULL) {
+        return execve(file, argv, envp);
+    }
+    char resolved[PATH_MAX];
+    if (resolve_in_path(file, envp, resolved, sizeof(resolved))) {
+        return execve_resolved(resolved, argv, envp);
+    }
+    errno = ENOENT;
+    return -1;
+}
+
+/* Intercept execvp */
+int execvp(const char* file, char* const argv[]) {
+    return execvpe(file, argv, environ);
+}
+
+/* Shared variadic collector for execl/execlp/execle */
+static char** collect_va_argv(const char* arg0, va_list* ap, char* stack_buf[], size_t stack_cap) {
+    size_t idx = 0;
+    size_t cap = stack_cap;
+    char** vec = stack_buf;
+    int on_heap = 0;
+
+    vec[idx++] = (char*)arg0;
+    if (arg0 != NULL) {
+        char* arg;
+        while ((arg = va_arg(*ap, char*)) != NULL) {
+            if (idx + 1 >= cap) {
+                size_t new_cap = cap * 2;
+                char** grown = on_heap
+                    ? (char**)realloc(vec, new_cap * sizeof(char*))
+                    : (char**)malloc(new_cap * sizeof(char*));
+                if (!grown) {
+                    if (on_heap) free(vec);
+                    return NULL;
+                }
+                if (!on_heap) memcpy(grown, vec, idx * sizeof(char*));
+                vec = grown;
+                cap = new_cap;
+                on_heap = 1;
+            }
+            vec[idx++] = arg;
+        }
+        vec[idx] = NULL;
+    }
+    return vec;
+}
+
+int execl(const char* path, const char* arg0, ...) {
+    char* stack_argv[64];
+    va_list ap;
+    va_start(ap, arg0);
+    char** argv = collect_va_argv(arg0, &ap, stack_argv, 64);
+    va_end(ap);
+    if (!argv) {
+        errno = ENOMEM;
+        return -1;
+    }
+    int ret = execv(path, argv);
+    int saved_err = errno;
+    if (argv != stack_argv) free(argv);
+    errno = saved_err;
+    return ret;
+}
+
+int execlp(const char* file, const char* arg0, ...) {
+    char* stack_argv[64];
+    va_list ap;
+    va_start(ap, arg0);
+    char** argv = collect_va_argv(arg0, &ap, stack_argv, 64);
+    va_end(ap);
+    if (!argv) {
+        errno = ENOMEM;
+        return -1;
+    }
+    int ret = execvp(file, argv);
+    int saved_err = errno;
+    if (argv != stack_argv) free(argv);
+    errno = saved_err;
+    return ret;
+}
+
+int execle(const char* path, const char* arg0, ...) {
+    char* stack_argv[64];
+    va_list ap;
+    va_start(ap, arg0);
+    char** argv = collect_va_argv(arg0, &ap, stack_argv, 64);
+    char* const* envp = argv ? va_arg(ap, char* const*) : NULL;
+    va_end(ap);
+    if (!argv) {
+        errno = ENOMEM;
+        return -1;
+    }
+    int ret = execve(path, argv, envp);
+    int saved_err = errno;
+    if (argv != stack_argv) free(argv);
+    errno = saved_err;
+    return ret;
+}
+
+/* Intercept execveat (runtime dlsym keeps Android 9 / API 28 compatibility) */
+int execveat(int dirfd, const char* pathname, char* const argv[],
+             char* const envp[], int flags) {
+    if (pathname && flags == 0 && (dirfd == AT_FDCWD || pathname[0] == '/')) {
+        return execve(pathname, argv, envp);
+    }
+
+    static execveat_fn real_execveat = NULL;
+    if (!real_execveat) {
+        real_execveat = (execveat_fn)dlsym(RTLD_NEXT, "execveat");
+    }
+    if (!real_execveat) {
+        errno = ENOSYS;
+        return -1;
+    }
+
+    char fd_target[PATH_MAX];
+    char combined[PATH_MAX];
+    const char* resolved_hint = pathname;
+    if (dirfd != AT_FDCWD && (!pathname || pathname[0] != '/')) {
+        char proc_fd[64];
+        snprintf(proc_fd, sizeof(proc_fd), "/proc/self/fd/%d", dirfd);
+        ssize_t len = readlink(proc_fd, fd_target, sizeof(fd_target) - 1);
+        if (len > 0) {
+            fd_target[len] = '\0';
+            if ((flags & AT_EMPTY_PATH) || !pathname || pathname[0] == '\0') {
+                resolved_hint = fd_target;
+            } else if (snprintf(combined, sizeof(combined), "%s/%s", fd_target, pathname) < (int)sizeof(combined)) {
+                resolved_hint = combined;
+            }
+        }
+    }
+
+    char path_buf[PATH_MAX];
+    char* stack_env[256];
+    int env_heap = 0;
+    const char* target = pathname ? translate_path(pathname, path_buf, sizeof(path_buf)) : pathname;
+    int is_glibc = is_glibc_target(resolved_hint) || is_glibc_target(target);
+    char** adj_env = prepare_envp_buf(envp, is_glibc, stack_env, 256, &env_heap);
+    int ret = real_execveat(dirfd, target, argv, adj_env, flags);
+    int saved_err = errno;
+    if (env_heap) free(adj_env);
+    errno = saved_err;
+    return ret;
+}
+
+/* Intercept fexecve (API 28+ Bionic invokes execveat syscall directly) */
+int fexecve(int fd, char* const argv[], char* const envp[]) {
+    return execveat(fd, "", argv, envp, AT_EMPTY_PATH);
+}
+
+/* Shared posix_spawn / posix_spawnp handler with PATH lookup, shebang resolution, and LD_PRELOAD control */
+static int posix_spawn_common(int use_path, pid_t* pid, const char* file,
+                              const posix_spawn_file_actions_t* file_actions,
+                              const posix_spawnattr_t* attrp,
+                              char* const argv[], char* const envp[]) {
+    if (!file) return EINVAL;
+
     static posix_spawn_fn real_posix_spawn = NULL;
     if (!real_posix_spawn) {
         real_posix_spawn = (posix_spawn_fn)dlsym(RTLD_NEXT, "posix_spawn");
     }
-    char buf[PATH_MAX];
-    const char* target = translate_path(path, buf, sizeof(buf));
-    char** adj_env = prepare_envp(envp, is_glibc_target(target));
-    int ret = real_posix_spawn(pid, target, file_actions, attrp, argv, adj_env);
-    if (adj_env != envp && adj_env != environ) free(adj_env);
+
+    char path_buf[PATH_MAX];
+    char* stack_env[256];
+    int env_heap = 0;
+    const char* target = NULL;
+
+    if (use_path && strchr(file, '/') == NULL) {
+        if (resolve_in_path(file, envp, path_buf, sizeof(path_buf))) {
+            target = path_buf;
+        }
+    } else {
+        target = translate_path(file, path_buf, sizeof(path_buf));
+    }
+
+    if (target) {
+        char hdr[256];
+        char interp_buf[PATH_MAX];
+        char* stack_argv[64];
+        const char* spawn_target = target;
+        char** new_argv = NULL;
+        int argv_heap = 0;
+        resolve_shebang_args(target, argv, hdr, sizeof(hdr),
+                             interp_buf, sizeof(interp_buf),
+                             stack_argv, 64, &spawn_target, &new_argv, &argv_heap);
+
+        char* const* final_argv = new_argv ? new_argv : argv;
+        int strip_preload = is_glibc_target(target) || is_glibc_target(spawn_target);
+        char** adj_env = prepare_envp_buf(envp, strip_preload, stack_env, 256, &env_heap);
+        int ret = real_posix_spawn(pid, spawn_target, file_actions, attrp, final_argv, adj_env);
+        if (env_heap) free(adj_env);
+        if (argv_heap) free(new_argv);
+        return ret;
+    }
+
+    // Fallback to libc posix_spawnp if unresolved (e.g. FUSE / external script edge case)
+    static posix_spawn_fn real_posix_spawnp = NULL;
+    if (!real_posix_spawnp) {
+        real_posix_spawnp = (posix_spawn_fn)dlsym(RTLD_NEXT, "posix_spawnp");
+    }
+    char** adj_env = prepare_envp_buf(envp, is_glibc_target(file), stack_env, 256, &env_heap);
+    int ret = real_posix_spawnp(pid, file, file_actions, attrp, argv, adj_env);
+    if (env_heap) free(adj_env);
     return ret;
 }
 
+/* Intercept posix_spawn (used by Python 3.12+ subprocess & git) */
+int posix_spawn(pid_t* pid, const char* path,
+                const posix_spawn_file_actions_t* file_actions,
+                const posix_spawnattr_t* attrp,
+                char* const argv[], char* const envp[]) {
+    return posix_spawn_common(0, pid, path, file_actions, attrp, argv, envp);
+}
+
 /* Intercept posix_spawnp */
-typedef int (*posix_spawnp_fn)(pid_t*, const char*, const posix_spawn_file_actions_t*,
-                               const posix_spawnattr_t*, char* const[], char* const[]);
 int posix_spawnp(pid_t* pid, const char* file,
                  const posix_spawn_file_actions_t* file_actions,
                  const posix_spawnattr_t* attrp,
                  char* const argv[], char* const envp[]) {
-    static posix_spawnp_fn real_posix_spawnp = NULL;
-    if (!real_posix_spawnp) {
-        real_posix_spawnp = (posix_spawnp_fn)dlsym(RTLD_NEXT, "posix_spawnp");
-    }
-    char buf[PATH_MAX];
-    const char* target = translate_path(file, buf, sizeof(buf));
-    char** adj_env = prepare_envp(envp, is_glibc_target(target));
-    int ret = real_posix_spawnp(pid, target, file_actions, attrp, argv, adj_env);
-    if (adj_env != envp && adj_env != environ) free(adj_env);
-    return ret;
+    return posix_spawn_common(1, pid, file, file_actions, attrp, argv, envp);
 }
 
 /* Check if target path resides within protected system directories */
@@ -473,4 +771,50 @@ int fstatat64(int dirfd, const char* pathname, struct stat64* statbuf, int flags
     char buf[PATH_MAX];
     const char* target = translate_path(pathname, buf, sizeof(buf));
     return real_fstatat64(dirfd, target, statbuf, flags);
+}
+
+/* Intercept opendir, mkdir, mkdirat, readlink, readlinkat (Android 17 Bionic intra-libc bypasses) */
+typedef DIR* (*opendir_fn)(const char*);
+DIR* opendir(const char* name) {
+    static opendir_fn real_opendir = NULL;
+    if (!real_opendir) real_opendir = (opendir_fn)dlsym(RTLD_NEXT, "opendir");
+    char buf[PATH_MAX];
+    const char* target = translate_path(name, buf, sizeof(buf));
+    return real_opendir(target);
+}
+
+typedef int (*mkdir_fn)(const char*, mode_t);
+int mkdir(const char* pathname, mode_t mode) {
+    static mkdir_fn real_mkdir = NULL;
+    if (!real_mkdir) real_mkdir = (mkdir_fn)dlsym(RTLD_NEXT, "mkdir");
+    char buf[PATH_MAX];
+    const char* target = translate_path(pathname, buf, sizeof(buf));
+    return real_mkdir(target, mode);
+}
+
+typedef int (*mkdirat_fn)(int, const char*, mode_t);
+int mkdirat(int dirfd, const char* pathname, mode_t mode) {
+    static mkdirat_fn real_mkdirat = NULL;
+    if (!real_mkdirat) real_mkdirat = (mkdirat_fn)dlsym(RTLD_NEXT, "mkdirat");
+    char buf[PATH_MAX];
+    const char* target = translate_path(pathname, buf, sizeof(buf));
+    return real_mkdirat(dirfd, target, mode);
+}
+
+typedef ssize_t (*readlink_fn)(const char*, char*, size_t);
+ssize_t readlink(const char* pathname, char* linkbuf, size_t bufsiz) {
+    static readlink_fn real_readlink = NULL;
+    if (!real_readlink) real_readlink = (readlink_fn)dlsym(RTLD_NEXT, "readlink");
+    char buf[PATH_MAX];
+    const char* target = translate_path(pathname, buf, sizeof(buf));
+    return real_readlink(target, linkbuf, bufsiz);
+}
+
+typedef ssize_t (*readlinkat_fn)(int, const char*, char*, size_t);
+ssize_t readlinkat(int dirfd, const char* pathname, char* linkbuf, size_t bufsiz) {
+    static readlinkat_fn real_readlinkat = NULL;
+    if (!real_readlinkat) real_readlinkat = (readlinkat_fn)dlsym(RTLD_NEXT, "readlinkat");
+    char buf[PATH_MAX];
+    const char* target = translate_path(pathname, buf, sizeof(buf));
+    return real_readlinkat(dirfd, target, linkbuf, bufsiz);
 }

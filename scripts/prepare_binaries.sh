@@ -42,6 +42,7 @@ MANIFEST_FILE="${STAGING_DIR}/.symlinks.manifest"
 echo "[1/7] Compiling C Virtualization Shim (libagy_shim.so)..."
 CC_BIN="${CC:-clang}"
 $CC_BIN -shared -fPIC -O2 -Wall \
+  -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384 \
   "${PROJECT_ROOT}/app/src/main/cpp/agy_shim.c" \
   -o "${JNI_DIR}/libagy_shim.so" -ldl
 llvm-strip --strip-unneeded "${JNI_DIR}/libagy_shim.so" 2>/dev/null || strip --strip-unneeded "${JNI_DIR}/libagy_shim.so"

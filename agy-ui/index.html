@@ -5360,6 +5360,10 @@
               this.subtitle.textContent = 'Your Google session has expired. Please sign in again to continue.';
             }
             this.showAlert('Your session has expired. Please sign in again.', 'warning');
+          } else if (reason === 'reauth') {
+            if (this.subtitle) {
+              this.subtitle.textContent = 'Sign in with a Google account to switch or refresh your Antigravity CLI session.';
+            }
           } else {
             if (this.subtitle) {
               this.subtitle.textContent = 'Sign in with your Google account to connect Antigravity CLI and unlock full AI capabilities.';
@@ -5399,6 +5403,9 @@
           }
           if (this.urlHint) {
             this.urlHint.style.display = 'none';
+          }
+          if (this.linkDirect) {
+            this.linkDirect.setAttribute('href', '#');
           }
         },
 
@@ -5447,20 +5454,34 @@
 
           if (this.btnGoogle) {
             this.btnGoogle.addEventListener('click', () => {
-              this.btnGoogle.disabled = true;
-              if (this.labelGoogle) this.labelGoogle.textContent = 'Opening Sign-In...';
-              if (this.linkDirect && this.linkDirect.href && this.linkDirect.href.startsWith('https://accounts.google.com')) {
+              const directHref = this.linkDirect ? (this.linkDirect.getAttribute('href') || '') : '';
+              if (directHref.startsWith('https://accounts.google.com')) {
                 openExternalUrl(this.linkDirect.href);
+                if (this.labelGoogle) this.labelGoogle.textContent = 'Re-open Sign-In Page';
+                return;
               }
+              this.btnGoogle.disabled = true;
+              if (this.labelGoogle) this.labelGoogle.textContent = 'Generating Sign-In Link...';
               sendWs({ type: 'request_auth_url' });
               setTimeout(() => {
                 if (this.btnGoogle) this.btnGoogle.disabled = false;
-                if (this.labelGoogle && this.labelGoogle.textContent === 'Opening Sign-In...') {
-                  this.labelGoogle.textContent = (this.linkDirect && this.linkDirect.href && this.linkDirect.href.startsWith('https://accounts.google.com'))
+                const curHref = this.linkDirect ? (this.linkDirect.getAttribute('href') || '') : '';
+                if (this.labelGoogle && this.labelGoogle.textContent === 'Generating Sign-In Link...') {
+                  this.labelGoogle.textContent = curHref.startsWith('https://accounts.google.com')
                     ? 'Re-open Sign-In Page'
                     : 'Sign In with Google';
                 }
-              }, 3500);
+              }, 5000);
+            });
+          }
+
+          if (this.linkDirect) {
+            this.linkDirect.addEventListener('click', (e) => {
+              const directHref = this.linkDirect.getAttribute('href') || '';
+              if (directHref.startsWith('https://accounts.google.com')) {
+                e.preventDefault();
+                openExternalUrl(this.linkDirect.href);
+              }
             });
           }
 
@@ -7234,20 +7255,32 @@
             if (authOverlay.labelGoogle) authOverlay.labelGoogle.textContent = 'Re-open Sign-In Page';
             break;
 
-          case 'auth_required':
-            state.isAuthenticated = false;
+          case 'auth_required': {
+            const isReauth = msg.reason === 'reauth';
+            if (!isReauth) {
+              state.isAuthenticated = false;
+            }
             state.isAuthenticating = true;
             stopLiveProgress();
-            authOverlay.show(msg.reason || 'required');
+            const isOverlayVisible = authOverlay.el && authOverlay.el.style.display !== 'none' && authOverlay.el.style.display !== '';
+            if (!isOverlayVisible) {
+              authOverlay.show(msg.reason || 'required');
+            } else if (authOverlay.btnClose) {
+              authOverlay.btnClose.style.display = state.isAuthenticated ? 'flex' : 'none';
+            }
             if (msg.url) {
               if (authOverlay.urlHint) authOverlay.urlHint.style.display = 'flex';
               if (authOverlay.linkDirect) authOverlay.linkDirect.href = msg.url;
+              if (authOverlay.btnGoogle) authOverlay.btnGoogle.disabled = false;
+              if (authOverlay.labelGoogle) authOverlay.labelGoogle.textContent = 'Re-open Sign-In Page';
             }
             break;
+          }
 
           case 'auth_success':
             state.isAuthenticated = true;
             state.isAuthenticating = false;
+            authOverlay.setSubmitting(false);
             authOverlay.showAlert('Sign-In Confirmed! Setting up runtime...', 'success');
             setInitializingControlsState(false);
             setTimeout(() => {
@@ -7261,11 +7294,9 @@
             state.isAuthenticating = false;
             authOverlay.setSubmitting(false);
             if (authOverlay.btnGoogle) authOverlay.btnGoogle.disabled = false;
-            if (authOverlay.labelGoogle) {
-              authOverlay.labelGoogle.textContent = (authOverlay.linkDirect && authOverlay.linkDirect.href && authOverlay.linkDirect.href.startsWith('https://accounts.google.com'))
-                ? 'Re-open Sign-In Page'
-                : 'Sign In with Google';
-            }
+            if (authOverlay.linkDirect) authOverlay.linkDirect.setAttribute('href', '#');
+            if (authOverlay.urlHint) authOverlay.urlHint.style.display = 'none';
+            if (authOverlay.labelGoogle) authOverlay.labelGoogle.textContent = 'Sign In with Google';
             authOverlay.showAlert(msg.error || 'Invalid or expired code. Please try signing in again.', 'error');
             break;
 
@@ -9297,13 +9328,21 @@
         `;
 
         if (!state.models || state.models.length === 0) {
+          const titleTxt = state.isAuthenticated ? 'No Models Loaded' : 'Google Authentication Required';
+          const descTxt = state.isAuthenticated
+            ? 'Tap Refresh Models to fetch your available models, or sign in again with Google.'
+            : 'Sign in to discover your available subscription models and quotas.';
+          const refreshBtnHtml = state.isAuthenticated
+            ? `<button class="auth-submit-btn" id="btnSheetRefreshModels" style="padding:10px 22px;min-height:44px;touch-action:manipulation;font-size:14px;border-radius:12px;margin-bottom:10px;">Refresh Models</button><br>`
+            : '';
           sheetList.innerHTML = `
             ${effortHtml}
             <div style="padding:28px 16px;text-align:center;">
-              <div style="font-size:36px;margin-bottom:8px;color:var(--accent-primary);display:inline-flex;align-items:center;justify-content:center;">${faIcon('lock', '', 'width:36px;height:36px;')}</div>
-              <div style="font-weight:600;font-size:15px;margin-bottom:6px;">Google Authentication Required</div>
-              <div style="color:var(--text-secondary);font-size:13px;margin-bottom:16px;line-height:1.4;">Sign in to discover your available subscription models and quotas.</div>
-              <button class="auth-submit-btn" id="btnSheetSignIn" style="padding:10px 22px;font-size:14px;border-radius:12px;">Sign In with Google</button>
+              <div style="font-size:36px;margin-bottom:8px;color:var(--accent-primary);display:inline-flex;align-items:center;justify-content:center;">${faIcon(state.isAuthenticated ? 'arrows-rotate' : 'lock', '', 'width:36px;height:36px;')}</div>
+              <div style="font-weight:600;font-size:15px;margin-bottom:6px;">${titleTxt}</div>
+              <div style="color:var(--text-secondary);font-size:13px;margin-bottom:16px;line-height:1.4;">${descTxt}</div>
+              ${refreshBtnHtml}
+              <button class="auth-submit-btn" id="btnSheetSignIn" style="padding:10px 22px;min-height:44px;touch-action:manipulation;font-size:14px;border-radius:12px;${state.isAuthenticated ? 'background:var(--surface-elevated);color:var(--text-primary);border:1px solid var(--border-subtle);' : ''}">${state.isAuthenticated ? 'Re-Sign In with Google' : 'Sign In with Google'}</button>
             </div>
           `;
 
@@ -9317,10 +9356,26 @@
             });
           });
 
+          const btnRefreshModels = document.getElementById('btnSheetRefreshModels');
+          if (btnRefreshModels) {
+            btnRefreshModels.addEventListener('click', () => {
+              btnRefreshModels.disabled = true;
+              btnRefreshModels.textContent = 'Refreshing...';
+              sendWs({ type: 'refresh_models' });
+              setTimeout(() => {
+                if (document.getElementById('btnSheetRefreshModels')) {
+                  openModelSheet();
+                }
+              }, 2000);
+            });
+          }
+
           const btnSignIn = document.getElementById('btnSheetSignIn');
           if (btnSignIn) {
             btnSignIn.addEventListener('click', () => {
+              const reason = state.isAuthenticated ? 'reauth' : 'required';
               closeOverlays();
+              authOverlay.show(reason);
               sendWs({ type: 'trigger_login' });
             });
           }

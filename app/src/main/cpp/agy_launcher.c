@@ -20,8 +20,9 @@ int main(int argc, char *argv[]) {
         return 127;
     }
 
-    /* Allocate argument array: 4 prefixed args + (argc - 1) passed args + 1 NULL terminator */
-    char **new_argv = (char **)calloc((size_t)argc + 4, sizeof(char *));
+    /* Allocate argument array: 4 prefixed args + max(argc - 1, 0) passed args + 1 NULL terminator */
+    size_t extra_args = (argc > 1) ? (size_t)(argc - 1) : 0;
+    char **new_argv = (char **)calloc(extra_args + 5, sizeof(char *));
     if (!new_argv) {
         perror("calloc failed");
         return 127;
@@ -35,7 +36,10 @@ int main(int argc, char *argv[]) {
     for (int i = 1; i < argc; i++) {
         new_argv[i + 3] = argv[i];
     }
-    new_argv[argc + 3] = NULL;
+    new_argv[extra_args + 4] = NULL;
+
+    /* Strip Bionic LD_PRELOAD before launching Glibc dynamic linker */
+    unsetenv("LD_PRELOAD");
 
     execv(GLIBC_LD, new_argv);
 

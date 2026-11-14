@@ -72,6 +72,11 @@ class AgyForegroundService : Service() {
         refreshWakeLock()
     }
 
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        Log.w(TAG, "Foreground service timeout reached (startId=$startId, fgsType=$fgsType); stopping gracefully")
+        stopServiceGracefully(killHostProcess = false)
+    }
+
     override fun onCreate() {
         super.onCreate()
         _readyPortFlow.value = null
@@ -401,7 +406,7 @@ class AgyForegroundService : Service() {
             }
         }
         batteryReceiver = receiver
-        registerReceiver(receiver, filter)
+        ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
     }
 
     private fun stopServiceGracefully(killHostProcess: Boolean = true) {

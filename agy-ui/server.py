@@ -27,6 +27,7 @@ import sqlite3
 import subprocess
 import sys
 import tarfile
+import tempfile
 import zipfile
 import time
 import urllib.error
@@ -182,6 +183,15 @@ def is_request_authorized(request: Request) -> bool:
             return True
 
     return False
+
+
+def _clean_glibc_env(extra: Optional[dict[str, str]] = None) -> dict[str, str]:
+    """Return a copy of os.environ without Bionic LD_PRELOAD for Glibc / container subprocesses."""
+    env = dict(os.environ)
+    env.pop("LD_PRELOAD", None)
+    if extra:
+        env.update(extra)
+    return env
 
 
 def is_oauth_token_valid() -> bool:
@@ -403,7 +413,13 @@ def get_agy_version() -> str:
     # 1. Ask the binary directly: agy --version
     try:
         agy_cmd = os.environ.get("AGY_BIN", str(AGY_BIN))
-        res = subprocess.run([agy_cmd, "--version"], capture_output=True, text=True, timeout=3)
+        res = subprocess.run(
+            [agy_cmd, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            env=_clean_glibc_env(),
+        )
         out = (res.stdout or res.stderr).strip()
         m = re.search(r"\b([0-9]+\.[0-9]+(?:\.[0-9]+)?)\b", out)
         if m:
@@ -675,7 +691,10 @@ async def generate_ssh_key(name: str, key_type: str, overwrite: bool = False) ->
 
     cmd = ["ssh-keygen", *type_args, "-N", "", "-C", f"{name}@antigravity", "-f", str(priv_path)]
     proc = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=_clean_glibc_env(),
     )
     _, stderr = await asyncio.wait_for(proc.communicate(), timeout=15.0)
     if proc.returncode != 0:
@@ -1905,7 +1924,8 @@ class McpBinaryProvisioner:
                 [str(USR_DIR / "bin" / "agy-sh"), str(file_path), "--help"],
                 capture_output=True,
                 text=True,
-                timeout=4.0
+                timeout=4.0,
+                env=_clean_glibc_env(),
             )
             out = (res.stdout + " " + res.stderr).lower()
             if "available commands:" in out or "commands:" in out or "subcommands:" in out:
@@ -2801,7 +2821,10 @@ async def add_mcp_server(
                 cmd.extend(user_args)
 
     proc = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=_clean_glibc_env(),
     )
     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15.0)
     if proc.returncode != 0:
@@ -2909,7 +2932,10 @@ async def toggle_mcp_server(name: str, enabled: bool) -> dict[str, Any]:
     try:
         cmd = [str(AGY_BIN), "mcp", sub, name]
         proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_clean_glibc_env(),
         )
         await asyncio.wait_for(proc.communicate(), timeout=10.0)
     except Exception as e:
@@ -2929,7 +2955,10 @@ async def delete_mcp_server(name: str) -> dict[str, Any]:
     try:
         cmd = [str(AGY_BIN), "mcp", "remove", name]
         proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_clean_glibc_env(),
         )
         await asyncio.wait_for(proc.communicate(), timeout=8.0)
     except Exception as exc:
@@ -2967,7 +2996,10 @@ async def check_github_updates() -> dict[str, Any]:
 
     cmd = ["curl", "-sSL", "-H", f"User-Agent: AntigravityStudio/{APP_VERSION}", url]
     proc = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=_clean_glibc_env(),
     )
     stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8.0)
     if proc.returncode != 0 or not stdout:
@@ -3150,6 +3182,7 @@ def get_engine_status() -> dict[str, Any]:
                     capture_output=True,
                     text=True,
                     timeout=5.0,
+                    env=_clean_glibc_env(),
                 )
                 if res.returncode == 0:
                     version = res.stdout.strip()
@@ -3204,7 +3237,10 @@ async def check_engine_updates() -> dict[str, Any]:
 
     cmd = ["curl", "-sSL", "-H", f"User-Agent: AntigravityStudio/{APP_VERSION}", GOOGLE_AGY_MANIFEST_URL]
     proc = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=_clean_glibc_env(),
     )
     stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8.0)
     if proc.returncode != 0 or not stdout:
@@ -3388,6 +3424,7 @@ async def install_or_update_engine(
                     capture_output=True,
                     text=True,
                     timeout=10.0,
+                    env=_clean_glibc_env(),
                 )
                 if res.returncode != 0:
                     err = res.stderr.strip() or f"Process exited with code {res.returncode}"
@@ -4543,7 +4580,10 @@ async def restore_configurations_bundle(
                                                 cli_cmd.extend(user_args)
 
                                         proc = await asyncio.create_subprocess_exec(
-                                            *cli_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                                            *cli_cmd,
+                                            stdout=asyncio.subprocess.PIPE,
+                                            stderr=asyncio.subprocess.PIPE,
+                                            env=_clean_glibc_env(),
                                         )
                                         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15.0)
                                         if proc.returncode != 0:
@@ -6134,6 +6174,9 @@ class AgyProcessOrchestrator:
         self._pending_auth_prompt: Optional[str] = None
         self._pending_auth_attachments: list[dict[str, Any]] = []
         self._auth_required_detected: bool = False
+        self._auth_temp_home: Optional[str] = None
+        self._auth_token_target: Optional[Path] = None
+        self._auth_is_reauth: bool = False
         self._secure_oauth_token()
 
         # Dedicated draft context for unassigned new sessions
@@ -6361,6 +6404,7 @@ class AgyProcessOrchestrator:
             for ak_k, ak_v in active_api_keys.items():
                 if ak_k not in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "TAVILY_API_KEY", "GITHUB_TOKEN") and ak_k not in PROTECTED_ENV_NAMES:
                     proc_env[ak_k] = ak_v
+            proc_env.pop("LD_PRELOAD", None)
 
             cmd = [str(AGY_BIN), "acp", "--dangerously-skip-permissions"]
             logger.info("Spawning persistent agy acp daemon: %s", " ".join(cmd))
@@ -7984,6 +8028,14 @@ class AgyProcessOrchestrator:
         self.auth_watchdog_task = None
         self.auth_turn_id = None
         self.auth_cid = None
+        self._auth_is_reauth = False
+        self._auth_token_target = None
+        if self._auth_temp_home:
+            try:
+                shutil.rmtree(self._auth_temp_home, ignore_errors=True)
+            except Exception:
+                pass
+            self._auth_temp_home = None
 
     def _secure_oauth_token(self) -> None:
         token_dir = HOME_DIR / ".gemini" / "antigravity-cli"
@@ -8019,8 +8071,31 @@ class AgyProcessOrchestrator:
         self._pending_auth_prompt = None
         self._pending_auth_attachments = []
 
+        real_token_file = GEMINI_DIR / "antigravity-oauth-token"
+        isolated_target = bool(self._auth_token_target and self._auth_token_target != real_token_file)
+        promoted = False
+        if isolated_target and self._auth_token_target.exists():
+            try:
+                raw_tok = self._auth_token_target.read_text(encoding="utf-8")
+                if len(raw_tok) > 50:
+                    GEMINI_DIR.mkdir(parents=True, exist_ok=True)
+                    os.chmod(str(GEMINI_DIR), 0o700)
+                    atomic_write_secure(str(real_token_file), raw_tok, mode=0o600)
+                    promoted = True
+                    logger.info("Promoted newly authenticated OAuth token to %s", real_token_file)
+            except Exception as exc:
+                logger.warning("Failed promoting OAuth token from isolated HOME: %s", exc)
+
         self._secure_oauth_token()
         self._cleanup_auth()
+
+        if (isolated_target and not promoted) or not is_oauth_token_valid():
+            logger.warning("_on_auth_success invoked without a newly valid OAuth token (isolated=%s promoted=%s)", isolated_target, promoted)
+            await self.broadcast({
+                "type": "auth_failed",
+                "error": "Authentication did not complete. Please sign in again.",
+            })
+            return
 
         # Zero chat pollution: overlay receives auth_success directly
         await self.broadcast({"type": "auth_success"})
@@ -8072,7 +8147,7 @@ class AgyProcessOrchestrator:
             })
             return False
 
-        token_file = GEMINI_DIR / "antigravity-oauth-token"
+        token_file = self._auth_token_target or (GEMINI_DIR / "antigravity-oauth-token")
         initial_mtime = token_file.stat().st_mtime if token_file.exists() else 0
 
         try:
@@ -8191,7 +8266,7 @@ class AgyProcessOrchestrator:
                     await self.broadcast({
                         "type": "auth_required",
                         "conversation_id": conversation_id,
-                        "reason": "expired" if conversation_id else "unauthenticated",
+                        "reason": "expired" if conversation_id else ("reauth" if self._auth_is_reauth else "unauthenticated"),
                         "url": self.cached_auth_url,
                         "turn_id": turn_id,
                     })
@@ -8223,8 +8298,26 @@ class AgyProcessOrchestrator:
                 except Exception:
                     pass
 
-                env = dict(os.environ)
-                env["TERM"] = "xterm-256color"
+                env = _clean_glibc_env({"TERM": "xterm-256color"})
+                real_token_file = GEMINI_DIR / "antigravity-oauth-token"
+                already_signed_in = is_oauth_token_valid()
+                self._auth_is_reauth = bool(already_signed_in and standalone and not conversation_id)
+
+                # Isolate HOME when re-authenticating or credentials already exist so `agy`
+                # presents Google OAuth sign-in instead of dropping directly into chat TUI,
+                # and existing credentials stay intact if cancelled.
+                if standalone or already_signed_in or real_token_file.exists():
+                    temp_home = tempfile.mkdtemp(prefix="agy_auth_")
+                    os.chmod(temp_home, 0o700)
+                    temp_gemini_dir = Path(temp_home) / ".gemini" / "antigravity-cli"
+                    temp_gemini_dir.mkdir(parents=True, exist_ok=True)
+                    os.chmod(str(temp_gemini_dir), 0o700)
+                    self._auth_temp_home = temp_home
+                    self._auth_token_target = temp_gemini_dir / "antigravity-oauth-token"
+                    env["HOME"] = temp_home
+                else:
+                    self._auth_temp_home = None
+                    self._auth_token_target = real_token_file
 
                 try:
                     proc = await asyncio.create_subprocess_exec(
@@ -8249,6 +8342,11 @@ class AgyProcessOrchestrator:
                 tos_handled = False
                 login_method_selected = False
 
+                ansi_re = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+                oauth_url_re = re.compile(
+                    r"(https://accounts\.google\.com/o/oauth2/auth\?[a-zA-Z0-9_\-\.%&=+~]+)"
+                )
+
                 while time.time() - start_wait < 14.0:
                     if proc.returncode is not None:
                         break
@@ -8261,7 +8359,9 @@ class AgyProcessOrchestrator:
                         except Exception:
                             break
 
-                    if not color_scheme_handled and ("Choose your color scheme" in output or "color scheme:" in output):
+                    clean_output = ansi_re.sub("", output)
+
+                    if not color_scheme_handled and ("Choose your color scheme" in clean_output or "color scheme:" in clean_output):
                         await asyncio.sleep(0.2)
                         try:
                             os.write(master, b"\r\n")
@@ -8269,7 +8369,7 @@ class AgyProcessOrchestrator:
                         except Exception:
                             pass
 
-                    if not tos_handled and ("Terms of Service" in output or "[Done]" in output):
+                    if not tos_handled and ("Terms of Service" in clean_output or "[Done]" in clean_output):
                         await asyncio.sleep(0.2)
                         try:
                             os.write(master, b"\t\t\r\n")
@@ -8277,7 +8377,7 @@ class AgyProcessOrchestrator:
                         except Exception:
                             pass
 
-                    if not login_method_selected and ("Select login method" in output or "1. Google OAuth" in output):
+                    if not login_method_selected and ("Select login method" in clean_output or "1. Google OAuth" in clean_output):
                         await asyncio.sleep(0.25)
                         try:
                             os.write(master, b"\r\n")
@@ -8297,13 +8397,11 @@ class AgyProcessOrchestrator:
                     if proc.returncode is not None:
                         break
 
-                    m = re.search(
-                        r'(https://accounts\.google\.com/o/oauth2/auth\?[a-zA-Z0-9_\-\.%&=+]+)',
-                        output
-                    )
+                    clean_output = ansi_re.sub("", output)
+                    m = oauth_url_re.search(clean_output)
                     if m:
                         auth_url = m.group(1)
-                        if re.search(r"&state=[a-zA-Z0-9_\-]{8,}", auth_url) or "\n" in output[m.end():] or "authorization code" in output.lower():
+                        if re.search(r"&state=[a-zA-Z0-9_\-]{8,}", auth_url) or "authorization code" in clean_output.lower():
                             break
 
                     await asyncio.sleep(0.15)
@@ -8312,13 +8410,11 @@ class AgyProcessOrchestrator:
                         try:
                             chunk = os.read(master, 2048).decode("latin1", "ignore")
                             output += chunk
-                            m = re.search(
-                                r'(https://accounts\.google\.com/o/oauth2/auth\?[a-zA-Z0-9_\-\.%&=+]+)',
-                                output
-                            )
+                            clean_output = ansi_re.sub("", output)
+                            m = oauth_url_re.search(clean_output)
                             if m:
                                 auth_url = m.group(1)
-                                if re.search(r"&state=[a-zA-Z0-9_\-]{8,}", auth_url) or "\n" in output[m.end():] or "authorization code" in output.lower():
+                                if re.search(r"&state=[a-zA-Z0-9_\-]{8,}", auth_url) or "authorization code" in clean_output.lower():
                                     break
                         except Exception:
                             break
@@ -8339,7 +8435,7 @@ class AgyProcessOrchestrator:
                         {
                             "type": "auth_required",
                             "conversation_id": conversation_id,
-                            "reason": "expired" if conversation_id else "unauthenticated",
+                            "reason": "expired" if conversation_id else ("reauth" if self._auth_is_reauth else "unauthenticated"),
                             "url": auth_url,
                             "turn_id": turn_id,
                         }
@@ -8364,10 +8460,12 @@ class AgyProcessOrchestrator:
                     async def _monitor_proc():
                         try:
                             rc = await proc.wait()
-                            if rc == 0:
+                            tok_path = self._auth_token_target or (GEMINI_DIR / "antigravity-oauth-token")
+                            has_new_token = bool(tok_path and tok_path.exists() and tok_path.stat().st_size > 50)
+                            if rc == 0 and self.is_authenticating and self.auth_proc == proc and has_new_token:
                                 await self._on_auth_success()
                             elif self.is_authenticating and self.auth_proc == proc:
-                                logger.info("Auth process exited with rc=%s", rc)
+                                logger.info("Auth process exited with rc=%s (has_new_token=%s)", rc, has_new_token)
                         except asyncio.CancelledError:
                             pass
                         except Exception as exc:
@@ -10069,6 +10167,7 @@ class AgyWebServer:
                 "models",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=_clean_glibc_env(),
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=8.0)
             if proc.returncode == 0:
@@ -10162,6 +10261,7 @@ class AgyWebServer:
                 "/usage",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=_clean_glibc_env(),
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=8.0)
             if proc.returncode != 0:

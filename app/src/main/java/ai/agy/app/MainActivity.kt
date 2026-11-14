@@ -5,10 +5,12 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.util.Log
 import android.webkit.*
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.browser.customtabs.CustomTabsClient
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.*
@@ -431,14 +433,28 @@ class MainActivity : AppCompatActivity() {
             if (!safeUrl.startsWith("https://") && !safeUrl.startsWith("http://")) return
             runOnUiThread {
                 try {
-                    val uri = Uri.parse(safeUrl)
-                    val intent = CustomTabsIntent.Builder().setShowTitle(true).build()
-                    intent.launchUrl(this@MainActivity, uri)
-                } catch (_: Exception) {
+                    val uri = Uri.parse(safeUrl).normalizeScheme()
+                    val customTabsPkg = CustomTabsClient.getPackageName(this@MainActivity, null)
+                    if (customTabsPkg != null) {
+                        val customTabsIntent = CustomTabsIntent.Builder().setShowTitle(true).build()
+                        customTabsIntent.intent.setPackage(customTabsPkg)
+                        customTabsIntent.launchUrl(this@MainActivity, uri)
+                        return@runOnUiThread
+                    }
+                    val viewIntent = Intent(Intent.ACTION_VIEW, uri).apply {
+                        addCategory(Intent.CATEGORY_BROWSABLE)
+                    }
+                    startActivity(viewIntent)
+                } catch (e: Exception) {
+                    Log.w("MainActivity", "CustomTabs openUrl failed for $safeUrl, falling back to VIEW", e)
                     try {
-                        val fallback = Intent(Intent.ACTION_VIEW, Uri.parse(safeUrl))
+                        val fallback = Intent(Intent.ACTION_VIEW, Uri.parse(safeUrl)).apply {
+                            addCategory(Intent.CATEGORY_BROWSABLE)
+                        }
                         startActivity(fallback)
-                    } catch (_: Exception) {}
+                    } catch (e2: Exception) {
+                        Log.e("MainActivity", "Fallback ACTION_VIEW failed for $safeUrl", e2)
+                    }
                 }
             }
         }
