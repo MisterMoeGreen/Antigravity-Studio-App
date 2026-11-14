@@ -594,8 +594,8 @@ def get_agy_version() -> str:
 
     return _cached_agy_version or os.environ.get("AGY_RUNTIME_VERSION", "1.4.7")
 
-APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.9.1")
-APP_BUILD = os.environ.get("AGY_APP_VERSION_CODE", "84")
+APP_VERSION = os.environ.get("AGY_APP_VERSION", "1.9.5")
+APP_BUILD = os.environ.get("AGY_APP_VERSION_CODE", "126")
 AGY_VERSION = get_agy_version()
 
 logging.basicConfig(
@@ -3700,7 +3700,9 @@ def get_apk_bin() -> str:
 
 def get_installed_packages() -> dict[str, Any]:
     """
-    Directly parses /etc/apk/world and /lib/apk/db/installed in < 3ms.
+    Directly parses /etc/apk/world and /lib/apk/db/installed in < 5ms.
+    Computes each world package's exclusive dependency footprint (reclaimable
+    size if removed) using the full APK provides/depends/install_if graph.
     Returns:
         {
             "packages": [
@@ -3708,6 +3710,9 @@ def get_installed_packages() -> dict[str, Any]:
                     "name": str,
                     "version": str,
                     "size_mb": float,
+                    "own_size_mb": float,
+                    "exclusive_size_mb": float,
+                    "exclusive_deps_count": int,
                     "description": str,
                     "url": str,
                 }, ...
@@ -3728,12 +3733,15 @@ def get_installed_packages() -> dict[str, Any]:
         logger.warning("Could not read apk world: %s", exc)
         return {"packages": [], "total_size_mb": 0.0}
 
+    all_world_packages: list[str] = []
     world_packages: list[str] = []
     for line in world_raw.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
         clean_name = re.split(r"[@=<>~]", line, maxsplit=1)[0].strip()
+        if clean_name and clean_name not in all_world_packages:
+            all_world_packages.append(clean_name)
         if clean_name and clean_name not in PROTECTED_PACKAGES and clean_name not in world_packages:
             world_packages.append(clean_name)
 
@@ -3744,12 +3752,21 @@ def get_installed_packages() -> dict[str, Any]:
         return {"packages": [], "total_size_mb": 0.0}
 
     installed_index: dict[str, dict[str, Any]] = {}
+    provides_map: dict[str, set[str]] = defaultdict(set)
     current_entry: dict[str, Any] = {}
+
+    def _flush_entry(entry: dict[str, Any]) -> None:
+        pname = entry.get("name")
+        if not pname:
+            return
+        installed_index[pname] = entry
+        provides_map[pname].add(pname)
+        for prov in entry.get("provides", ()):
+            provides_map[prov].add(pname)
 
     for line in installed_raw.splitlines():
         if not line.strip():
-            if "name" in current_entry:
-                installed_index[current_entry["name"]] = current_entry
+            _flush_entry(current_entry)
             current_entry = {}
             continue
 
@@ -3770,18 +3787,78 @@ def get_installed_packages() -> dict[str, Any]:
             elif tag == "U":
                 current_entry["url"] = val
             elif tag == "D":
-                raw_deps = val.split()
-                deps: list[str] = []
-                for d in raw_deps:
-                    if d.startswith(("so:", "cmd:", "pc:", "!")):
+                raw_deps: list[str] = []
+                for d in val.split():
+                    if d.startswith("!"):
                         continue
                     d_clean = re.split(r"[@=<>~]", d, maxsplit=1)[0].strip()
-                    if d_clean and d_clean not in deps:
-                        deps.append(d_clean)
-                current_entry["deps"] = deps
+                    if d_clean and d_clean not in raw_deps:
+                        raw_deps.append(d_clean)
+                current_entry["raw_deps"] = raw_deps
+            elif tag == "p":
+                provs: list[str] = []
+                for p in val.split():
+                    p_clean = re.split(r"[@=<>~]", p, maxsplit=1)[0].strip()
+                    if p_clean and p_clean not in provs:
+                        provs.append(p_clean)
+                current_entry["provides"] = provs
+            elif tag == "i":
+                conds: list[str] = []
+                for c in val.split():
+                    c_clean = re.split(r"[@=<>~]", c, maxsplit=1)[0].strip()
+                    if c_clean and c_clean not in conds:
+                        conds.append(c_clean)
+                current_entry["install_if"] = conds
 
-    if "name" in current_entry:
-        installed_index[current_entry["name"]] = current_entry
+    _flush_entry(current_entry)
+
+    # Build directed dependency graph for D: dependencies and separate conjunctive install_if triggers
+    deps_graph: dict[str, set[str]] = defaultdict(set)
+    install_if_rules: list[tuple[str, list[str]]] = []
+    for pname, info in installed_index.items():
+        for dep_tok in info.get("raw_deps", ()):
+            for prov_pkg in provides_map.get(dep_tok, ()):
+                if prov_pkg != pname:
+                    deps_graph[pname].add(prov_pkg)
+        conds = info.get("install_if")
+        if conds:
+            install_if_rules.append((pname, conds))
+
+    def _reachable_from(roots: set[str]) -> set[str]:
+        visited: set[str] = set()
+        stack: list[str] = []
+        for root in roots:
+            for prov_pkg in provides_map.get(root, ()):
+                if prov_pkg in installed_index:
+                    stack.append(prov_pkg)
+
+        def _drain_stack() -> None:
+            while stack:
+                cur_pkg = stack.pop()
+                if cur_pkg in visited:
+                    continue
+                visited.add(cur_pkg)
+                for nxt in deps_graph.get(cur_pkg, ()):
+                    if nxt not in visited:
+                        stack.append(nxt)
+
+        _drain_stack()
+        if install_if_rules:
+            changed = True
+            while changed:
+                changed = False
+                for pkg_name, conds in install_if_rules:
+                    if pkg_name in visited:
+                        continue
+                    if all(any(prov in visited for prov in provides_map.get(c, ())) for c in conds):
+                        stack.append(pkg_name)
+                        changed = True
+                if changed:
+                    _drain_stack()
+        return visited
+
+    all_world_set = set(all_world_packages)
+    all_reachable = _reachable_from(all_world_set | set(PROTECTED_PACKAGES))
 
     total_bytes = sum(
         info.get("size_bytes", 0)
@@ -3792,28 +3869,42 @@ def get_installed_packages() -> dict[str, Any]:
 
     packages: list[dict[str, Any]] = []
     for pkg_name in world_packages:
-        info = installed_index.get(pkg_name, {})
+        info = installed_index.get(pkg_name)
+        resolved_self_names = {pkg_name} if pkg_name in installed_index else set(provides_map.get(pkg_name, ()))
+        if not info and resolved_self_names:
+            first_prov = sorted(resolved_self_names)[0]
+            info = installed_index.get(first_prov)
+        info = info or {}
+
         version = info.get("version", "unknown")
         desc = info.get("desc", "")
         url = info.get("url", "")
-        size_bytes = info.get("size_bytes", 0)
+        own_size_bytes = info.get("size_bytes", 0)
 
-        # Meta-package rollup (e.g. build-base size <= 16KB)
-        if size_bytes <= 16384 and info.get("deps"):
-            rolled_up = sum(
-                installed_index.get(dep, {}).get("size_bytes", 0)
-                for dep in info["deps"]
-                if dep not in PROTECTED_PACKAGES
-            )
-            if rolled_up > size_bytes:
-                size_bytes = rolled_up
+        # Exclusive dependency footprint: non-protected packages unreachable without pkg_name
+        without_pkg = _reachable_from((all_world_set - {pkg_name}) | set(PROTECTED_PACKAGES))
+        excl_pkgs = [
+            u for u in all_reachable
+            if u not in without_pkg and u not in PROTECTED_PACKAGES
+        ]
+        exclusive_size_bytes = sum(
+            installed_index.get(u, {}).get("size_bytes", 0)
+            for u in excl_pkgs
+        )
+        excl_deps_only = [u for u in excl_pkgs if u not in resolved_self_names]
 
-        size_mb = round(size_bytes / (1024 * 1024), 1)
+        own_size_mb = round(own_size_bytes / (1024 * 1024), 1)
+        exclusive_size_mb = round(exclusive_size_bytes / (1024 * 1024), 1)
+        display_bytes = exclusive_size_bytes if exclusive_size_bytes > own_size_bytes else own_size_bytes
+        size_mb = round(display_bytes / (1024 * 1024), 1)
 
         packages.append({
             "name": pkg_name,
             "version": version,
             "size_mb": size_mb,
+            "own_size_mb": own_size_mb,
+            "exclusive_size_mb": exclusive_size_mb,
+            "exclusive_deps_count": len(excl_deps_only),
             "description": desc,
             "url": url,
         })
@@ -3881,6 +3972,647 @@ async def upgrade_all_packages() -> tuple[bool, str]:
         if code != 0:
             return False, f"Failed to upgrade packages: {output.strip()}"
         return True, "Successfully upgraded all packages"
+
+
+# ---------------------------------------------------------------------------
+# Automated Storage Cleanup & Retention Engine (v1.9.5)
+# ---------------------------------------------------------------------------
+
+STORAGE_CLEANUP_LOCK = asyncio.Lock()
+CLEANUP_STATE_FILE = CACHE_DIR / "storage_cleanup_state.json"
+AUTO_CLEANUP_INTERVAL_SEC = 6 * 3600
+AUTO_CLEANUP_STARTUP_DELAY_SEC = 15
+AUTO_CLEANUP_BUSY_RETRY_SEC = 60
+AUTO_CLEANUP_GRADLE_BUDGET_BYTES = 250 * 1024 * 1024
+DEEP_CLEANUP_GRADLE_BUDGET_BYTES = 50 * 1024 * 1024
+AUTO_CLEANUP_NPM_BUDGET_BYTES = 80 * 1024 * 1024
+DEEP_CLEANUP_NPM_BUDGET_BYTES = 10 * 1024 * 1024
+
+
+def load_storage_cleanup_state() -> dict[str, Any]:
+    """Load persisted automated storage cleanup configuration and telemetry."""
+    default_state: dict[str, Any] = {
+        "auto_enabled": True,
+        "last_run_at": 0.0,
+        "last_mode": "",
+        "last_freed_bytes": 0,
+        "total_freed_bytes": 0,
+        "last_summary": {},
+    }
+    try:
+        if CLEANUP_STATE_FILE.exists():
+            raw = json.loads(CLEANUP_STATE_FILE.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                default_state.update(raw)
+    except Exception as exc:
+        logger.debug("Could not read cleanup state: %s", exc)
+    return default_state
+
+
+def save_storage_cleanup_state(state: dict[str, Any]) -> None:
+    """Persist automated storage cleanup configuration and telemetry atomically."""
+    try:
+        CLEANUP_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_secure(str(CLEANUP_STATE_FILE), json.dumps(state, indent=2), mode=0o600)
+    except Exception as exc:
+        logger.warning("Could not save cleanup state: %s", exc)
+
+
+def _dir_size_bytes(path: Path) -> int:
+    """Fast recursive directory byte counter that ignores symlinks."""
+    if not path.exists():
+        return 0
+    if path.is_symlink():
+        return 0
+    if path.is_file():
+        try:
+            return path.stat().st_size
+        except OSError:
+            return 0
+    total = 0
+    stack = [str(path)]
+    while stack:
+        cur = stack.pop()
+        try:
+            with os.scandir(cur) as it:
+                for entry in it:
+                    try:
+                        if entry.is_symlink():
+                            continue
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                        elif entry.is_file(follow_symlinks=False):
+                            total += entry.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return total
+
+
+def _remove_path_bytes(target: Path) -> int:
+    """Remove a file or directory tree and return the actual bytes freed."""
+    if not target.exists() and not target.is_symlink():
+        return 0
+    before = _dir_size_bytes(target) if not target.is_symlink() else 0
+    try:
+        if target.is_symlink() or target.is_file():
+            target.unlink(missing_ok=True)
+        elif target.is_dir():
+            shutil.rmtree(target, ignore_errors=True)
+        if not target.exists() and not target.is_symlink():
+            return before
+        after = _dir_size_bytes(target) if not target.is_symlink() else 0
+        return max(0, before - after)
+    except OSError:
+        return 0
+
+
+def _active_proc_cmdlines() -> tuple[bool, list[str]]:
+    """Inspect /proc to detect running build tools and collect active command lines."""
+    build_tools = {"gradle", "java", "javac", "aapt2", "kotlinc", "npm", "npx", "apk"}
+    build_active = False
+    cmdlines: list[str] = []
+    proc_dir = Path("/proc")
+    if not proc_dir.is_dir():
+        return False, cmdlines
+    try:
+        for entry in os.scandir(proc_dir):
+            if not entry.name.isdigit():
+                continue
+            try:
+                cmd_path = Path(entry.path) / "cmdline"
+                raw = cmd_path.read_bytes()
+                if not raw:
+                    continue
+                cmdline = raw.replace(b"\x00", b" ").decode("utf-8", errors="replace").strip()
+                if not cmdline:
+                    continue
+                cmdlines.append(cmdline)
+                first_tok = os.path.basename(cmdline.split()[0]).lower()
+                if first_tok in build_tools or "gradlewrappermain" in cmdline.lower():
+                    build_active = True
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return build_active, cmdlines
+
+
+def _prune_old_children(
+    parent: Path,
+    max_age_sec: float,
+    now: float,
+    protected_names: Optional[set[str]] = None,
+    skip_if_in_cmdlines: Optional[list[str]] = None,
+    keep_newest: int = 0,
+) -> int:
+    """Delete direct child files/dirs older than max_age_sec, returning freed bytes."""
+    if not parent.is_dir():
+        return 0
+    protected = protected_names or set()
+    entries: list[tuple[float, Path]] = []
+    try:
+        for child in parent.iterdir():
+            if child.name in protected:
+                continue
+            try:
+                st = child.lstat()
+                entries.append((st.st_mtime, child))
+            except OSError:
+                continue
+    except OSError:
+        return 0
+
+    # Newest first so keep_newest preserves recent entries
+    entries.sort(key=lambda item: item[0], reverse=True)
+    freed = 0
+    for idx, (mtime, child) in enumerate(entries):
+        if idx < keep_newest:
+            continue
+        if (now - mtime) < max_age_sec:
+            continue
+        if skip_if_in_cmdlines:
+            child_str = str(child)
+            if any(child.name in cmd or child_str in cmd for cmd in skip_if_in_cmdlines):
+                continue
+        freed += _remove_path_bytes(child)
+    return freed
+
+
+def _trim_dir_to_budget(
+    parent: Path,
+    budget_bytes: int,
+    min_age_sec: float,
+    now: float,
+    protected_names: Optional[set[str]] = None,
+    skip_if_in_cmdlines: Optional[list[str]] = None,
+) -> int:
+    """Evict oldest direct child entries until directory size <= budget_bytes."""
+    if not parent.is_dir():
+        return 0
+    protected = protected_names or set()
+    items: list[tuple[float, int, Path]] = []
+    total = 0
+    try:
+        for child in parent.iterdir():
+            try:
+                st = child.lstat()
+                sz = _dir_size_bytes(child)
+                total += sz
+                if child.name not in protected:
+                    items.append((st.st_mtime, sz, child))
+            except OSError:
+                continue
+    except OSError:
+        return 0
+
+    if total <= budget_bytes:
+        return 0
+
+    # Oldest first
+    items.sort(key=lambda item: item[0])
+    freed = 0
+    for mtime, sz, child in items:
+        if total <= budget_bytes:
+            break
+        if (now - mtime) < min_age_sec:
+            continue
+        if skip_if_in_cmdlines and any(child.name in cmd for cmd in skip_if_in_cmdlines):
+            continue
+        removed = _remove_path_bytes(child)
+        freed += removed
+        total -= max(removed, sz)
+    return freed
+
+
+def run_storage_cleanup_sync(mode: str = "auto", active_cids: Optional[set[str]] = None) -> dict[str, Any]:
+    """Synchronously prune stale logs, orphaned session artifacts, duplicate MCP bins, and old build caches."""
+    now = time.time()
+    is_deep = mode == "deep"
+    active_set = set(active_cids or set())
+    rootfs = get_rootfs_path()
+    files_root = USR_DIR.parent
+    build_active, proc_cmdlines = _active_proc_cmdlines()
+
+    freed_breakdown: dict[str, int] = {
+        "logs_and_tmp": 0,
+        "orphans_and_wal": 0,
+        "duplicate_mcp_bins": 0,
+        "gradle_cache": 0,
+        "npm_cache": 0,
+        "other_caches": 0,
+    }
+
+    # 1. Stale ACP logs & temporary daemon files (always safe with age/name guards)
+    log_dir = GEMINI_DIR / "log"
+    if log_dir.is_dir():
+        freed_breakdown["logs_and_tmp"] += _prune_old_children(
+            log_dir,
+            max_age_sec=(3600 if is_deep else 2 * 86400),
+            now=now,
+            keep_newest=(3 if is_deep else 10),
+        )
+        freed_breakdown["logs_and_tmp"] += _trim_dir_to_budget(
+            log_dir,
+            budget_bytes=(1 * 1024 * 1024 if is_deep else 5 * 1024 * 1024),
+            min_age_sec=3600,
+            now=now,
+        )
+
+    if TMP_DIR.is_dir():
+        tmp_max_age = 3600 if is_deep else 86400
+        for child in list(TMP_DIR.iterdir()):
+            name = child.name
+            if name in {"server.pid", ".auth_token", "agy.va39", "android_telemetry.json"} or name.endswith(".sock"):
+                continue
+            try:
+                mtime = child.lstat().st_mtime
+            except OSError:
+                continue
+            if (now - mtime) < tmp_max_age:
+                continue
+            if (
+                name.startswith("kotlin-daemon.")
+                or name.startswith("agy_auth_")
+                or name.startswith("gradle-")
+                or name.endswith(".log")
+            ):
+                freed_breakdown["logs_and_tmp"] += _remove_path_bytes(child)
+
+    # 2. Orphaned brain dirs, dangling WALs, and idle SQLite WAL checkpoints
+    known_summary_cids: set[str] = set()
+    summaries_read_ok = True
+    if SUMMARIES_DB.exists():
+        conn: Optional[sqlite3.Connection] = None
+        try:
+            conn = sqlite3.connect(str(SUMMARIES_DB), timeout=2.0)
+            for (cid_val,) in conn.execute("SELECT conversation_id FROM conversation_summaries"):
+                if cid_val:
+                    known_summary_cids.add(str(cid_val))
+        except Exception:
+            summaries_read_ok = False
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    if summaries_read_ok and BRAIN_DIR.is_dir():
+        orphan_min_age = 3600 if is_deep else 86400
+        for bdir in list(BRAIN_DIR.iterdir()):
+            if not bdir.is_dir():
+                continue
+            cid = bdir.name
+            if cid in active_set or cid in known_summary_cids:
+                continue
+            if (CONVERSATIONS_DIR / f"{cid}.db").exists() or (CONVERSATIONS_DIR / f"{cid}.pb").exists():
+                continue
+            try:
+                if (now - bdir.lstat().st_mtime) < orphan_min_age:
+                    continue
+            except OSError:
+                continue
+            freed_breakdown["orphans_and_wal"] += _remove_path_bytes(bdir)
+
+    if summaries_read_ok and ANNOTATIONS_DIR.is_dir():
+        for ann in list(ANNOTATIONS_DIR.glob("*.pbtxt")):
+            cid = ann.stem
+            if cid in active_set or cid in known_summary_cids:
+                continue
+            if (
+                (CONVERSATIONS_DIR / f"{cid}.db").exists()
+                or (CONVERSATIONS_DIR / f"{cid}.pb").exists()
+                or (BRAIN_DIR / cid).exists()
+            ):
+                continue
+            try:
+                if (now - ann.lstat().st_mtime) >= 86400:
+                    freed_breakdown["orphans_and_wal"] += _remove_path_bytes(ann)
+            except OSError:
+                pass
+
+    if CONVERSATIONS_DIR.is_dir():
+        for wal_file in list(CONVERSATIONS_DIR.glob("*.db-wal")) + list(CONVERSATIONS_DIR.glob("*.db-shm")):
+            base_db = wal_file.with_name(wal_file.name.rsplit("-", 1)[0])
+            if not base_db.exists():
+                try:
+                    if (now - wal_file.lstat().st_mtime) >= 3600:
+                        freed_breakdown["orphans_and_wal"] += _remove_path_bytes(wal_file)
+                except OSError:
+                    pass
+                continue
+            cid = base_db.stem
+            if wal_file.name.endswith("-wal") and cid not in active_set:
+                try:
+                    wal_size = wal_file.stat().st_size
+                    if wal_size > (512 * 1024 if is_deep else 2 * 1024 * 1024):
+                        wal_conn: Optional[sqlite3.Connection] = None
+                        try:
+                            wal_conn = sqlite3.connect(str(base_db), timeout=1.0)
+                            wal_conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+                        finally:
+                            if wal_conn is not None:
+                                try:
+                                    wal_conn.close()
+                                except Exception:
+                                    pass
+                        new_size = wal_file.stat().st_size if wal_file.exists() else 0
+                        if wal_size > new_size:
+                            freed_breakdown["orphans_and_wal"] += (wal_size - new_size)
+                except Exception:
+                    pass
+
+    # 3. Duplicate legacy MCP binaries (USR_DIR/opt/mcp-bin leftover after migration)
+    old_mcp_dir = USR_DIR / "opt" / "mcp-bin"
+    if old_mcp_dir.is_dir():
+        for child in list(old_mcp_dir.iterdir()):
+            cstr = str(child)
+            if any(cstr in cmd for cmd in proc_cmdlines):
+                continue
+            if (MCP_BIN_DIR / child.name).exists():
+                freed_breakdown["duplicate_mcp_bins"] += _remove_path_bytes(child)
+        try:
+            if not any(old_mcp_dir.iterdir()):
+                old_mcp_dir.rmdir()
+        except OSError:
+            pass
+
+    # 4. Container build & package caches (skip APK/Gradle/npm caches while active builds/installs run)
+    apk_cache = rootfs / "var" / "cache" / "apk"
+    if apk_cache.is_dir() and not build_active:
+        freed_breakdown["other_caches"] += _prune_old_children(
+            apk_cache, max_age_sec=(3600 if is_deep else 86400), now=now, skip_if_in_cmdlines=proc_cmdlines
+        )
+
+    for android_cache in (rootfs / "root" / ".android" / "cache", HOME_DIR / ".android" / "cache"):
+        if android_cache.is_dir():
+            freed_breakdown["other_caches"] += _prune_old_children(
+                android_cache, max_age_sec=(3600 if is_deep else 7 * 86400), now=now
+            )
+
+    for generic_cache in (rootfs / "root" / ".cache", HOME_DIR / ".cache"):
+        if generic_cache.is_dir():
+            protected_cache_names = {"huggingface", "ms-playwright"}
+            for p_item in (CLEANUP_STATE_FILE, CACHE_DIR):
+                try:
+                    rel = p_item.resolve().relative_to(generic_cache.resolve())
+                    if rel.parts:
+                        protected_cache_names.add(rel.parts[0])
+                except (ValueError, OSError):
+                    pass
+            freed_breakdown["other_caches"] += _prune_old_children(
+                generic_cache,
+                max_age_sec=(3600 if is_deep else 7 * 86400),
+                now=now,
+                protected_names=protected_cache_names,
+            )
+
+    if not build_active:
+        # Gradle caches inside rootfs/root/.gradle and HOME_DIR/.gradle
+        gradle_min_age = 3600 if is_deep else 24 * 3600
+        gradle_cache_age = 3600 if is_deep else 14 * 86400
+        gradle_budget = DEEP_CLEANUP_GRADLE_BUDGET_BYTES if is_deep else AUTO_CLEANUP_GRADLE_BUDGET_BYTES
+        for gradle_home in (rootfs / "root" / ".gradle", HOME_DIR / ".gradle"):
+            if not gradle_home.is_dir():
+                continue
+            for sub in ("daemon", "notifications", ".tmp", "kotlin-profile"):
+                freed_breakdown["gradle_cache"] += _prune_old_children(
+                    gradle_home / sub,
+                    max_age_sec=86400 if not is_deep else 3600,
+                    now=now,
+                    skip_if_in_cmdlines=proc_cmdlines,
+                )
+            caches_dir = gradle_home / "caches"
+            if caches_dir.is_dir():
+                for ver_dir in list(caches_dir.iterdir()):
+                    if not ver_dir.is_dir() or ver_dir.name == "modules-2":
+                        continue
+                    if ver_dir.name.startswith("transforms-"):
+                        freed_breakdown["gradle_cache"] += _prune_old_children(
+                            ver_dir,
+                            max_age_sec=gradle_cache_age,
+                            now=now,
+                            skip_if_in_cmdlines=proc_cmdlines,
+                        )
+                        continue
+                    for csub in ("transforms", "generated-gradle-jars", "kotlin-dsl", "javaCompile", "fileHashes"):
+                        sub_path = ver_dir / csub
+                        freed_breakdown["gradle_cache"] += _prune_old_children(
+                            sub_path,
+                            max_age_sec=gradle_cache_age,
+                            now=now,
+                            skip_if_in_cmdlines=proc_cmdlines,
+                        )
+                        freed_breakdown["gradle_cache"] += _trim_dir_to_budget(
+                            sub_path,
+                            budget_bytes=max(16 * 1024 * 1024, gradle_budget // 4),
+                            min_age_sec=gradle_min_age,
+                            now=now,
+                            skip_if_in_cmdlines=proc_cmdlines,
+                        )
+            dists_dir = gradle_home / "wrapper" / "dists"
+            if dists_dir.is_dir():
+                freed_breakdown["gradle_cache"] += _prune_old_children(
+                    dists_dir,
+                    max_age_sec=(7 * 86400 if is_deep else 30 * 86400),
+                    now=now,
+                    keep_newest=1,
+                )
+
+        # npm / npx caches
+        npm_budget = DEEP_CLEANUP_NPM_BUDGET_BYTES if is_deep else AUTO_CLEANUP_NPM_BUDGET_BYTES
+        npm_age = 3600 if is_deep else 7 * 86400
+        for npm_home in (rootfs / "root" / ".npm", HOME_DIR / ".npm"):
+            if not npm_home.is_dir():
+                continue
+            freed_breakdown["npm_cache"] += _prune_old_children(
+                npm_home / "_logs", max_age_sec=(3600 if is_deep else 3 * 86400), now=now
+            )
+            cacache_dir = npm_home / "_cacache"
+            if cacache_dir.is_dir():
+                freed_breakdown["npm_cache"] += _prune_old_children(
+                    cacache_dir / "tmp", max_age_sec=(3600 if is_deep else 86400), now=now
+                )
+                try:
+                    cache_mtime = cacache_dir.lstat().st_mtime
+                except OSError:
+                    cache_mtime = now
+                cacache_size = _dir_size_bytes(cacache_dir)
+                if cacache_size > npm_budget and (now - cache_mtime) >= npm_age:
+                    # Remove content-v2 and index-v5 together so cacache metadata stays consistent
+                    for store_sub in ("content-v2", "index-v5"):
+                        freed_breakdown["npm_cache"] += _remove_path_bytes(cacache_dir / store_sub)
+            freed_breakdown["npm_cache"] += _prune_old_children(
+                npm_home / "_npx",
+                max_age_sec=npm_age,
+                now=now,
+                skip_if_in_cmdlines=proc_cmdlines,
+            )
+            freed_breakdown["npm_cache"] += _trim_dir_to_budget(
+                npm_home / "_npx",
+                budget_bytes=npm_budget // 2,
+                min_age_sec=(3600 if is_deep else 86400),
+                now=now,
+                skip_if_in_cmdlines=proc_cmdlines,
+            )
+
+    total_freed = sum(freed_breakdown.values())
+    state = load_storage_cleanup_state()
+    state["last_run_at"] = now
+    state["last_mode"] = mode
+    state["last_freed_bytes"] = total_freed
+    state["total_freed_bytes"] = int(state.get("total_freed_bytes", 0)) + total_freed
+    state["last_summary"] = {k: round(v / (1024 * 1024), 2) for k, v in freed_breakdown.items()}
+    save_storage_cleanup_state(state)
+
+    return {
+        "mode": mode,
+        "build_skipped": build_active,
+        "freed_bytes": total_freed,
+        "freed_mb": round(total_freed / (1024 * 1024), 1),
+        "breakdown_mb": {k: round(v / (1024 * 1024), 2) for k, v in freed_breakdown.items()},
+        "state": state,
+        "files_root_exists": files_root.is_dir(),
+    }
+
+
+async def run_storage_cleanup(mode: str = "auto", active_cids: Optional[set[str]] = None) -> dict[str, Any]:
+    """Thread-safe, lock-guarded async entry point for storage cleanup."""
+    async with STORAGE_CLEANUP_LOCK:
+        return await asyncio.to_thread(run_storage_cleanup_sync, mode, active_cids)
+
+
+def _du_bytes_batch(paths: list[Path]) -> dict[Path, int]:
+    """Compute directory sizes quickly in a single native `du -sk` call, falling back to Python."""
+    existing = [p for p in paths if p.exists() and not p.is_symlink()]
+    result: dict[Path, int] = {p: 0 for p in paths}
+    if not existing:
+        return result
+    du_bin = shutil.which("du")
+    if du_bin:
+        try:
+            proc = subprocess.run(
+                [du_bin, "-sk", *[str(p) for p in existing]],
+                capture_output=True,
+                text=True,
+                timeout=15.0,
+            )
+            by_str = {str(p): p for p in existing}
+            parsed_any = False
+            for line in proc.stdout.splitlines():
+                parts = line.split("\t", 1)
+                if len(parts) == 2:
+                    kb_str, p_str = parts
+                    target_p = by_str.get(p_str.strip())
+                    if target_p is not None and kb_str.strip().isdigit():
+                        result[target_p] = int(kb_str.strip()) * 1024
+                        parsed_any = True
+            if parsed_any:
+                return result
+        except Exception as exc:
+            logger.debug("du -sk batch fallback to Python scan: %s", exc)
+    for p in existing:
+        result[p] = _dir_size_bytes(p)
+    return result
+
+
+def get_storage_status_sync() -> dict[str, Any]:
+    """Compute categorized app storage usage (in MB) and automated cleanup telemetry."""
+    rootfs = get_rootfs_path()
+    files_root = USR_DIR.parent
+
+    container_paths = [
+        rootfs / "usr",
+        rootfs / "lib",
+        rootfs / "bin",
+        rootfs / "sbin",
+        rootfs / "etc",
+        rootfs / "var",
+    ]
+    cache_paths = [
+        rootfs / "root" / ".gradle",
+        rootfs / "root" / ".npm",
+        rootfs / "root" / ".android" / "cache",
+        rootfs / "root" / ".cache",
+        HOME_DIR / ".gradle",
+        HOME_DIR / ".npm",
+        HOME_DIR / ".android" / "cache",
+        HOME_DIR / ".cache",
+    ]
+    conv_paths = [
+        CONVERSATIONS_DIR,
+        BRAIN_DIR,
+        GEMINI_DIR / "log",
+        MCP_BIN_DIR,
+    ]
+    sdk_dir = files_root / "android-sdk"
+    disjoint_paths = container_paths + cache_paths + conv_paths + [sdk_dir]
+    seen_resolved: set[Path] = set()
+    unique_leaf_paths: list[Path] = []
+    for p in disjoint_paths:
+        try:
+            if not p.exists() or p.is_symlink():
+                continue
+            rp = p.resolve()
+        except OSError:
+            continue
+        if rp not in seen_resolved:
+            seen_resolved.add(rp)
+            unique_leaf_paths.append(p)
+
+    sizes = _du_bytes_batch(unique_leaf_paths)
+    usr_sizes = _du_bytes_batch([USR_DIR]) if USR_DIR.exists() and not USR_DIR.is_symlink() else {USR_DIR: 0}
+    total_sizes = _du_bytes_batch([files_root])
+
+    container_bytes = sum(sizes.get(p, 0) for p in container_paths if p in sizes)
+    caches_bytes = sum(sizes.get(p, 0) for p in cache_paths if p in sizes)
+    conversations_bytes = sum(sizes.get(p, 0) for p in conv_paths if p in sizes)
+
+    # Subtract counted descendants inside USR_DIR (e.g., alpine-rootfs) so USR_DIR is not double-counted
+    usr_overlap = 0
+    if USR_DIR.exists() and not USR_DIR.is_symlink():
+        try:
+            usr_resolved = USR_DIR.resolve()
+            for p in unique_leaf_paths:
+                try:
+                    if p.resolve().is_relative_to(usr_resolved):
+                        usr_overlap += sizes.get(p, 0)
+                except (ValueError, OSError):
+                    continue
+        except OSError:
+            pass
+
+    usr_only_bytes = max(0, usr_sizes.get(USR_DIR, 0) - usr_overlap)
+    runtime_sdk_bytes = usr_only_bytes + sizes.get(sdk_dir, 0)
+    total_files_bytes = total_sizes[files_root]
+
+    state = load_storage_cleanup_state()
+
+    def _to_mb(b: int) -> float:
+        return round(b / (1024 * 1024), 1)
+
+    return {
+        "total_mb": _to_mb(total_files_bytes),
+        "categories": {
+            "container_packages_mb": _to_mb(container_bytes),
+            "build_caches_mb": _to_mb(caches_bytes),
+            "conversations_brain_mb": _to_mb(conversations_bytes),
+            "runtime_sdk_mb": _to_mb(runtime_sdk_bytes),
+            "other_mb": _to_mb(max(0, total_files_bytes - (container_bytes + caches_bytes + conversations_bytes + runtime_sdk_bytes))),
+        },
+        "auto_enabled": bool(state.get("auto_enabled", True)),
+        "last_run_at": float(state.get("last_run_at", 0.0)),
+        "last_mode": str(state.get("last_mode", "")),
+        "last_freed_mb": _to_mb(int(state.get("last_freed_bytes", 0))),
+        "total_freed_mb": _to_mb(int(state.get("total_freed_bytes", 0))),
+        "last_summary": state.get("last_summary", {}),
+    }
+
+
+async def get_storage_status() -> dict[str, Any]:
+    return await asyncio.to_thread(get_storage_status_sync)
 
 
 # ---------------------------------------------------------------------------
@@ -10032,10 +10764,64 @@ class AgyWebServer:
         self.ipc_sock_path: Path = GEMINI_DIR / "ask_question.sock"
         self.ipc_server: Optional[asyncio.AbstractServer] = None
         self.terminal_mgr = TerminalExecutionManager(self.orchestrator, self.broadcast, self)
+        self._cleanup_task: Optional[asyncio.Task] = None
         self.proxy_client = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=15.0, read=300.0, write=60.0, pool=30.0),
             follow_redirects=False,
         )
+
+    def _active_cleanup_cids(self) -> set[str]:
+        active: set[str] = {
+            cid for cid, ctx in self.orchestrator._sessions.items()
+            if cid and (ctx.is_running or cid == self.orchestrator.active_view_cid)
+        }
+        if self.orchestrator.active_view_cid:
+            active.add(self.orchestrator.active_view_cid)
+        return active
+
+    def ensure_storage_cleanup_loop(self) -> None:
+        """Start the deferred, periodic idle-gated automated cleanup task (v1.9.5)."""
+        if self._cleanup_task is None or self._cleanup_task.done():
+            self._cleanup_task = asyncio.create_task(self._storage_cleanup_loop())
+
+    async def _storage_cleanup_loop(self) -> None:
+        try:
+            await asyncio.sleep(AUTO_CLEANUP_STARTUP_DELAY_SEC)
+            while True:
+                state = load_storage_cleanup_state()
+                if not bool(state.get("auto_enabled", True)):
+                    await asyncio.sleep(3600)
+                    continue
+
+                now = time.time()
+                last_run = float(state.get("last_run_at", 0.0))
+                if (now - last_run) < AUTO_CLEANUP_INTERVAL_SEC:
+                    wait_sec = max(60.0, AUTO_CLEANUP_INTERVAL_SEC - (now - last_run))
+                    await asyncio.sleep(min(wait_sec, 3600.0))
+                    continue
+
+                build_active, _ = await asyncio.to_thread(_active_proc_cmdlines)
+                if self.orchestrator.is_running or build_active or APK_MUTATION_LOCK.locked():
+                    logger.debug("Deferring automated storage cleanup while agent turn, build, or apk operation is active.")
+                    await asyncio.sleep(AUTO_CLEANUP_BUSY_RETRY_SEC)
+                    continue
+
+                try:
+                    res = await run_storage_cleanup(mode="auto", active_cids=self._active_cleanup_cids())
+                    logger.info(
+                        "Automated storage cleanup completed: freed %.1f MB (build_skipped=%s)",
+                        res.get("freed_mb", 0.0),
+                        res.get("build_skipped", False),
+                    )
+                    if res.get("freed_bytes", 0) > 0 and self.clients:
+                        status = await get_storage_status()
+                        await self.broadcast({"type": "storage_status_result", **status})
+                except Exception as exc:
+                    logger.warning("Automated storage cleanup error: %s", exc)
+
+                await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            return
 
     def get_all_sessions(self, search_query: str = "", limit: int = 100) -> list[dict[str, Any]]:
         return self.orchestrator.get_all_sessions(search_query=search_query, limit=limit)
@@ -12376,6 +13162,64 @@ class AgyWebServer:
             )
             return
 
+        # Storage & Automated Cleanup (v1.9.5)
+        if mtype == "get_storage_status":
+            try:
+                st = await get_storage_status()
+                await websocket.send(json.dumps({"type": "storage_status_result", **st}))
+            except Exception as exc:
+                await websocket.send(json.dumps({
+                    "type": "storage_status_result",
+                    "error": str(exc),
+                }))
+            return
+
+        if mtype == "set_auto_cleanup":
+            try:
+                enabled = bool(data.get("enabled", True))
+                st_data = load_storage_cleanup_state()
+                st_data["auto_enabled"] = enabled
+                save_storage_cleanup_state(st_data)
+                st = await get_storage_status()
+                await self.broadcast({"type": "storage_status_result", **st})
+            except Exception as exc:
+                await websocket.send(json.dumps({
+                    "type": "storage_cleanup_result",
+                    "success": False,
+                    "message": str(exc),
+                }))
+            return
+
+        if mtype == "run_storage_cleanup":
+            raw_mode = str(data.get("mode") or "safe").strip().lower()
+            clean_mode = "deep" if raw_mode == "deep" else "auto"
+            if self.orchestrator.is_running:
+                await websocket.send(json.dumps({
+                    "type": "storage_cleanup_result",
+                    "success": False,
+                    "message": "An agent turn is currently running. Wait for it to finish before cleaning caches.",
+                }))
+                return
+            try:
+                res = await run_storage_cleanup(mode=clean_mode, active_cids=self._active_cleanup_cids())
+                await self.broadcast({
+                    "type": "storage_cleanup_result",
+                    "success": True,
+                    "mode": clean_mode,
+                    "freed_mb": res.get("freed_mb", 0.0),
+                    "build_skipped": res.get("build_skipped", False),
+                    "breakdown_mb": res.get("breakdown_mb", {}),
+                })
+                st = await get_storage_status()
+                await self.broadcast({"type": "storage_status_result", **st})
+            except Exception as exc:
+                await websocket.send(json.dumps({
+                    "type": "storage_cleanup_result",
+                    "success": False,
+                    "message": str(exc),
+                }))
+            return
+
         # Updates Check
         if mtype == "check_for_updates":
             try:
@@ -14028,6 +14872,7 @@ async def main() -> None:
 
     await app.start_ipc_server()
     app.orchestrator.ensure_bg_task_watcher()
+    app.ensure_storage_cleanup_loop()
     try:
         async with serve(
             app.ws_handler,
@@ -14062,6 +14907,11 @@ async def main() -> None:
         try:
             if hasattr(app, "proxy_client"):
                 await app.proxy_client.aclose()
+        except Exception:
+            pass
+        try:
+            if getattr(app, "_cleanup_task", None) and not app._cleanup_task.done():
+                app._cleanup_task.cancel()
         except Exception:
             pass
         await app.stop_ipc_server()

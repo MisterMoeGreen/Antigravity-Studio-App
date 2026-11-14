@@ -2415,6 +2415,14 @@
       gap: 12px;
       box-sizing: border-box;
     }
+    .settings-section-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.7px;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+      padding: 6px 4px 0 4px;
+    }
     .settings-menu-group {
       display: flex;
       flex-direction: column;
@@ -4212,9 +4220,7 @@
         </button>
       </div>
       <div class="subview-body">
-        <div class="settings-info-banner">
-          Configure mobile system prompts, developer SSH keys, API credentials, custom skills, and MCP servers.
-        </div>
+        <div class="settings-section-label">Application</div>
         <div class="settings-menu-group">
           <!-- Account -->
           <div class="settings-menu-item" data-target="viewAccount">
@@ -4228,6 +4234,45 @@
             <svg class="settings-menu-chevron fa-icon" viewBox="0 0 320 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg>
           </div>
 
+          <!-- Storage & Cleanup (v1.9.5) -->
+          <div class="settings-menu-item" id="btnOpenSettingsStorage" data-target="viewStorage">
+            <div class="settings-menu-icon">
+              <svg class="fa-icon" viewBox="0 0 512 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M0 96C0 60.7 28.7 32 64 32l384 0c35.3 0 64 28.7 64 64l0 192c0 35.3-28.7 64-64 64L64 352c-35.3 0-64-28.7-64-64L0 96zm64 256l384 0c35.3 0 64 28.7 64 64l0 32c0 35.3-28.7 64-64 64L64 512c-35.3 0-64-28.7-64-64l0-32c0-35.3 28.7-64 64-64zM368 440a24 24 0 1 0 0-48 24 24 0 1 0 0 48zm48-24a24 24 0 1 0 48 0 24 24 0 1 0 -48 0z"/></svg>
+            </div>
+            <div class="settings-menu-info">
+              <div class="settings-menu-title">Storage &amp; Cleanup</div>
+              <div class="settings-menu-desc">App disk usage, build caches &amp; auto-retention</div>
+            </div>
+            <svg class="settings-menu-chevron fa-icon" viewBox="0 0 320 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg>
+          </div>
+
+          <!-- Export & Import (v1.6.3) -->
+          <div class="settings-menu-item" data-target="viewExportImport">
+            <div class="settings-menu-icon">
+              <svg class="fa-icon" viewBox="0 0 576 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M384 121.9c0-6.3-2.5-12.4-7-16.9L313.1 41c-4.5-4.5-10.6-7-17-7H64C28.7 34 0 62.7 0 98v316c0 35.3 28.7 64 64 64h384c35.3 0 64-28.7 64-64V250.1c0-6.3-2.5-12.4-7-16.9l-63.9-63.9c-4.5-4.5-10.6-7-17-7.4H384v-40zM320 68l44 44h-44V68zM48 98c0-8.8 7.2-16 16-16h224v64c0 17.7 14.3 32 32 32h64v240c0 8.8-7.2 16-16 16H64c-8.8 0-16-7.2-16-16V98zm480 94.1V414c0 17.7-14.3 32-32 32s-32-14.3-32-32V224h-48c-8.8 0-16-7.2-16-16v-48h32l96 96.1z"/></svg>
+            </div>
+            <div class="settings-menu-info">
+              <div class="settings-menu-title">Export & Import</div>
+              <div class="settings-menu-desc">Backup configs or restore via AI setup agent</div>
+            </div>
+            <svg class="settings-menu-chevron fa-icon" viewBox="0 0 320 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg>
+          </div>
+
+          <!-- Software Updates -->
+          <div class="settings-menu-item" data-target="viewUpdates">
+            <div class="settings-menu-icon">
+              <svg class="fa-icon" viewBox="0 0 512 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M48.5 224L40 224c-13.3 0-24-10.7-24-24L16 72c0-9.7 5.8-18.5 14.8-22.2s19.3-1.7 26.2 5.2L98.6 96.6c87.6-86.5 228.7-86.2 315.8 1c87.5 87.5 87.5 229.3 0 316.8s-229.3 87.5-316.8 0c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0c62.5 62.5 163.8 62.5 226.3 0s62.5-163.8 0-226.3c-62.2-62.2-162.7-62.5-225.3-1L185 183c6.9 6.9 8.9 17.2 5.2 26.2s-12.5 14.8-22.2 14.8L48.5 224z"/></svg>
+            </div>
+            <div class="settings-menu-info">
+              <div class="settings-menu-title">Software Updates</div>
+              <div class="settings-menu-desc">Check releases & in-app upgrades</div>
+            </div>
+            <svg class="settings-menu-chevron fa-icon" viewBox="0 0 320 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg>
+          </div>
+        </div>
+
+        <div class="settings-section-label">Agent Context</div>
+        <div class="settings-menu-group">
           <!-- Custom Instructions -->
           <div class="settings-menu-item" data-target="viewPrompts">
             <div class="settings-menu-icon">
@@ -4296,30 +4341,6 @@
             <div class="settings-menu-info">
               <div class="settings-menu-title">Package Manager</div>
               <div class="settings-menu-desc">Alpine Linux container packages & runtimes</div>
-            </div>
-            <svg class="settings-menu-chevron fa-icon" viewBox="0 0 320 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg>
-          </div>
-
-          <!-- Software Updates -->
-          <div class="settings-menu-item" data-target="viewUpdates">
-            <div class="settings-menu-icon">
-              <svg class="fa-icon" viewBox="0 0 512 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M48.5 224L40 224c-13.3 0-24-10.7-24-24L16 72c0-9.7 5.8-18.5 14.8-22.2s19.3-1.7 26.2 5.2L98.6 96.6c87.6-86.5 228.7-86.2 315.8 1c87.5 87.5 87.5 229.3 0 316.8s-229.3 87.5-316.8 0c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0c62.5 62.5 163.8 62.5 226.3 0s62.5-163.8 0-226.3c-62.2-62.2-162.7-62.5-225.3-1L185 183c6.9 6.9 8.9 17.2 5.2 26.2s-12.5 14.8-22.2 14.8L48.5 224z"/></svg>
-            </div>
-            <div class="settings-menu-info">
-              <div class="settings-menu-title">Software Updates</div>
-              <div class="settings-menu-desc">Check releases & in-app upgrades</div>
-            </div>
-            <svg class="settings-menu-chevron fa-icon" viewBox="0 0 320 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg>
-          </div>
-
-          <!-- Export & Import (v1.6.3) -->
-          <div class="settings-menu-item" data-target="viewExportImport">
-            <div class="settings-menu-icon">
-              <svg class="fa-icon" viewBox="0 0 576 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M384 121.9c0-6.3-2.5-12.4-7-16.9L313.1 41c-4.5-4.5-10.6-7-17-7H64C28.7 34 0 62.7 0 98v316c0 35.3 28.7 64 64 64h384c35.3 0 64-28.7 64-64V250.1c0-6.3-2.5-12.4-7-16.9l-63.9-63.9c-4.5-4.5-10.6-7-17-7.4H384v-40zM320 68l44 44h-44V68zM48 98c0-8.8 7.2-16 16-16h224v64c0 17.7 14.3 32 32 32h64v240c0 8.8-7.2 16-16 16H64c-8.8 0-16-7.2-16-16V98zm480 94.1V414c0 17.7-14.3 32-32 32s-32-14.3-32-32V224h-48c-8.8 0-16-7.2-16-16v-48h32l96 96.1z"/></svg>
-            </div>
-            <div class="settings-menu-info">
-              <div class="settings-menu-title">Export & Import</div>
-              <div class="settings-menu-desc">Backup configs or restore via AI setup agent</div>
             </div>
             <svg class="settings-menu-chevron fa-icon" viewBox="0 0 320 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg>
           </div>
@@ -4589,7 +4610,8 @@
       </div>
       <div class="subview-body" style="padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));">
         <div class="settings-info-banner" id="packagesStorageSummary">
-          Container Storage: <span id="packagesTotalSize">0.0 MB</span> &bull; <span id="packagesCount">0</span> Packages
+          <div>Container Storage: <span id="packagesTotalSize">0.0 MB</span> &bull; <span id="packagesCount">0</span> Packages</div>
+          <div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">Card sizes include exclusive dependencies; shared libraries are counted once in total.</div>
         </div>
 
         <div style="display:flex;gap:8px;margin-bottom:12px;">
@@ -4607,6 +4629,59 @@
         <div id="packagesListContainer" style="display:flex;flex-direction:column;gap:8px;"></div>
         <div id="packagesEmptyState" class="settings-empty-card" style="display:none;padding:24px 16px;text-align:center;color:var(--text-secondary);font-size:13px;line-height:1.5;">
           No additional packages installed. Tap [+ Install Package] to add compilers and runtimes.
+        </div>
+      </div>
+    </div>
+
+    <!-- View: Storage & Cleanup (v1.9.5) -->
+    <div class="settings-subview" id="viewStorage">
+      <div class="subview-header">
+        <button class="icon-btn subview-back-btn" data-back="viewStorage" title="Back to menu">
+          <svg class="fa-icon" viewBox="0 0 448 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M9.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.2 288 416 288c17.7 0 32-14.3 32-32s-14.3-32-32-32l-306.7 0L214.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg>
+        </button>
+        <div class="subview-title">Storage &amp; Cleanup</div>
+        <button class="icon-btn" id="btnRefreshStorage" title="Refresh Storage" style="min-width:44px;min-height:44px;touch-action:manipulation;">
+          <svg class="fa-icon" viewBox="0 0 512 512" aria-hidden="true" focusable="false"><path fill="currentColor" d="M105.1 202.6c7.7-21.8 20.2-42.3 37.8-59.8c62.5-62.5 163.8-62.5 226.3 0L386.3 160 352 160c-17.7 0-32 14.3-32 32s14.3 32 32 32l112 0c17.7 0 32-14.3 32-32l0-112c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 35.2L414.4 68C336.3-10.1 209.7-10.1 131.6 68C109.6 90 94.1 115.8 84.4 143.2c-5.8 16.4 2.9 34.4 19.3 40.2s34.4-2.9 40.2-19.3zM406.9 309.4c-7.7 21.8-20.2 42.3-37.8 59.8c-62.5 62.5-163.8 62.5-226.3 0l-17.1-17.1L160 352c17.7 0 32-14.3 32-32s-14.3-32-32-32l-112 0c-17.7 0-32 14.3-32 32l0 112c0 17.7 14.3 32 32 32s32-14.3 32-32l0-35.2L68 444C146.1 522.1 272.7 522.1 350.8 444c22-22 37.5-47.8 47.2-75.2c5.8-16.4-2.9-34.4-19.3-40.2s-34.4 2.9-40.2 19.3z"/></svg>
+        </button>
+      </div>
+      <div class="subview-body" style="padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));display:flex;flex-direction:column;gap:12px;">
+        <div class="settings-info-banner" id="storageTotalBanner">
+          App Files Total: <span id="storageTotalSize">Calculating...</span>
+        </div>
+
+        <div class="settings-card" style="padding:12px;background:var(--bg-secondary);border:1px solid var(--border-subtle);border-radius:10px;display:flex;flex-direction:column;gap:8px;">
+          <div style="font-size:11px;font-weight:700;color:var(--text-tertiary);letter-spacing:0.5px;">STORAGE BREAKDOWN</div>
+          <div id="storageBreakdownList" style="display:flex;flex-direction:column;gap:6px;font-size:13px;">
+            <div style="color:var(--text-secondary);">Loading storage breakdown...</div>
+          </div>
+        </div>
+
+        <div class="settings-card" style="padding:12px;background:var(--bg-secondary);border:1px solid var(--border-subtle);border-radius:10px;display:flex;flex-direction:column;gap:8px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+            <div>
+              <div style="font-weight:700;font-size:14px;color:var(--text-primary);">Automatic Cleanup</div>
+              <div style="font-size:12px;color:var(--text-secondary);line-height:1.4;">Runs 15s after launch and every 6h while idle to prune stale logs, orphaned brain dirs, old Gradle/npm caches, and checkpoint idle DBs.</div>
+            </div>
+            <label style="display:inline-flex;align-items:center;cursor:pointer;min-width:44px;min-height:44px;justify-content:center;touch-action:manipulation;">
+              <input type="checkbox" id="chkAutoCleanupEnabled" checked style="width:20px;height:20px;accent-color:var(--accent-primary);" />
+            </label>
+          </div>
+          <div id="storageLastCleanupInfo" style="font-size:12px;color:var(--text-secondary);padding-top:4px;border-top:1px solid var(--border-subtle);">
+            Last cleanup: Never
+          </div>
+        </div>
+
+        <div style="display:flex;gap:8px;">
+          <button class="subview-action-btn" id="btnRunSafeCleanup" style="flex:1;min-height:44px;display:flex;align-items:center;justify-content:center;gap:6px;touch-action:manipulation;">
+            Clean Safe Caches
+          </button>
+          <button class="subview-action-btn primary" id="btnRunDeepCleanup" style="flex:1;min-height:44px;display:flex;align-items:center;justify-content:center;gap:6px;touch-action:manipulation;">
+            Deep Cache Purge
+          </button>
+        </div>
+
+        <div style="font-size:12px;color:var(--text-secondary);line-height:1.45;padding:0 2px;">
+          <strong>Safe</strong> preserves recent (24h+) build artifacts. <strong>Deep</strong> aggressively trims Gradle/npm caches while preserving all conversations, installed packages, and credentials.
         </div>
       </div>
     </div>
@@ -7613,6 +7688,18 @@
             }
             break;
 
+          case 'storage_status_result':
+            if (typeof renderStorageStatus === 'function') {
+              renderStorageStatus(msg);
+            }
+            break;
+
+          case 'storage_cleanup_result':
+            if (typeof handleStorageCleanupResult === 'function') {
+              handleStorageCleanupResult(msg);
+            }
+            break;
+
           case 'package_mutation_status':
             if (typeof handlePackageMutationStatus === 'function') {
               handlePackageMutationStatus(msg);
@@ -9848,7 +9935,7 @@
       const btnCloseSettingsHub = document.getElementById('btnCloseSettingsHub');
 
       let currentSettingsView = 'viewSettingsMenu';
-      const settingsViews = ['viewSettingsMenu', 'viewAccount', 'viewPrompts', 'viewSSH', 'viewApiKeys', 'viewSkills', 'viewMCP', 'viewPackages', 'viewUpdates', 'viewExportImport'];
+      const settingsViews = ['viewSettingsMenu', 'viewAccount', 'viewPrompts', 'viewSSH', 'viewApiKeys', 'viewSkills', 'viewMCP', 'viewPackages', 'viewStorage', 'viewUpdates', 'viewExportImport'];
 
       function openSettingsHub() {
         if (!settingsHub) return;
@@ -9919,6 +10006,8 @@
           sendWs({ type: 'list_mcp_servers' });
         } else if (targetId === 'viewPackages') {
           sendWs({ type: 'get_packages' });
+        } else if (targetId === 'viewStorage') {
+          loadStorageView();
         } else if (targetId === 'viewUpdates') {
           initUpdatesView();
         }
@@ -11464,7 +11553,16 @@
 
           const metaBadge = document.createElement('span');
           metaBadge.style.cssText = 'font-size:11px;padding:2px 8px;border-radius:12px;background:var(--bg-tertiary);color:var(--text-secondary);font-family:var(--font-mono);';
-          metaBadge.textContent = `v${pkg.version} • ${pkg.size_mb} MB`;
+          const exclDeps = Number(pkg.exclusive_deps_count) || 0;
+          const ownMb = pkg.own_size_mb !== undefined ? Number(pkg.own_size_mb) : Number(pkg.size_mb);
+          const exclMb = pkg.exclusive_size_mb !== undefined ? Number(pkg.exclusive_size_mb) : Number(pkg.size_mb);
+          let sizeLabel = `${pkg.size_mb} MB`;
+          if (exclDeps > 0 && exclMb > ownMb) {
+            sizeLabel = `${pkg.size_mb} MB (+${exclDeps} deps)`;
+          } else if (exclMb === 0 && ownMb > 0) {
+            sizeLabel = `${pkg.size_mb} MB (shared)`;
+          }
+          metaBadge.textContent = `v${pkg.version} • ${sizeLabel}`;
 
           topRow.appendChild(nameEl);
           topRow.appendChild(metaBadge);
@@ -11531,6 +11629,165 @@
         } else {
           showToast(data.message || 'Package operation failed', 'error');
         }
+      }
+
+      // ---------------------------------------------------------------------
+      // Storage & Automated Cleanup Logic (v1.9.5)
+      // ---------------------------------------------------------------------
+      const storageTotalSize = document.getElementById('storageTotalSize');
+      const storageBreakdownList = document.getElementById('storageBreakdownList');
+      const storageLastCleanupInfo = document.getElementById('storageLastCleanupInfo');
+      const chkAutoCleanupEnabled = document.getElementById('chkAutoCleanupEnabled');
+      const btnRefreshStorage = document.getElementById('btnRefreshStorage');
+      const btnRunSafeCleanup = document.getElementById('btnRunSafeCleanup');
+      const btnRunDeepCleanup = document.getElementById('btnRunDeepCleanup');
+
+      let storageManualRefresh = false;
+      let storageRefreshTimer = null;
+
+      function formatStorageMb(mb) {
+        const val = Number(mb) || 0;
+        if (val >= 1024) return `${(val / 1024).toFixed(2)} GB`;
+        return `${val.toFixed(1)} MB`;
+      }
+
+      function loadStorageView(isManual = false) {
+        storageManualRefresh = !!isManual;
+        if (storageRefreshTimer) {
+          clearTimeout(storageRefreshTimer);
+          storageRefreshTimer = null;
+        }
+        if (storageTotalSize) {
+          storageTotalSize.textContent = 'Calculating...';
+        }
+        if (storageBreakdownList) {
+          storageBreakdownList.innerHTML = '<div style="color:var(--text-secondary);">Scanning app storage...</div>';
+        }
+        if (btnRefreshStorage) {
+          btnRefreshStorage.disabled = true;
+          const icon = btnRefreshStorage.querySelector('svg');
+          if (icon) icon.classList.add('fa-spin');
+        }
+        storageRefreshTimer = setTimeout(() => {
+          if (btnRefreshStorage) {
+            btnRefreshStorage.disabled = false;
+            const icon = btnRefreshStorage.querySelector('svg');
+            if (icon) icon.classList.remove('fa-spin');
+          }
+        }, 12000);
+        sendWs({ type: 'get_storage_status' });
+      }
+
+      function renderStorageStatus(data) {
+        if (storageRefreshTimer) {
+          clearTimeout(storageRefreshTimer);
+          storageRefreshTimer = null;
+        }
+        const wasManual = storageManualRefresh;
+        storageManualRefresh = false;
+        if (btnRefreshStorage) {
+          btnRefreshStorage.disabled = false;
+          const icon = btnRefreshStorage.querySelector('svg');
+          if (icon) icon.classList.remove('fa-spin');
+        }
+        if (!data || data.error) {
+          if (storageTotalSize) storageTotalSize.textContent = 'Unavailable';
+          if (storageBreakdownList) {
+            storageBreakdownList.innerHTML = `<div style="color:#ef4444;">${escapeHtml((data && data.error) || 'Failed to read storage breakdown.')}</div>`;
+          }
+          return;
+        }
+        if (wasManual) {
+          showToast('Storage usage refreshed');
+        }
+        if (storageTotalSize) {
+          storageTotalSize.textContent = formatStorageMb(data.total_mb);
+        }
+        if (chkAutoCleanupEnabled && typeof data.auto_enabled === 'boolean') {
+          chkAutoCleanupEnabled.checked = data.auto_enabled;
+        }
+        if (storageBreakdownList && data.categories) {
+          const cats = data.categories;
+          const rows = [
+            ['Container Packages', cats.container_packages_mb],
+            ['Build & Tool Caches (Gradle / npm)', cats.build_caches_mb],
+            ['Conversations, Brain & Logs', cats.conversations_brain_mb],
+            ['CLI Runtime & Android SDK', cats.runtime_sdk_mb],
+            ['Other App Data', cats.other_mb],
+          ];
+          storageBreakdownList.innerHTML = rows.map(([label, mb]) => `
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+              <span style="color:var(--text-secondary);">${escapeHtml(label)}</span>
+              <span style="font-family:var(--font-mono);font-weight:600;color:var(--text-primary);">${formatStorageMb(mb)}</span>
+            </div>
+          `).join('');
+        }
+        if (storageLastCleanupInfo) {
+          const lastAt = Number(data.last_run_at) || 0;
+          if (lastAt > 0) {
+            const dt = new Date(lastAt * 1000).toLocaleString();
+            const lastFreed = formatStorageMb(data.last_freed_mb);
+            const totalFreed = formatStorageMb(data.total_freed_mb);
+            storageLastCleanupInfo.textContent = `Last cleanup: ${dt} (${lastFreed} freed • ${totalFreed} total reclaimed)`;
+          } else {
+            storageLastCleanupInfo.textContent = 'Last cleanup: Scheduled (runs 15s after launch & every 6h while idle)';
+          }
+        }
+      }
+
+      let storageCleanupTimer = null;
+      function setStorageCleanupBusy(busy, activeMode) {
+        if (storageCleanupTimer) {
+          clearTimeout(storageCleanupTimer);
+          storageCleanupTimer = null;
+        }
+        if (btnRunSafeCleanup) {
+          btnRunSafeCleanup.disabled = busy;
+          btnRunSafeCleanup.textContent = (busy && activeMode === 'safe') ? 'Cleaning...' : 'Clean Safe Caches';
+        }
+        if (btnRunDeepCleanup) {
+          btnRunDeepCleanup.disabled = busy;
+          btnRunDeepCleanup.textContent = (busy && activeMode === 'deep') ? 'Purging...' : 'Deep Cache Purge';
+        }
+        if (busy) {
+          storageCleanupTimer = setTimeout(() => {
+            storageCleanupTimer = null;
+            setStorageCleanupBusy(false, '');
+          }, 30000);
+        }
+      }
+
+      function handleStorageCleanupResult(data) {
+        setStorageCleanupBusy(false, '');
+        if (data && data.success) {
+          const freedText = formatStorageMb(data.freed_mb);
+          const extra = data.build_skipped ? ' (Gradle/npm skipped: active build)' : '';
+          showToast(`Cleanup complete: ${freedText} freed${extra}`);
+        } else {
+          showToast((data && data.message) || 'Cleanup failed', 'error');
+        }
+      }
+
+      if (btnRefreshStorage) {
+        btnRefreshStorage.addEventListener('click', () => loadStorageView(true));
+      }
+      if (chkAutoCleanupEnabled) {
+        chkAutoCleanupEnabled.addEventListener('change', () => {
+          sendWs({ type: 'set_auto_cleanup', enabled: !!chkAutoCleanupEnabled.checked });
+          showToast(chkAutoCleanupEnabled.checked ? 'Automatic cleanup enabled' : 'Automatic cleanup paused');
+        });
+      }
+      if (btnRunSafeCleanup) {
+        btnRunSafeCleanup.addEventListener('click', () => {
+          setStorageCleanupBusy(true, 'safe');
+          sendWs({ type: 'run_storage_cleanup', mode: 'safe' });
+        });
+      }
+      if (btnRunDeepCleanup) {
+        btnRunDeepCleanup.addEventListener('click', () => {
+          setStorageCleanupBusy(true, 'deep');
+          sendWs({ type: 'run_storage_cleanup', mode: 'deep' });
+        });
       }
 
       // ---------------------------------------------------------------------
